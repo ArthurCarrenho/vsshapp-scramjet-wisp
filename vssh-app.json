@@ -1,0 +1,15 @@
+{
+  "id": "scramjet-wisp",
+  "name": "Motor Scramjet (wisp)",
+  "version": "1.0.0",
+  "type": "engine",
+  "kind": "service",
+  "category": "Engine",
+  "description": "Motor de reescrita web (Scramjet) consumido pelo navegador embutido do cliente Xpra como alternativa à extensão de navegador — sem janela própria.",
+  "backend": {
+    "runtime": "node",
+    "entrypoint": "backend/server.js",
+    "installCommand": "cd backend && ( [ \"${VSSH_APP_REBUILD:-}\" != 1 ] && test -d node_modules ) || npm ci --omit=dev",
+    "healthcheckPath": "/"
+  }
+}

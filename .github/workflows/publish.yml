@@ -1,0 +1,52 @@
+name: Publish scramjet-wisp → vssh-repo
+
+# Publica o vssh-app "scramjet-wisp" (motor de navegação) no repositório de artefatos do vssh
+# (Worker D1/R2) a cada push em main. Depois de publicado, fica instalável no servidor via
+# `sudo vssh-app-install scramjet-wisp --force` (baixa o tarball do Worker).
+#
+# POR QUE NÃO USA O REUSABLE (_publish-app-reusable.yml) COMO O vsshapp-recoll:
+#   Este repo vive no USUÁRIO pessoal (ArthurCarrenho), e o vssh-sso é PRIVADO e de OUTRA conta
+#   (colabhd). O GitHub só permite `uses:` de um reusable workflow privado por repositórios do
+#   MESMO dono (org/usuário) — cross-owner só funciona se o repo do reusable for público. Por
+#   isso INLINEAMOS os passos aqui (checkout do script via PAT), que é o que o reusable faz por
+#   dentro, mas sem depender do compartilhamento cross-owner.
+#
+# Pré-requisitos (uma vez), como secrets DESTE repo (Settings → Secrets and variables → Actions):
+#   - VSSH_REPO_PUBLISH_TOKEN: token de publicação escopado `app:scramjet-wisp`
+#       (criar via API de tokens do Worker com o token mestre, ou pela aba admin "Repositório").
+#   - VSSH_TOOLS_TOKEN: PAT (fine-grained) ou GitHub App com Contents: Read no colabhd/vssh-sso,
+#       para o checkout do script de publish (vssh-sso é privado; o GITHUB_TOKEN deste repo não
+#       enxerga cross-repo). Se o vssh-sso virar público, pode remover e usar github.token.
+# E, opcionalmente, como variable (não secret):
+#   - VSSH_REPO_API (default abaixo): base URL do Worker do repositório.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Publish scramjet-wisp → repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do app (este repo)
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Checkout das ferramentas (vssh-sso/scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: colabhd/vssh-sso
+          ref: main
+          sparse-checkout: scripts
+          path: _tools
+          token: ${{ secrets.VSSH_TOOLS_TOKEN }}
+
+      - name: Publicar
+        env:
+          VSSH_REPO_API: ${{ vars.VSSH_REPO_API || 'https://vssh-repo.colabh.org' }}
+          VSSH_REPO_PUBLISH_TOKEN: ${{ secrets.VSSH_REPO_PUBLISH_TOKEN }}
+        run: |
+          bash _tools/scripts/vssh-app-publish "app" --version "1.0.${{ github.run_number }}"

@@ -1,0 +1,7 @@
+# Dependências vendorizadas — instaladas no servidor por `npm ci --omit=dev` (ver vssh-app.json).
+# NUNCA commitar: o package-lock.json (versionado) é a fonte de verdade das versões.
+backend/node_modules/
+
+# Dev local do wisp/scramjet
+.dev.vars
+*.log

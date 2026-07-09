@@ -1,0 +1,15 @@
+{
+  "name": "scramjet-wisp-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Backend do vssh-app scramjet-wisp: servidor wisp (Scramjet) + assets estáticos do cliente do motor. Sem frontend/janela própria — consumido pelo BrowserWindow do cliente Xpra via ScramjetEngine.js.",
+  "main": "server.js",
+  "license": "SEE LICENSE IN dependencies",
+  "dependencies": {
+    "@mercuryworkshop/wisp-js": "^0.4.1",
+    "@mercuryworkshop/scramjet": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-2.0.67-alpha.2.tgz",
+    "@mercuryworkshop/scramjet-controller": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-controller-0.0.14.tgz",
+    "@mercuryworkshop/libcurl-transport": "https://github.com/ArthurCarrenho/vssh-libcurl-transport/releases/download/latest/mercuryworkshop-libcurl-transport-2.0.5.tgz"
+  }
+}
