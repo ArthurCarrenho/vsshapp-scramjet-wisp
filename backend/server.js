@@ -68,6 +68,11 @@ const STATIC_ROUTES = [
   { prefix: '/scram/',      root: distDirOf('@mercuryworkshop/scramjet') },
   { prefix: '/controller/', root: distDirOf('@mercuryworkshop/scramjet-controller') },
   { prefix: '/libcurl/',    root: distDirOf('@mercuryworkshop/libcurl-transport') },
+  // scramjet-utils: bundle IIFE (dist/scramjet-utils.js) do HttpCachePlugin — serve o cache HTTP
+  // (CacheStorage) do lado página, carregado sob demanda por ScramjetEngine.js. Mesmo `no-store`
+  // dos demais assets do motor (frescor via importScripts/reload; não confundir com o cache de
+  // páginas que o próprio plugin gerencia em caches.open('scramjet-http-cache-v2')).
+  { prefix: '/utils/',      root: distDirOf('@mercuryworkshop/scramjet-utils') },
 ];
 
 const MIME = {
