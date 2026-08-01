@@ -1,0 +1,219 @@
+name: Smoke
+
+# Prova que o tarball publicado sobe e serve o que o cliente realmente pede. Este repo não tinha
+# teste nenhum: um bump de dependência que renomeasse um bundle só aparecia em produção, como
+# navegação vazando para o upstream porque o ScramjetEngine.js não conseguiu carregar o motor.
+#
+# Chamado como gate pelo publish.yml (workflow_call) — nunca publicar um pacote cujo `npm ci` não
+# resolve ou cujas rotas de asset sumiram — e roda sozinho em PR.
+#
+# O `schedule` semanal não é zelo: as 4 dependências AGPL vêm de URLs
+# `releases/download/latest/<pkg>-<ver>.tgz`, e a tag `latest` é MUTÁVEL. Já aconteceu de os bytes
+# serem republicados sob o mesmo nome, quebrando o `integrity` do lockfile (ver a mensagem do commit
+# 06d49be). O cron transforma esse drift em build vermelho aqui, em vez de descoberta no servidor
+# do cliente na próxima instalação.
+
+on:
+  workflow_call:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Sobe e serve o contrato
+    runs-on: ubuntu-latest
+    env:
+      PORT: '48123'
+      TOKEN: 'smoke-token-nao-secreto'
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22: é o que o caminho do portal usa no servidor (`sudo` reescreve o PATH via
+      # secure_path e resolve /usr/bin/node, não um nvm pessoal do usuário). Testar noutra major
+      # aqui provaria algo que produção não executa.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      # Manifesto: o vssh-app-publish valida contra o JSON Schema, mas nenhuma das duas pontas
+      # confere se o entrypoint EXISTE. Custa uma linha e roda em PR, antes do merge.
+      - name: Manifesto é JSON válido e o entrypoint existe
+        run: |
+          jq -e . vssh-app.json > /dev/null
+          test -f "$(jq -r .backend.entrypoint vssh-app.json)"
+
+      # Pelo comando REAL do manifesto, não um `npm ci` escrito à mão: assim a própria string do
+      # installCommand entra no teste. Numa checkout limpa `test -d node_modules` é falso, então cai
+      # no `npm ci --omit=dev` — e é aqui que EINTEGRITY, lockfile dessincronizado ou release
+      # apagado estouram.
+      - name: Instalar pelo installCommand do manifesto
+        run: bash -c "$(jq -r '.backend.installCommand' vssh-app.json)"
+
+      # Da raiz do pacote, como o vssh-app-run faz (`cd "${APP_DIR}"` e depois
+      # `exec node backend/server.js`) — não de dentro de backend/.
+      - name: Subir o backend
+        run: |
+          VSSH_APP_PORT="$PORT" VSSH_APP_TOKEN="$TOKEN" \
+            node "$(jq -r .backend.entrypoint vssh-app.json)" > server.log 2>&1 &
+          echo $! > server.pid
+          for _ in $(seq 1 40); do
+            curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" && exit 0
+            sleep 0.5
+          done
+          echo "backend não abriu a porta em 20s"; cat server.log; exit 1
+
+      # 200 EXATO e sem header de token. O healthcheckPath é pollado direto na porta, sem passar
+      # pelo proxy, então não carrega X-Vssh-App-Token; e desde o commit 7bd90e1 do vssh-sso um 5xx
+      # não conta mais como "pronto" (provisioning/vssh-apps.ts). Gatear ou degradar esta rota faz o
+      # portal nunca declarar o app pronto.
+      - name: Healthcheck
+        run: |
+          code=$(curl -sS -o body.txt -w '%{http_code}' "http://127.0.0.1:$PORT/")
+          [ "$code" = "200" ] || { echo "healthcheck devolveu $code"; exit 1; }
+          grep -q 'scramjet-wisp ok' body.txt || { echo "corpo inesperado: $(cat body.txt)"; exit 1; }
+
+      # A verificação de maior valor do arquivo. Cada caminho abaixo é carregado nominalmente pelo
+      # consumidor no vssh-sso — se um upgrade de dependência renomear qualquer um, isto fica
+      # vermelho aqui em vez de quebrar a navegação de todo mundo:
+      #   scram/scramjet.js            ScramjetEngine.js:153
+      #   scram/scramjet.wasm          ScramjetEngine.js:214 (wasmPath)
+      #   controller/controller.api.js ScramjetEngine.js:154
+      #   controller/controller.inject.js  ScramjetEngine.js:213 (injectPath)
+      #   controller/controller.sw.js  scram-sw.js:23 (importScripts)
+      #   libcurl/index.js             ScramjetEngine.js:155
+      #   utils/scramjet-utils.js      ScramjetEngine.js:163
+      #
+      # Tamanho > 0 junto do status: um 200 vazio passaria num teste que só olhasse o código.
+      # `no-store` é load-bearing em controller.sw.js — importScripts() não revalida imports por
+      # padrão, então com cache um SW recém-instalado seguiria executando o bundle velho.
+      - name: Os 7 assets que o cliente carrega
+        run: |
+          fail=0
+          for p in scram/scramjet.js scram/scramjet.wasm \
+                   controller/controller.api.js controller/controller.inject.js \
+                   controller/controller.sw.js libcurl/index.js utils/scramjet-utils.js; do
+            read -r code size < <(curl -sS -o /dev/null -D h.txt \
+              -w '%{http_code} %{size_download}\n' "http://127.0.0.1:$PORT/$p")
+            cc=$(grep -i '^cache-control:' h.txt | tr -d '\r' | head -1)
+            printf '%-34s %s %8s bytes  %s\n' "$p" "$code" "$size" "$cc"
+            [ "$code" = "200" ]                || { echo "  ^ status != 200"; fail=1; }
+            [ "${size:-0}" -gt 0 ]             || { echo "  ^ corpo vazio";   fail=1; }
+            echo "$cc" | grep -qi 'no-store'   || { echo "  ^ sem no-store";  fail=1; }
+          done
+          exit $fail
+
+      - name: WASM sai com o content-type certo
+        run: |
+          ct=$(curl -sS -o /dev/null -w '%{content_type}' "http://127.0.0.1:$PORT/scram/scramjet.wasm")
+          case "$ct" in application/wasm*) ;; *) echo "content-type do wasm: $ct"; exit 1 ;; esac
+
+      - name: 404 em asset inexistente
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/scram/nao-existe.js")
+          [ "$code" = "404" ] || { echo "esperava 404, veio $code"; exit 1; }
+
+      # `--path-as-is` é obrigatório: sem ele o curl normaliza o `..` do lado cliente e o teste vira
+      # no-op, passando mesmo que a guarda do servidor não existisse. A segunda forma, percent-
+      # encoded, cobre o outro lado da guarda — o decodeURIComponent que roda antes do path.join.
+      - name: Path traversal recusado
+        run: |
+          a=$(curl -sS --path-as-is -o /dev/null -w '%{http_code}' \
+                "http://127.0.0.1:$PORT/scram/../../../../etc/passwd")
+          b=$(curl -sS -o /dev/null -w '%{http_code}' \
+                "http://127.0.0.1:$PORT/scram/%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd")
+          echo "path-as-is=$a  percent-encoded=$b"
+          [ "$a" = "400" ] && [ "$b" = "400" ] || { echo "traversal não foi recusado com 400"; exit 1; }
+
+      # Prova duas coisas de uma vez: que o gate de token do upgrade funciona nas três negativas, e
+      # que o wisp.routeRequest de fato sobe (o 101 só acontece se as wisp.options não explodiram no
+      # import). Com node:http cru — nada de dependência nova só para o teste.
+      - name: Gate de token no upgrade WebSocket
+        run: |
+          node --input-type=module -e '
+            import http from "node:http";
+            import crypto from "node:crypto";
+            const probe = (path, extra) => new Promise((resolve) => {
+              const req = http.request({
+                host: "127.0.0.1", port: process.env.PORT, path,
+                headers: {
+                  Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13",
+                  "Sec-WebSocket-Key": crypto.randomBytes(16).toString("base64"), ...extra,
+                },
+              });
+              req.on("upgrade", (res, s) => { s.destroy(); resolve("upgrade:" + res.statusCode); });
+              req.on("response", (res) => { res.resume(); resolve("response:" + res.statusCode); });
+              req.on("error", () => resolve("error"));
+              req.on("close", () => resolve("closed"));
+              setTimeout(() => { req.destroy(); resolve("timeout"); }, 5000).unref();
+              req.end();
+            });
+            const T = process.env.TOKEN;
+            const r = {
+              comToken:   await probe("/wisp/", { "x-vssh-app-token": T }),
+              semToken:   await probe("/wisp/", {}),
+              tokenErrado:await probe("/wisp/", { "x-vssh-app-token": "errado" }),
+              pathErrado: await probe("/nope/", { "x-vssh-app-token": T }),
+            };
+            console.log(r);
+            let bad = 0;
+            if (!r.comToken.startsWith("upgrade:101")) {
+              console.error("FALHA: /wisp/ com token deveria fazer upgrade 101"); bad = 1;
+            }
+            for (const k of ["semToken", "tokenErrado", "pathErrado"]) {
+              if (r[k].startsWith("upgrade:")) {
+                console.error(`FALHA: ${k} não deveria fazer upgrade (${r[k]})`); bad = 1;
+              }
+            }
+            process.exit(bad);
+          '
+
+      - name: Encerrar a instância saudável
+        run: kill "$(cat server.pid)" 2>/dev/null || true
+
+      # Regressão do modo degradado. Antes, resolver os pacotes acontecia no topo do módulo: faltar
+      # um matava o processo ANTES do listen(), o portal media HTTP 000 e o usuário recebia 502 sem
+      # nenhuma pista de qual pacote faltava. Estes dois casos travam o comportamento novo:
+      #   - opcional ausente  → o motor continua servindo, healthcheck 200, e só a rota dele dá 503
+      #   - essencial ausente → o processo NÃO morre; a porta abre e / responde 503 nomeando o pacote
+      # O 503 na rota importa tanto quanto o do healthcheck: sem ele a requisição cairia no catch-all
+      # e receberia `200 scramjet-wisp ok`, texto puro no lugar de um bundle — que _loadScript()
+      # trata como sucesso, deixando o cliente convencido de que carregou o motor.
+      - name: Degradação nomeia o pacote em vez de matar o processo
+        run: |
+          NM=backend/node_modules/@mercuryworkshop
+          check() {  # $1=pacote  $2=status esperado em /  $3=rota  $4=status esperado na rota
+            mv "$NM/$1" "$NM/.bak"
+            VSSH_APP_PORT="$PORT" node "$(jq -r .backend.entrypoint vssh-app.json)" > d.log 2>&1 &
+            pid=$!
+            for _ in $(seq 1 30); do curl -sS -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null && break; sleep 0.4; done
+            alive=$(kill -0 $pid 2>/dev/null && echo sim || echo nao)
+            root=$(curl -sS -o root.txt -w '%{http_code}' "http://127.0.0.1:$PORT/")
+            rota=$(curl -sS -o rota.txt -w '%{http_code}' "http://127.0.0.1:$PORT/$3")
+            kill $pid 2>/dev/null || true; sleep 1
+            mv "$NM/.bak" "$NM/$1"
+            echo "sem $1 → vivo=$alive  /=$root (esperado $2)  /$3=$rota (esperado $4)"
+            [ "$alive" = "sim" ] || { echo "  ^ o processo MORREU — é a regressão que este teste existe para pegar"; return 1; }
+            [ "$root" = "$2" ]   || { echo "  ^ healthcheck inesperado: $(head -c 200 root.txt)"; return 1; }
+            [ "$rota" = "$4" ]   || { echo "  ^ rota inesperada: $(head -c 200 rota.txt)"; return 1; }
+            grep -q "$1" rota.txt || [ "$4" = "200" ] || { echo "  ^ o 503 não nomeia o pacote"; return 1; }
+          }
+          rc=0
+          check scramjet-utils 200 utils/scramjet-utils.js 503 || rc=1
+          check scramjet       503 scram/scramjet.js       503 || rc=1
+          exit $rc
+
+      - name: Log do backend
+        if: always()
+        run: cat server.log d.log 2>/dev/null || true
+
+      - name: Encerrar
+        if: always()
+        run: kill "$(cat server.pid)" 2>/dev/null || true

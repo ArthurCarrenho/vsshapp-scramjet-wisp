@@ -1,0 +1,4 @@
+{
+  "//": "backend/package.json declara \"type\": \"module\", o que faria o Node tratar todo .js desta subárvore como ESM — e as libs do toolkit são CommonJS (require/module.exports), então o require() delas explodiria. Este marcador escopado devolve a subárvore para CommonJS. Não é gerado pelo vssh-app-lib-sync: o script só copia os arquivos que nomeia, então ressincronizar não apaga isto. Alternativa descartada: renomear para .cjs, que divergiria do que o lib-sync entrega e quebraria no próximo sync.",
+  "type": "commonjs"
+}
