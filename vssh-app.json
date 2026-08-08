@@ -5,7 +5,8 @@
   "type": "engine",
   "kind": "service",
   "category": "Engine",
-  "description": "Motor de reescrita web (Scramjet) consumido pelo navegador embutido do cliente Xpra como alternativa à extensão de navegador — sem janela própria.",
+  "description": "Motor de reescrita web (Scramjet): serve o cliente do Scramjet e o endpoint wisp que o navegador embutido do ambiente usa para alcançar a web. Sem janela própria.",
+  "provides": ["web-proxy/v1"],
   "backend": {
     "runtime": "node",
     "entrypoint": "backend/server.js",
