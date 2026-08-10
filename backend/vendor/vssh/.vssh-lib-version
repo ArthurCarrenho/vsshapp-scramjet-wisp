@@ -1,3 +1,4 @@
-origin=local:5f0361d
-parts=log
-synced_at=2026-08-01T22:16:24Z
+origin=colabhd/vssh-app-toolkit@v3
+parts=log,listen
+lib_version=3.0.0
+synced_at=2026-08-10T19:12:05Z

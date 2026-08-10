@@ -33,6 +33,11 @@ try {
   log = (event, detail) => console.error(`[scramjet-wisp] ${event}`, JSON.stringify(detail || {}));
 }
 
+// Onde escutar, vendorizado do mesmo toolkit (v3). Este NÃO degrada como o log acima: um motor sem
+// log estruturado ainda serve navegação, mas um que não sabe onde escutar não sobe — e falhar aqui,
+// nomeando o arquivo ausente, é melhor que falhar depois sem dizer por quê.
+const { escutar } = require('./vendor/vssh/node/app-listen.js');
+
 // WARN (não NONE nem DEBUG): loga falhas reais de stream/conexão sem inundar o log com uma linha
 // por abertura/fechamento de stream em uso normal.
 logging.set_level(logging.WARN);
@@ -66,14 +71,11 @@ wisp.options.allow_loopback_ips = true;
 // concorrência do lado navegador (ScramjetEngine.js, opção `connections` do LibcurlClient) continua
 // de pé e não usa esse caminho de código.
 
-const PORT  = parseInt(process.env.VSSH_APP_PORT, 10);
 const TOKEN = process.env.VSSH_APP_TOKEN || null;
 
-if (!Number.isFinite(PORT)) {
-  console.error('[scramjet-wisp] VSSH_APP_PORT ausente/inválido.');
-  log('fatal', { reason: 'VSSH_APP_PORT ausente/inválido', value: process.env.VSSH_APP_PORT ?? null });
-  process.exit(1);
-}
+// A conferência do endereço saiu daqui: desde a v3 do toolkit são DUAS variáveis possíveis
+// (VSSH_APP_SOCKET e VSSH_APP_PORT), e exigir a porta recusaria um motor perfeitamente configurado
+// em socket. Quem confere é o `escutar()`, lá embaixo, e ele nomeia as duas quando não vem nenhuma.
 
 // dist/ de cada pacote, resolvido via require.resolve (funciona mesmo sendo ESM-only — só
 // localiza o path pelo exports map, nunca executa/`require()` o módulo de fato).
@@ -229,10 +231,11 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[scramjet-wisp] listening on 127.0.0.1:${PORT}`);
+escutar(server).then(({ transporte, endereco }) => {
+  console.log(`[scramjet-wisp] listening on ${endereco} (${transporte})`);
   log('startup', {
-    port: PORT,
+    transporte,
+    endereco,
     tokenGate: !!TOKEN,
     node: process.version,
     routes: STATIC_ROUTES.map(r => r.prefix),
@@ -242,8 +245,19 @@ server.listen(PORT, '127.0.0.1', () => {
   if (MISSING_ESSENTIAL.length) {
     console.error(
       `[scramjet-wisp] DEGRADADO: ${MISSING_ESSENTIAL.map(m => m.pkg).join(', ')} ` +
-      `não resolvido(s). A porta está aberta e / responde 503 nomeando o problema, mas o motor ` +
+      `não resolvido(s). O endereço está de pé e / responde 503 nomeando o problema, mas o motor ` +
       `não serve navegação.`
     );
   }
+}).catch((err) => {
+  // Outra instância já atende: é o contrato do lifecycle (o `vssh-app-run` sai 0 no mesmo caso), e
+  // vale dobrado aqui, que é um `kind: service` relançado pelo supervisor com backoff. Sair 1 nesse
+  // caso queimaria uma das cinco tentativas por um estado que está CERTO.
+  if (err.code === 'VSSH_APP_JA_ESCUTANDO') {
+    log('already-listening', { message: err.message });
+    process.exit(0);
+  }
+  console.error('[scramjet-wisp] não consegui escutar:', err.message);
+  log('fatal', { reason: 'listen falhou', message: err.message, code: err.code ?? null });
+  process.exit(1);
 });
