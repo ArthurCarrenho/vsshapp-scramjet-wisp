@@ -1,14 +1,16 @@
 {
   "id": "scramjet-wisp",
   "name": "Motor Scramjet (wisp)",
-  "version": "1.0.0",
+  "version": "4.0.0",
   "type": "engine",
   "kind": "service",
   "category": "Engine",
   "description": "Motor de reescrita web (Scramjet): serve o cliente do Scramjet e o endpoint wisp que o navegador embutido do ambiente usa para alcançar a web. Sem janela própria.",
   "provides": ["web-proxy/v1"],
+  "minShellVersion": "4.1.0",
   "backend": {
     "runtime": "node",
+    "transport": "socket",
     "entrypoint": "backend/server.js",
     "installCommand": "cd backend && ( [ \"${VSSH_APP_REBUILD:-}\" != 1 ] && test -d node_modules ) || npm ci --omit=dev",
     "healthcheckPath": "/"
