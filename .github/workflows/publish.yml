@@ -14,12 +14,14 @@ name: Publish scramjet-wisp → vssh-repo
 #   sem PAT nenhum. O antigo secret VSSH_TOOLS_TOKEN não é mais referenciado e deve ser apagado
 #   AQUI e revogado no GitHub (apagar o secret não revoga o credential).
 #
-# POR QUE `main` NAS DUAS REFS (`uses:@main` e `tools_ref: main`):
-#   Só em main o reusable faz sparse-checkout de `schema/` junto de `scripts/`, e é isso que faz o
-#   vssh-app-publish validar o vssh-app.json contra schema/vssh-app.schema.json por inteiro. A tag
-#   v1 está congelada num commit ANTERIOR à existência de schema/ — o script de lá nem tem o código
-#   de validação, então @v1 degrada em silêncio para as checagens mínimas (id/runtime/entrypoint).
-#   Se main quebrar, o conserto é trocar as duas refs por `v1`: volta a publicar, validando menos.
+# POR QUE `v4` NAS DUAS REFS (`uses:@v4` e `tools_ref: v4`):
+#   Este bloco dizia `main`, e a razão dele era real na época: a única tag existente era a `v1`,
+#   congelada num commit ANTERIOR a `schema/`, então `@v1` degradava em silêncio para as checagens
+#   mínimas (id/runtime/entrypoint) e só `main` validava o manifesto inteiro. Hoje existe a `v4`,
+#   que tem schema, package.json e o portão de versão das libs.
+#   **E `main` cobra um preço que a `v1` não cobrava:** puxar de um branch faz a validação do CI
+#   deste repo mudar debaixo dele a cada commit do toolkit, inclusive num push que ninguém aqui
+#   viu. Uma tag se move quando nós decidimos.
 #
 # O publish só roda depois do smoke passar. Publicar um tarball cujo `npm ci` não resolve, ou que
 # não serve os assets que o ScramjetEngine.js pede, apenas desloca a falha para o servidor do
@@ -43,11 +45,14 @@ jobs:
   publish:
     name: Publish scramjet-wisp → repo
     needs: smoke
-    uses: colabhd/vssh-app-toolkit/.github/workflows/_publish-app-reusable.yml@main
+    uses: colabhd/vssh-app-toolkit/.github/workflows/_publish-app-reusable.yml@v4
     with:
       app_dir: "."
       repo_api: ${{ vars.VSSH_REPO_API || 'https://vssh-repo.colabh.org' }}
-      version: "1.0.${{ github.run_number }}"
-      tools_ref: main
+      # `4.0.<run>` e não `1.0.<run>`: o manifesto declara 4.0.0 para dizer que este app é da
+      # geração socket-only, e publicar como 1.x fazia o número que chega ao servidor contradizer o
+      # que está escrito no pacote. O sufixo continua sendo o run_number, que é o que dá ordem.
+      version: "4.0.${{ github.run_number }}"
+      tools_ref: v4
     secrets:
       publish_token: ${{ secrets.VSSH_REPO_PUBLISH_TOKEN }}

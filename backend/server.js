@@ -17,26 +17,32 @@ import { server as wisp, logging } from '@mercuryworkshop/wisp-js/server';
 
 const require = createRequire(import.meta.url);
 
-// Log estruturado em $VSSH_APP_DATA_DIR (~/.vssh-apps/<id>/data/app.log), vendorizado do
-// colabhd/vssh-app-toolkit. NÃO é redundante com o stdout: o portal manda stdout/stderr para
+// Log estruturado em $VSSH_APP_DATA_DIR (~/.vssh-apps/<id>/data/app.log), do
+// colabhd/vssh-app-toolkit — instalado por npm, como as outras dependências deste backend, e não
+// mais copiado para dentro do repo. NÃO é redundante com o stdout: o portal manda stdout/stderr para
 // ~/.vssh-apps/<id>/run.log, que é rotacionado a cada start e era truncado a cada relaunch do
 // vssh-app-supervisor. Num incidente real, o app falhou 5 vezes seguidas e o operador encontrou
 // run.log E run.log.1 os dois VAZIOS — a evidência apagada pelo próprio mecanismo que deveria
 // guardá-la. Este arquivo fica fora desse caminho e sobrevive a reinício.
-// Se a lib não estiver vendorizada, degrada para console em vez de derrubar o motor por causa do
+// Se a lib não estiver instalada, degrada para console em vez de derrubar o motor por causa do
 // diagnóstico.
 let log;
 try {
-  const { createAppLog } = require('./vendor/vssh/node/app-log.js');
+  const { createAppLog } = require('vssh-app-toolkit/log');
   log = createAppLog({ appId: 'scramjet-wisp', stdout: false });
 } catch {
   log = (event, detail) => console.error(`[scramjet-wisp] ${event}`, JSON.stringify(detail || {}));
 }
 
-// Onde escutar, vendorizado do mesmo toolkit (v3). Este NÃO degrada como o log acima: um motor sem
-// log estruturado ainda serve navegação, mas um que não sabe onde escutar não sobe — e falhar aqui,
-// nomeando o arquivo ausente, é melhor que falhar depois sem dizer por quê.
-const { escutar } = require('./vendor/vssh/node/app-listen.js');
+// Onde escutar, do mesmo toolkit. Este NÃO degrada como o log acima: um motor sem log estruturado
+// ainda serve navegação, mas um que não sabe onde escutar não sobe — e falhar aqui, nomeando o
+// módulo ausente, é melhor que falhar depois sem dizer por quê.
+//
+// Continua por `require` (o do createRequire acima) e não por `import`: as libs do toolkit são
+// CommonJS e este backend é ESM. Havia um `package.json` com "type": "commonjs" plantado dentro do
+// vendor só para devolver aquela subárvore ao CommonJS; instalado por npm, o pacote traz o próprio
+// e o problema deixa de existir.
+const { escutar } = require('vssh-app-toolkit/listen');
 
 // WARN (não NONE nem DEBUG): loga falhas reais de stream/conexão sem inundar o log com uma linha
 // por abertura/fechamento de stream em uso normal.

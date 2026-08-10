@@ -7,6 +7,7 @@
   "main": "server.js",
   "license": "SEE LICENSE IN dependencies",
   "dependencies": {
+    "vssh-app-toolkit": "github:colabhd/vssh-app-toolkit#v4",
     "@mercuryworkshop/wisp-js": "^0.4.1",
     "@mercuryworkshop/scramjet": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-2.0.67-alpha.3.tgz",
     "@mercuryworkshop/scramjet-controller": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-controller-0.0.15.tgz",

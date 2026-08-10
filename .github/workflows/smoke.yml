@@ -29,7 +29,10 @@ jobs:
     name: Sobe e serve o contrato
     runs-on: ubuntu-latest
     env:
-      PORT: '48123'
+      # Socket unix, e não porta: desde a v4 do toolkit o `escutar()` só binda socket. Este smoke
+      # exportava VSSH_APP_PORT, então subia um backend que morre no boot com
+      # VSSH_APP_SERVIDOR_ANTIGO — o smoke media o transporte que o app não fala mais.
+      SOCK: '/tmp/scramjet-smoke.sock'
       TOKEN: 'smoke-token-nao-secreto'
     steps:
       - uses: actions/checkout@v4
@@ -61,14 +64,14 @@ jobs:
       # `exec node backend/server.js`) — não de dentro de backend/.
       - name: Subir o backend
         run: |
-          VSSH_APP_PORT="$PORT" VSSH_APP_TOKEN="$TOKEN" \
+          VSSH_APP_SOCKET="$SOCK" VSSH_APP_TOKEN="$TOKEN" \
             node "$(jq -r .backend.entrypoint vssh-app.json)" > server.log 2>&1 &
           echo $! > server.pid
           for _ in $(seq 1 40); do
-            curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" && exit 0
+            curl -fsS -o /dev/null --unix-socket "$SOCK" "http://app/" && exit 0
             sleep 0.5
           done
-          echo "backend não abriu a porta em 20s"; cat server.log; exit 1
+          echo "backend não atendeu no socket em 20s"; cat server.log; exit 1
 
       # 200 EXATO e sem header de token. O healthcheckPath é pollado direto na porta, sem passar
       # pelo proxy, então não carrega X-Vssh-App-Token; e desde o commit 7bd90e1 do vssh-sso um 5xx
@@ -76,7 +79,7 @@ jobs:
       # portal nunca declarar o app pronto.
       - name: Healthcheck
         run: |
-          code=$(curl -sS -o body.txt -w '%{http_code}' "http://127.0.0.1:$PORT/")
+          code=$(curl -sS -o body.txt -w '%{http_code}' --unix-socket "$SOCK" "http://app/")
           [ "$code" = "200" ] || { echo "healthcheck devolveu $code"; exit 1; }
           grep -q 'scramjet-wisp ok' body.txt || { echo "corpo inesperado: $(cat body.txt)"; exit 1; }
 
@@ -101,7 +104,7 @@ jobs:
                    controller/controller.api.js controller/controller.inject.js \
                    controller/controller.sw.js libcurl/index.js utils/scramjet-utils.js; do
             read -r code size < <(curl -sS -o /dev/null -D h.txt \
-              -w '%{http_code} %{size_download}\n' "http://127.0.0.1:$PORT/$p")
+              -w '%{http_code} %{size_download}\n' --unix-socket "$SOCK" "http://app/$p")
             cc=$(grep -i '^cache-control:' h.txt | tr -d '\r' | head -1)
             printf '%-34s %s %8s bytes  %s\n' "$p" "$code" "$size" "$cc"
             [ "$code" = "200" ]                || { echo "  ^ status != 200"; fail=1; }
@@ -112,12 +115,12 @@ jobs:
 
       - name: WASM sai com o content-type certo
         run: |
-          ct=$(curl -sS -o /dev/null -w '%{content_type}' "http://127.0.0.1:$PORT/scram/scramjet.wasm")
+          ct=$(curl -sS -o /dev/null -w '%{content_type}' --unix-socket "$SOCK" "http://app/scram/scramjet.wasm")
           case "$ct" in application/wasm*) ;; *) echo "content-type do wasm: $ct"; exit 1 ;; esac
 
       - name: 404 em asset inexistente
         run: |
-          code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/scram/nao-existe.js")
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" "http://app/scram/nao-existe.js")
           [ "$code" = "404" ] || { echo "esperava 404, veio $code"; exit 1; }
 
       # `--path-as-is` é obrigatório: sem ele o curl normaliza o `..` do lado cliente e o teste vira
@@ -126,9 +129,9 @@ jobs:
       - name: Path traversal recusado
         run: |
           a=$(curl -sS --path-as-is -o /dev/null -w '%{http_code}' \
-                "http://127.0.0.1:$PORT/scram/../../../../etc/passwd")
+                --unix-socket "$SOCK" "http://app/scram/../../../../etc/passwd")
           b=$(curl -sS -o /dev/null -w '%{http_code}' \
-                "http://127.0.0.1:$PORT/scram/%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd")
+                --unix-socket "$SOCK" "http://app/scram/%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd")
           echo "path-as-is=$a  percent-encoded=$b"
           [ "$a" = "400" ] && [ "$b" = "400" ] || { echo "traversal não foi recusado com 400"; exit 1; }
 
@@ -142,7 +145,7 @@ jobs:
             import crypto from "node:crypto";
             const probe = (path, extra) => new Promise((resolve) => {
               const req = http.request({
-                host: "127.0.0.1", port: process.env.PORT, path,
+                socketPath: process.env.SOCK, path,
                 headers: {
                   Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13",
                   "Sec-WebSocket-Key": crypto.randomBytes(16).toString("base64"), ...extra,
@@ -191,12 +194,12 @@ jobs:
           NM=backend/node_modules/@mercuryworkshop
           check() {  # $1=pacote  $2=status esperado em /  $3=rota  $4=status esperado na rota
             mv "$NM/$1" "$NM/.bak"
-            VSSH_APP_PORT="$PORT" node "$(jq -r .backend.entrypoint vssh-app.json)" > d.log 2>&1 &
+            VSSH_APP_SOCKET="$SOCK" node "$(jq -r .backend.entrypoint vssh-app.json)" > d.log 2>&1 &
             pid=$!
-            for _ in $(seq 1 30); do curl -sS -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null && break; sleep 0.4; done
+            for _ in $(seq 1 30); do curl -sS -o /dev/null --unix-socket "$SOCK" "http://app/" 2>/dev/null && break; sleep 0.4; done
             alive=$(kill -0 $pid 2>/dev/null && echo sim || echo nao)
-            root=$(curl -sS -o root.txt -w '%{http_code}' "http://127.0.0.1:$PORT/")
-            rota=$(curl -sS -o rota.txt -w '%{http_code}' "http://127.0.0.1:$PORT/$3")
+            root=$(curl -sS -o root.txt -w '%{http_code}' --unix-socket "$SOCK" "http://app/")
+            rota=$(curl -sS -o rota.txt -w '%{http_code}' --unix-socket "$SOCK" "http://app/$3")
             kill $pid 2>/dev/null || true; sleep 1
             mv "$NM/.bak" "$NM/$1"
             echo "sem $1 → vivo=$alive  /=$root (esperado $2)  /$3=$rota (esperado $4)"
