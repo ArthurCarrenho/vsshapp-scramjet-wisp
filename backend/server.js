@@ -14,6 +14,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { server as wisp, logging } from '@mercuryworkshop/wisp-js/server';
+import { aplicarPolitica } from './rede.js';
 
 const require = createRequire(import.meta.url);
 
@@ -48,24 +49,16 @@ const { escutar } = require('vssh-app-toolkit/listen');
 // por abertura/fechamento de stream em uso normal.
 logging.set_level(logging.WARN);
 
-// wisp.NodeTCPSocket.connect() (node_modules/@mercuryworkshop/wisp-js/src/server/net.mjs) faz
-// uma ÚNICA resolução DNS (dns.lookup com order: options.dns_result_order) e conecta só nesse
-// endereço, sem fallback — diferente de curl, que tenta IPv6 e recua pra IPv4 sozinho. Em
-// servidores cuja rota IPv6 esteja quebrada/indisponível (comum em VMs privadas), isso trava a
-// stream inteira em silêncio: o cliente manda CONNECT, o servidor tenta a família errada e nunca
-// responde (nem CONNECT-ack nem CLOSE chegam de volta a tempo). Forçar IPv4 primeiro evita isso
-// sem depender de IPv6 funcionar neste host — destinos IPv4-only continuam OK.
-wisp.options.dns_result_order = 'ipv4first';
-
-// Sem isso, o wisp-js aplica os defaults do pacote (false/false) e bloqueia qualquer destino em
-// rede privada/loopback — inviabilizando o caso de uso principal deste motor (servidores de dev
-// locais, outras máquinas da rede do usuário). Mesmo modelo de confiança que o proxy-net do
-// backend principal já usa pra RFC1918/loopback (BrowserWindow._isProxyNetTarget, custom_
-// xprahtml5/js/BrowserWindow.js): a sessão autenticada do usuário já alcança essa rede por outro
-// caminho, isto só estende a mesma capacidade pro motor Scramjet. allow_direct_ip já é true por
-// default — não precisa setar.
-wisp.options.allow_private_ips  = true;
-wisp.options.allow_loopback_ips = true;
+// Política de rede — IPv4 na saída, rede privada/loopback liberadas. Mora em `rede.js`, com
+// bancada própria: são as opções que já derrubaram este serviço uma vez (ver o parágrafo do
+// `stream_limit_total` logo abaixo), e não dá para provar nenhuma delas sem tirá-las daqui.
+//
+// A linha que estava aqui era `wisp.options.dns_result_order = 'ipv4first'`, com um comentário
+// afirmando que aquilo evitava travar em host sem rota IPv6. **Era ordem, não família** — e
+// deixava passar host só-AAAA e destino IPv6 literal. O `rede.js` explica os dois caminhos.
+aplicarPolitica(wisp, {
+  aoFalhar: (hostname, erro) => log('dns_falhou', { hostname, erro: erro?.code || String(erro) }),
+});
 
 // NÃO configurar wisp.options.stream_limit_total/stream_limit_per_host — tentativa real, revertida.
 // Qualquer valor diferente de -1 (o default, "desabilitado") ativa is_stream_allowed()

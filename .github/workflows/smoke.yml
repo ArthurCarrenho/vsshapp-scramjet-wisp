@@ -102,6 +102,16 @@ jobs:
             process.exit(bad);
           '
 
+      # A política de saída (`backend/rede.js`): força IPv4, recusa destino IPv6 literal, e não
+      # regride rede privada/loopback — que é o caso de uso principal deste motor. Sem rede: o
+      # `dns.lookup` é injetado.
+      #
+      # Roda ANTES de subir o servidor de propósito. Se a política estiver errada, o servidor sobe
+      # do mesmo jeito e todo o resto do smoke passa — o defeito só apareceria no servidor de alguém
+      # tentando abrir um site.
+      - name: A política de rede está certa
+        run: cd backend && npm test
+
       # Da raiz do pacote, como o vssh-app-run faz (`cd "${APP_DIR}"` e depois
       # `exec node backend/server.js`) — não de dentro de backend/.
       - name: Subir o backend

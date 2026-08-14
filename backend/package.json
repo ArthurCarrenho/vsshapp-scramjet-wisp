@@ -6,6 +6,9 @@
   "description": "Backend do vssh-app scramjet-wisp: servidor wisp (Scramjet) + assets estáticos do cliente do motor. Sem frontend/janela própria — consumido pelo BrowserWindow do cliente Xpra via ScramjetEngine.js.",
   "main": "server.js",
   "license": "SEE LICENSE IN dependencies",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\""
+  },
   "dependencies": {
     "vssh-app-toolkit": "github:colabhd/vssh-app-toolkit#v4",
     "@mercuryworkshop/wisp-js": "^0.4.1",
