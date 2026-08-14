@@ -60,6 +60,48 @@ jobs:
       - name: Instalar pelo installCommand do manifesto
         run: bash -c "$(jq -r '.backend.installCommand' vssh-app.json)"
 
+      # O trio scramjet/controller/utils é construído JUNTO, e as versões que cada um espera dos
+      # outros são assadas no build (`SCRAMJET_EXPECTED_VERSION`). O `Controller` confere a do core
+      # NO CONSTRUTOR e LANÇA — e o `new Controller(...)` do ScramjetEngine.js não está sob nenhum
+      # try/catch que degrade. Ou seja: trio desalinhado não é "sem cache", é motor nenhum.
+      #
+      # E o desalinho é fácil de produzir sem perceber, porque os tarballs moram na tag mutável
+      # `latest` e o nome do arquivo carrega a versão. Subir só o core deixa as URLs de controller e
+      # utils IDÊNTICAS — e aí o npm do consumidor reusa o tarball antigo pelo integrity do
+      # lockfile, enquanto o CI do fork já republicou aqueles dois esperando a versão nova.
+      # Aconteceu: controller 0.0.16 e utils 0.0.4 ficaram esperando alpha.4 depois do bump para
+      # alpha.5. A regra prática é subir a versão dos três a cada release.
+      #
+      # A checagem é decisiva sem ser frouxa: um bundle antigo NÃO PODE conter uma string de versão
+      # que ainda não existia quando ele foi construído.
+      - name: O trio scramjet está alinhado
+        run: |
+          node --input-type=module -e '
+            import { readFileSync, readdirSync } from "node:fs";
+            import { join } from "node:path";
+            const NM = "backend/node_modules/@mercuryworkshop";
+            const ver = (p) => JSON.parse(readFileSync(join(NM, p, "package.json"), "utf8")).version;
+            const core = ver("scramjet"), ctrl = ver("scramjet-controller"), utils = ver("scramjet-utils");
+            console.log(`instalados: core=${core} controller=${ctrl} utils=${utils}`);
+            const bundles = (p) => {
+              const d = join(NM, p, "dist");
+              return readdirSync(d).filter((f) => f.endsWith(".js"))
+                .map((f) => readFileSync(join(d, f), "utf8")).join("\n");
+            };
+            let bad = 0;
+            const exige = (quem, texto, versao, dequem) => {
+              const ok = texto.includes(JSON.stringify(versao)) || texto.includes(versao);
+              console.log(`${ok ? "ok  " : "FALHA"} ${quem} traz a versão de ${dequem} (${versao})`);
+              if (!ok) bad = 1;
+            };
+            const bc = bundles("scramjet-controller"), bu = bundles("scramjet-utils");
+            exige("controller", bc, core,  "core");
+            exige("utils",      bu, core,  "core");
+            exige("utils",      bu, ctrl,  "controller");
+            if (bad) console.error("\nTrio desalinhado: o Controller vai LANÇAR no construtor e o motor não sobe. Suba a versão dos três no fork e atualize as três URLs aqui.");
+            process.exit(bad);
+          '
+
       # Da raiz do pacote, como o vssh-app-run faz (`cd "${APP_DIR}"` e depois
       # `exec node backend/server.js`) — não de dentro de backend/.
       - name: Subir o backend
