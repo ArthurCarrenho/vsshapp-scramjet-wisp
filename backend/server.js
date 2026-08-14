@@ -58,6 +58,9 @@ logging.set_level(logging.WARN);
 // deixava passar host só-AAAA e destino IPv6 literal. O `rede.js` explica os dois caminhos.
 aplicarPolitica(wisp, {
   aoFalhar: (hostname, erro) => log('dns_falhou', { hostname, erro: erro?.code || String(erro) }),
+  // Host só-AAAA. Não é erro — mas é a única situação em que uma conexão sai por IPv6, e saber
+  // disso é o que separa "a rota IPv6 deste servidor está quebrada" de "o site está fora".
+  aoRecuar: (hostname, endereco) => log('dns_recuou_ipv6', { hostname, endereco }),
 });
 
 // NÃO configurar wisp.options.stream_limit_total/stream_limit_per_host — tentativa real, revertida.

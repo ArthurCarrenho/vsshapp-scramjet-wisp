@@ -63,25 +63,59 @@ import dns from 'node:dns/promises';
 // não casa, em vez de reescrever a regex no teste.
 export const LITERAL_IPV6 = /:/;
 
+// Erros de resolução que significam "não há endereço DESTA família" — e não "este nome não
+// existe". `ENODATA` é o caso exato do host só-AAAA; o `dns.lookup` do Node reporta `ENOTFOUND`
+// para ele em várias plataformas, então os dois entram.
+const SEM_ENDERECO = new Set(['ENOTFOUND', 'ENODATA', 'EAI_NODATA', 'EAI_NONAME']);
+
 /**
- * Resolvedor de nomes que decide FAMÍLIA.
+ * Resolvedor de nomes que PREFERE IPv4 — e recua para IPv6 quando não há IPv4.
+ *
+ * ⚠ **A primeira versão disto não recuava, e quebrou site de verdade.** Ela pedia `family: 4` e
+ * deixava o erro subir, com o argumento de que host só-AAAA falhar rápido e nomeado era melhor que
+ * pendurar. O argumento continua valendo para o SINTOMA; o que estava errado era a premissa de que
+ * host só-AAAA é raridade.
+ *
+ * Medido em produção: `brunhild.challenges.cloudflare.com` — parte da infraestrutura de desafio do
+ * Cloudflare — **não tem registro A nenhum**, só dois AAAA. Com `family: 4` fixo, ele virava
+ * `getaddrinfo ENOTFOUND` e o desafio não completava. Ou seja: a política atrapalhava exatamente o
+ * caminho que ela deveria ajudar a destravar.
+ *
+ * O recuo devolve o comportamento anterior SÓ para o caso em que não existe alternativa. Para host
+ * dual-stack — a esmagadora maioria — o IPv4 continua sendo escolhido, que é o que evita ficar
+ * preso numa rota IPv6 quebrada. Quando o recuo acontece e o servidor não tem rota IPv6, a falha
+ * vira erro de CONEXÃO em vez de erro de DNS; é o mesmo que acontecia antes desta política existir,
+ * e é preferível a recusar um host que o resto do mundo alcança.
  *
  * @param {object}   [opcoes]
  * @param {Function} [opcoes.lookup]   `dns.lookup` (injetável — a bancada não toca a rede)
- * @param {Function} [opcoes.aoFalhar] chamado com (hostname, erro) quando a resolução falha
+ * @param {Function} [opcoes.aoFalhar] chamado com (hostname, erro) quando a resolução falha de vez
+ * @param {Function} [opcoes.aoRecuar] chamado com (hostname, endereço) quando cai para IPv6
  * @returns {(hostname: string) => Promise<string>}
  */
-export function criarResolvedorIPv4({ lookup = dns.lookup, aoFalhar } = {}) {
-  return async function resolverIPv4(hostname) {
+export function criarResolvedorIPv4({ lookup = dns.lookup, aoFalhar, aoRecuar } = {}) {
+  return async function resolverPreferindoIPv4(hostname) {
+    let erroV4;
     try {
       const { address } = await lookup(hostname, { family: 4 });
       return address;
     } catch (erro) {
-      // O erro SOBE — é ele que faz a stream fechar com motivo em vez de pendurar. O callback é só
-      // para o chamador poder registrar: sem isto, "site que só tem AAAA" chega ao usuário como
-      // uma página que não carrega, sem uma linha em lugar nenhum dizendo por quê.
-      try { aoFalhar?.(hostname, erro); } catch { /* diagnóstico não derruba resolução */ }
-      throw erro;
+      erroV4 = erro;
+      // Nome que não existe, servidor de DNS fora, etc.: recuar para IPv6 não ajudaria em nada.
+      if (!SEM_ENDERECO.has(erro?.code)) {
+        try { aoFalhar?.(hostname, erro); } catch { /* diagnóstico não derruba resolução */ }
+        throw erro;
+      }
+    }
+
+    try {
+      const { address } = await lookup(hostname, { family: 6 });
+      try { aoRecuar?.(hostname, address); } catch { /* idem */ }
+      return address;
+    } catch {
+      // Não tem A nem AAAA: o erro que interessa ao diagnóstico é o da família preferida.
+      try { aoFalhar?.(hostname, erroV4); } catch { /* idem */ }
+      throw erroV4;
     }
   };
 }
@@ -90,10 +124,19 @@ export function criarResolvedorIPv4({ lookup = dns.lookup, aoFalhar } = {}) {
  * Aplica a política inteira sobre um `wisp.options`. Devolve o objeto de opções, para o chamador
  * (e a bancada) poderem afirmar sobre ele.
  */
-export function aplicarPolitica(wisp, { lookup, aoFalhar } = {}) {
+export function aplicarPolitica(wisp, { lookup, aoFalhar, aoRecuar } = {}) {
   const opcoes = wisp.options;
 
-  opcoes.dns_method        = criarResolvedorIPv4({ lookup, aoFalhar });
+  opcoes.dns_method        = criarResolvedorIPv4({ lookup, aoFalhar, aoRecuar });
+
+  // ⚠ Isto recusa literal IPv6 **como destino digitado**, e não o IPv6 que vem do DNS: o
+  // `is_stream_allowed` casa a blacklist contra o HOSTNAME, antes de resolver. Um
+  // `http://[2606:4700::1]/` é barrado; um host só-AAAA resolvido pelo recuo acima passa
+  // normalmente, e é isso que se quer.
+  //
+  // Vale dizer o que isto NÃO é: "IPv6 desligado" por inteiro. Desligar de verdade quebraria
+  // hosts só-AAAA que o resto do mundo alcança — foi exatamente o que aconteceu com a
+  // infraestrutura de desafio do Cloudflare (ver o comentário do resolvedor).
   opcoes.hostname_blacklist = [LITERAL_IPV6];
 
   // Sem isto o wisp-js aplica os defaults do pacote (false/false) e bloqueia qualquer destino em
