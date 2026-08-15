@@ -54,11 +54,53 @@ jobs:
           test -f "$(jq -r .backend.entrypoint vssh-app.json)"
 
       # Pelo comando REAL do manifesto, não um `npm ci` escrito à mão: assim a própria string do
-      # installCommand entra no teste. Numa checkout limpa `test -d node_modules` é falso, então cai
+      # installCommand entra no teste. Numa checkout limpa não há stamp de lockfile, então cai
       # no `npm ci --omit=dev` — e é aqui que EINTEGRITY, lockfile dessincronizado ou release
       # apagado estouram.
       - name: Instalar pelo installCommand do manifesto
         run: bash -c "$(jq -r '.backend.installCommand' vssh-app.json)"
+
+      # O outro lado do installCommand: ele PULA a instalação quando nada mudou, e é essa metade
+      # que já falhou calada em produção. A versão anterior era `test -d node_modules` — "a pasta
+      # existe, então está instalado" — e uma pasta existe para sempre. Resultado: SEIS bumps de
+      # dependência seguidos (alpha.5 até alpha.10, com controller e utils junto) ficaram só no
+      # lockfile enquanto o servidor continuava servindo o alpha.4, incluindo a correção de
+      # isolamento entre origens proxiadas do alpha.5. Foi confirmado batendo os números de linha
+      # do stack trace de um log de produção contra os sourcemaps de cada versão.
+      #
+      # Um bump que não chega ao usuário é pior que bump nenhum: o repositório diz uma coisa, a
+      # máquina serve outra, e nada no caminho denuncia a diferença. O step acima nunca pegaria
+      # isso — numa checkout limpa QUALQUER gate instala.
+      #
+      # Aqui trocamos só o `npm ci` por um marcador. O que falta provar não é a instalação (o step
+      # acima já provou), é a DECISÃO de instalar — que é puramente local e não precisa de rede.
+      - name: O installCommand reinstala quando o lockfile muda
+        run: |
+          CMD=$(jq -r '.backend.installCommand' vssh-app.json)
+          FAKE=$(printf '%s' "$CMD" | sed 's|npm ci --omit=dev|{ echo MARCA-INSTALOU; mkdir -p node_modules; }|')
+          test "$FAKE" != "$CMD" || { echo "FALHA: o sed não casou — o installCommand mudou de forma e este teste virou decorativo"; exit 1; }
+
+          # 1. Lock intacto: não pode reinstalar (é o ganho que o gate existe para dar).
+          case "$(bash -c "$FAKE")" in
+            *MARCA-INSTALOU*) echo "FALHA: reinstalou sem o lockfile mudar"; exit 1 ;;
+          esac
+          echo "ok    lockfile intacto -> pulou"
+
+          # 2. Lock alterado: TEM que reinstalar. É exatamente o caso que regrediu.
+          cp backend/package-lock.json /tmp/lock.orig
+          printf '\n' >> backend/package-lock.json
+          case "$(bash -c "$FAKE")" in
+            *MARCA-INSTALOU*) echo "ok    lockfile mudou -> reinstalou" ;;
+            *) echo "FALHA: o lockfile mudou e o installCommand NÃO reinstalou — é o defeito que prendeu produção no alpha.4"; exit 1 ;;
+          esac
+          cp /tmp/lock.orig backend/package-lock.json
+
+          # 3. VSSH_APP_REBUILD=1 continua forçando — contrato antigo, preservado de propósito.
+          #    (Também deixa o stamp de volta em sincronia com o lockfile restaurado acima.)
+          case "$(VSSH_APP_REBUILD=1 bash -c "$FAKE")" in
+            *MARCA-INSTALOU*) echo "ok    VSSH_APP_REBUILD=1 -> reinstalou" ;;
+            *) echo "FALHA: VSSH_APP_REBUILD=1 deixou de forçar a reinstalação"; exit 1 ;;
+          esac
 
       # O trio scramjet/controller/utils é construído JUNTO, e as versões que cada um espera dos
       # outros são assadas no build (`SCRAMJET_EXPECTED_VERSION`). O `Controller` confere a do core
