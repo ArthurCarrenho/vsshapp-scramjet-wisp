@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-check:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      version_changed: ${{ steps.check.outputs.version_changed }}
+      new_version: ${{ steps.check.outputs.new_version }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Check the version
+        id: check
+        run: |
+          CURRENT_VERSION=$(jq -r .version package.json)
+          echo "Current version: $CURRENT_VERSION"
+          LATEST_VERSION=$(npm view @mercuryworkshop/libcurl-transport versions --json | jq -r '.[-1]' || echo "0.0.0")
+          echo "Latest NPM version: $LATEST_VERSION"
+
+          if [ "$LATEST_VERSION" != "$CURRENT_VERSION" ];
+          then
+            echo "Version changed"
+            echo "version_changed=true" >> "$GITHUB_OUTPUT"
+            echo "new_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version not changed"
+            echo "version_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+  build:
+    name: Build libcurl-transport
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install pnpm dependencies
+        run: pnpm install
+
+      - name: Pack
+        run: pnpm pack
+
+      - name: Upload Artifact (pnpm pack)
+        uses: actions/upload-artifact@v6
+        with:
+          name: packaged-libcurl-transport
+          path: mercuryworkshop-libcurl-transport-*.tgz
+
+  # vssh fork: publish the packed tarball to a stable "latest" GitHub prerelease so the
+  # vssh-sso scramjet-wisp backend can depend on it by URL (the upstream CI only uploaded
+  # an ephemeral Actions artifact). Recreated on every push to master.
+  release:
+    name: Release to GitHub
+    runs-on: ubuntu-latest
+    needs: [build]
+    permissions: write-all
+    if: github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Get artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: packaged-libcurl-transport
+          path: .
+
+      - name: SHA curto para a tag do build
+        id: sha
+        run: echo "curto=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # vssh fork: **a `latest` está CONGELADA, e é por isso que não há passo escrevendo nela.**
+      #
+      # O que estava aqui era um `ncipollo/release-action` com `tag: latest`, `allowUpdates: true` e
+      # `removeArtifacts: true` — ou seja, todo push em master apagava os assets e subia os novos sob
+      # o mesmo nome de arquivo. O comentário do job `publish` logo abaixo já dizia, com todas as
+      # letras, que "republicar bytes diferentes sob o mesmo nome quebra o `integrity` do lockfile de
+      # quem consome". Dizia, e este passo fazia.
+      #
+      # A `latest` continua existindo e continua servindo o 2.0.6 que produção instalou. Só não
+      # recebe mais nada. Apagá-la é outra decisão, e depende de não haver mais servidor apontando
+      # para lá.
+      - name: Release imutável deste build
+        uses: ncipollo/release-action@v1
+        with:
+          name: "transport ${{ steps.sha.outputs.curto }}"
+          # Tag que não se move: o run dá ordem legível, o SHA diz de que código o tarball saiu. É
+          # a única URL deste repositório que dá para gravar num lockfile sem torcer.
+          tag: "transport-${{ github.run_number }}-${{ steps.sha.outputs.curto }}"
+          commit: ${{ github.sha }}
+          body: "${{ github.event.head_commit.url }} ${{ github.event.head_commit.message }}"
+          artifacts: "mercuryworkshop-libcurl-transport-*.tgz"
+          prerelease: true
+          makeLatest: false
+
+  # vssh fork: só o upstream publica no npm. Este é um FORK, e o pacote se chama
+  # @mercuryworkshop/libcurl-transport — publicar dali empurraria um build nosso para o nome deles.
+  #
+  # Até agora isso não acontecia por um acidente frágil: o `version-check` compara a versão do
+  # package.json com a última do npm, e a nossa estava colada na deles (2.0.5 == 2.0.5), então o job
+  # nunca disparava. Ou seja, a proteção era "nunca mudar a versão" — exatamente o que impede
+  # entregar um build novo, já que o consumidor depende do TARBALL por URL e o nome do arquivo
+  # carrega a versão. Republicar bytes diferentes sob o mesmo nome quebra o `integrity` do lockfile
+  # de quem consome.
+  #
+  # Com a condição de repositório abaixo, a versão volta a ser nossa para mexer. O caminho de
+  # entrega continua sendo o job `release` acima (tag `latest`, com removeArtifacts para de fato
+  # substituir os assets).
+  publish:
+    name: Publish to NPM
+    runs-on: ubuntu-latest
+    needs: [version-check, build]
+    permissions: write-all
+    if: >-
+      github.repository == 'MercuryWorkshop/libcurl-transport'
+      && github.ref == 'refs/heads/master'
+      && needs.version-check.outputs.version_changed == 'true'
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Get artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: packaged-libcurl-transport
+          path: .
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Publish
+        run: npm publish mercuryworkshop-libcurl-transport-${{ needs.version-check.outputs.new_version }}.tgz --access public --no-git-checks
