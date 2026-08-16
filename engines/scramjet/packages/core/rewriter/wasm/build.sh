@@ -14,8 +14,20 @@ fi
 
 MODE="release"
 if [ "${RELEASE:-0}" != "1" ]; then MODE="debug"; fi
+# vssh fork: acrescentado o `-prune` de `target/` e `out/`.
+#
+# Este hash decide se o build pode ser pulado, e ele estava incluindo a PRÓPRIA SAÍDA: medido,
+# 295 dos 324 arquivos casados moravam em `target/` (os `.json` de fingerprint do cargo). Enquanto
+# nada rodasse o cargo antes daqui, ninguém notava — o `find` do começo via a árvore sem `target/`
+# nas duas vezes, e o hash batia por acidente.
+#
+# Deixou de ser acidente quando `motor.yml` passou a rodar `cargo test -p js` antes do build: o
+# `.build-hash` foi gravado com `target/` no meio, o run seguinte recalculou sem ele (o cache do
+# CI guarda `out/` e o `.wasm`, não o `target/`), o guard errou e o build.sh tentou reconstruir num
+# job onde a toolchain nem tinha sido instalada — "Please install cargo, wasm-bindgen...".
+#
 # shellcheck disable=SC2046
-SRC_HASH=$( (echo "MODE=${MODE}"; sha256sum $(find ../ -type f -not -path "*/\.*" -and \( -name "*.rs" -o -name "*.toml" -o -name "*.sh" -o -name "*.json" -o -name "*.md" \); echo Cargo.toml; echo build.sh) 2>/dev/null | sort -k2 | sha256sum ) | sha256sum | cut -d' ' -f1 ) || SRC_HASH="unknown"
+SRC_HASH=$( (echo "MODE=${MODE}"; sha256sum $(find ../ \( -name target -o -name out \) -prune -o -type f -not -path "*/\.*" -and \( -name "*.rs" -o -name "*.toml" -o -name "*.sh" -o -name "*.json" -o -name "*.md" \) -print; echo Cargo.toml; echo build.sh) 2>/dev/null | sort -k2 | sha256sum ) | sha256sum | cut -d' ' -f1 ) || SRC_HASH="unknown"
 
 if [ -f out/.build-hash ] && [ -f ../../dist/scramjet.wasm ] && [ "$SRC_HASH" != "unknown" ] && grep -q "$SRC_HASH" out/.build-hash; then
   echo "Rewriter sources unchanged (hash $SRC_HASH); skipping rebuild."
