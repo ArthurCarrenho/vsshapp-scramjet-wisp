@@ -91,15 +91,22 @@ const TOKEN = process.env.VSSH_APP_TOKEN || null;
 // nome de diretório.
 //
 // Agora o motor é construído neste repositório (`engines/` → `scripts/montar-motor.sh`) e viaja
-// versionado em `backend/vendor/`. O que isso conserta, além de encurtar o caminho:
+// versionado em `backend/vendor/`. O que isso conserta, além de encurtar o caminho — cada item
+// conferido no `infra/server/vssh-app-install` do vssh-sso, e não deduzido:
 //
 //   - a instalação para de baixar 14 MB de tarballs do GitHub a cada `npm ci` — e ele roda em TODA
-//     instalação, porque o instalador passa `VSSH_APP_REBUILD=1`, que é o bypass do gate;
-//   - a integridade sobe de nível: o instalador já confere o sha256 do tarball inteiro contra o que
-//     o Worker declara. Uma checagem no lugar de quatro, cobrindo mais;
+//     instalação, porque a linha 335 passa `VSSH_APP_REBUILD=1`, que é o bypass do gate;
+//   - a integridade sobe de nível: as linhas 112-113 já conferem o sha256 do tarball inteiro contra
+//     o que o Worker declara, e abortam. Uma checagem no lugar de quatro, cobrindo mais;
 //   - `vssh-app-install scramjet-wisp@4.0.N` passa a reverter app e motor JUNTOS;
-//   - o `.installed-hash` do instalador exclui `*/node_modules/*`. Com o motor morando lá dentro,
-//     atualizá-lo NÃO mudava o hash e o backend não reiniciava sozinho. Em `backend/vendor/`, muda.
+//   - o `.installed-hash` (linha 355) exclui `*/node_modules/*`, então com o motor morando lá
+//     dentro trocá-lo POR FORA do instalador não mudava o hash, e o portal não percebia que o
+//     código mudou. Em `backend/vendor/`, percebe.
+//
+// ⚠ Este último item já esteve escrito aqui como "atualizar o motor não reiniciava o backend", e
+// isso era FALSO no caminho normal: o bloco 2b do instalador (linhas 292-316) já dá `kill -TERM`
+// em toda instância rodando, de qualquer usuário, antes do rsync. O ganho é o caso mais estreito
+// acima — troca por fora do `--force` —, que é o que o `_computeInstalledHash` do portal cita.
 function motorDir(dir) {
   return path.join(RAIZ, 'vendor', dir, 'dist');
 }
