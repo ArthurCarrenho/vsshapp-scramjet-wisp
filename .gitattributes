@@ -1,0 +1,7 @@
+# O `vssh-app-publish` empacota com `git archive`, que leva TODO arquivo rastreado — e respeita
+# `export-ignore`. A bancada existe para desenvolver e depurar; não tem por que viajar no tarball
+# que o servidor instala, nem pesar em cada máquina onde o app é implantado.
+#
+# Ficar versionada e ficar fora do pacote são coisas diferentes, e é isto que separa as duas.
+bench/ export-ignore
+.gitattributes export-ignore
