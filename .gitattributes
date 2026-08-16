@@ -3,5 +3,14 @@
 # que o servidor instala, nem pesar em cada máquina onde o app é implantado.
 #
 # Ficar versionada e ficar fora do pacote são coisas diferentes, e é isto que separa as duas.
-bench/ export-ignore
-.gitattributes export-ignore
+#
+# ⚠ **A barra inicial não é enfeite.** Aqui valem as regras de padrão do `.gitignore`: um padrão
+# cuja ÚNICA barra é a final casa em qualquer nível da árvore. `bench/` casaria também um
+# `backend/bench/`, e — o que de fato vai importar quando o motor entrar aqui — `vendor/` casaria
+# `backend/vendor/`, tirando do tarball justamente o que o servidor precisa receber.
+#
+# O sintoma disso é o pior que existe: um app que sobe, responde 200 no healthcheck, e dá 503 em
+# `/scram/` na máquina do usuário. Nada fica vermelho em lugar nenhum. Por isso: ancore sempre, e
+# nunca use o mesmo nome de pasta para "fonte que fica de fora" e "artefato que entra".
+/bench/ export-ignore
+/.gitattributes export-ignore

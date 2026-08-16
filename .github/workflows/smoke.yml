@@ -7,11 +7,15 @@ name: Smoke
 # Chamado como gate pelo publish.yml (workflow_call) — nunca publicar um pacote cujo `npm ci` não
 # resolve ou cujas rotas de asset sumiram — e roda sozinho em PR.
 #
-# O `schedule` semanal não é zelo: as 4 dependências AGPL vêm de URLs
-# `releases/download/latest/<pkg>-<ver>.tgz`, e a tag `latest` é MUTÁVEL. Já aconteceu de os bytes
-# serem republicados sob o mesmo nome, quebrando o `integrity` do lockfile (ver a mensagem do commit
-# 06d49be). O cron transforma esse drift em build vermelho aqui, em vez de descoberta no servidor
-# do cliente na próxima instalação.
+# O `schedule` semanal nasceu porque as 4 dependências vinham de `releases/download/latest/...`, e
+# a tag `latest` é MUTÁVEL — os bytes já foram republicados sob o mesmo nome uma vez, quebrando o
+# `integrity` do lockfile (ver o commit 06d49be).
+#
+# **Essa razão morreu:** as URLs agora apontam para releases com tag que não se move
+# (`engine-<run>-<sha>`, `transport-<run>-<sha>`), e a `latest` dos dois forks ficou congelada. O
+# cron fica assim mesmo, por um motivo menor e ainda real: uma release pode ser apagada à mão, e
+# um asset pode sumir. Continua sendo melhor descobrir isso aqui do que na próxima instalação no
+# servidor do cliente.
 
 on:
   workflow_call:
@@ -25,6 +29,91 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # O único teste que olha para o que o servidor REALMENTE recebe.
+  #
+  # Todo o resto deste arquivo mede a árvore de trabalho do runner. O servidor não recebe a árvore:
+  # recebe um tarball montado pelo `vssh-app-publish`, que faz `git add -A`, um commit efêmero e um
+  # `git archive` — e o `git archive` respeita `export-ignore`. Entre uma coisa e outra cabem dois
+  # acidentes que nada aqui pegava:
+  #
+  #   - um padrão de `.gitattributes` sem barra inicial casa em qualquer nível, então `vendor/`
+  #     tiraria `backend/vendor/` do pacote. O app sobe, responde 200 no healthcheck, e dá 503 na
+  #     máquina do usuário;
+  #   - um arquivo untracked E não-ignorado (foi o caso do `logdehoje`, 3 MB) entra no tarball pelo
+  #     `git add -A`, sem ninguém pedir.
+  #
+  # Os dois falham em silêncio. Este job os transforma em build vermelho.
+  tarball:
+    name: O pacote leva o que deve, e só
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Montar o tarball do mesmo jeito que o publish monta
+        run: |
+          git config user.name  vssh
+          git config user.email vssh@localhost
+          git add -A
+          git commit -q --no-verify -m "snapshot do smoke" || true
+          git archive --format=tar HEAD | gzip -n > /tmp/app.tar.gz
+          tar -tzf /tmp/app.tar.gz | sort > /tmp/conteudo.txt
+          echo "--- conteúdo ($(wc -l < /tmp/conteudo.txt) entradas, $(stat -c%s /tmp/app.tar.gz) bytes) ---"
+          cat /tmp/conteudo.txt
+
+      # ⚠ Quando o motor construído passar a viajar no pacote, `backend/vendor/<pkg>/dist/` entra
+      # NESTA lista. É o único lugar que pega o acidente do `.gitattributes` sem âncora — medido:
+      # com `vendor/ export-ignore` em vez de `/vendor/`, o `backend/vendor/` sai do tarball com
+      # zero entradas, e o app instala sem motor sem nada ficar vermelho.
+      - name: O que precisa estar, está
+        run: |
+          erro=0
+          # O manifesto tem que cair na RAIZ do tarball: é onde o instalador o procura.
+          for exigido in vssh-app.json backend/server.js backend/package.json backend/package-lock.json; do
+            grep -qx "$exigido" /tmp/conteudo.txt || { echo "FALTA no tarball: $exigido"; erro=1; }
+          done
+          # O entrypoint declarado no manifesto, seja ele qual for.
+          ENTRY=$(jq -r .backend.entrypoint vssh-app.json)
+          grep -qx "$ENTRY" /tmp/conteudo.txt || { echo "FALTA o entrypoint declarado: $ENTRY"; erro=1; }
+          exit $erro
+
+      - name: O que não pode estar, não está
+        run: |
+          erro=0
+          # Bancada e metadados de empacotamento ficam versionados e fora do pacote — é a razão de
+          # o `.gitattributes` existir. Se um `export-ignore` for removido ou perder a âncora, é
+          # aqui que aparece.
+          # (`.github/` NÃO está nesta lista de propósito: ele viaja no tarball hoje, e tirá-lo é
+          # uma decisão separada desta. Um teste novo não deve mudar o que se empacota.)
+          while read -r proibido; do
+            if grep -q "^${proibido}" /tmp/conteudo.txt; then
+              echo "NÃO DEVIA estar no tarball: $proibido"; erro=1
+            fi
+          done <<'PADROES'
+          bench/
+          .gitattributes
+          engines/
+          PADROES
+          # Nada de node_modules: quem instala é o installCommand, no servidor.
+          if grep -q "node_modules/" /tmp/conteudo.txt; then echo "NÃO DEVIA: node_modules no tarball"; erro=1; fi
+          exit $erro
+
+      - name: E cabe no orçamento
+        run: |
+          # Faixa, e não valor exato: um número exato viraria manutenção a cada commit. O que se
+          # quer pegar é ordem de grandeza — pacote vazio (algo foi excluído demais) ou pacote
+          # inchado (fonte ou dump vazou para dentro).
+          #
+          # Hoje são ~34 KB comprimidos (123 KB de tar antes do gzip — o `vssh-app-publish` gzipa,
+          # então é o número comprimido que vale). O teto sobe DE PROPÓSITO no dia em que o motor
+          # construído passar a viajar no pacote; até lá, 8 MB é folga suficiente para não
+          # incomodar e apertada o bastante para pegar um vazamento de verdade.
+          BYTES=$(stat -c%s /tmp/app.tar.gz)
+          MIN=20480      # 20 KB
+          MAX=8388608    # 8 MB
+          echo "tarball: ${BYTES} bytes (faixa aceita: ${MIN}..${MAX})"
+          [ "$BYTES" -ge "$MIN" ] || { echo "pequeno demais — algo essencial saiu do pacote"; exit 1; }
+          [ "$BYTES" -le "$MAX" ] || { echo "grande demais — algo vazou para dentro do pacote"; exit 1; }
+
   smoke:
     name: Sobe e serve o contrato
     runs-on: ubuntu-latest

@@ -5,3 +5,13 @@ backend/node_modules/
 # Dev local do wisp/scramjet
 .dev.vars
 *.log
+
+# Dumps de console de produção, colados aqui para investigar. O padrão `*.log` acima não os pega
+# porque em geral chegam sem extensão, e são grandes (o primeiro tinha 3 MB). Ficam fora do git de
+# propósito: são prova de um incidente, não fonte — e carregam URL e sessão de quem estava usando.
+#
+# ⚠ Ficar de fora do `.gitignore` era risco real: o `vssh-app-publish` faz `git add -A` antes de
+# empacotar, então um arquivo untracked E não-ignorado entra no tarball que vai para o servidor.
+logdehoje
+logde*
+*.console.txt
