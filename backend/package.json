@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Backend do vssh-app scramjet-wisp: servidor wisp (Scramjet) + assets estáticos do cliente do motor. Sem frontend/janela própria — consumido pelo BrowserWindow do cliente Xpra via ScramjetEngine.js.",
   "main": "server.js",
-  "license": "SEE LICENSE IN dependencies",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "test": "node --test \"tests/*.test.js\""
   },

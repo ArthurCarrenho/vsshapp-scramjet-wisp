@@ -68,7 +68,10 @@ jobs:
         run: |
           erro=0
           # O manifesto tem que cair na RAIZ do tarball: é onde o instalador o procura.
-          for exigido in vssh-app.json backend/server.js backend/package.json backend/package-lock.json; do
+          # LICENSE e NOTICE viajam de propósito: o motor é AGPL, e a §13 dá a quem usa o serviço
+          # o direito de saber o que está rodando e onde está o fonte. Um `export-ignore` distraído
+          # os tiraria do pacote sem nenhum outro sintoma — daí estarem aqui e não num comentário.
+          for exigido in vssh-app.json LICENSE NOTICE backend/server.js backend/package.json backend/package-lock.json; do
             grep -qx "$exigido" /tmp/conteudo.txt || { echo "FALTA no tarball: $exigido"; erro=1; }
           done
           # O entrypoint declarado no manifesto, seja ele qual for.

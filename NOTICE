@@ -1,0 +1,78 @@
+# NOTICE — vssh-app `scramjet-wisp`
+
+Este repositório distribui um motor de navegação web composto por software de terceiros sob
+licenças copyleft. O `LICENSE` da raiz é a **AGPL-3.0**, e vale para a obra como um todo.
+
+Este arquivo diz o que é de quem, de onde veio, e o que foi mudado. Ele existe para ser lido por
+gente, e para que ninguém precise reconstruir essa informação a partir do histórico do git.
+
+---
+
+## Por que AGPL, e por que ela já se aplica hoje
+
+O Scramjet e o libcurl-transport são AGPL-3.0-only. Servir os bundles deles a um navegador é uso em
+rede, e a §13 da AGPL dá a quem usa o serviço o direito de receber o fonte da versão modificada que
+está rodando. Isso vale para o `vssh.colabh.org` desde o primeiro dia — o arquivo aqui não cria a
+obrigação, só torna impossível continuar sem perceber.
+
+O libcurl.js é LGPL-3.0-or-later. A LGPLv3 permite distribuir sob a GPLv3, e a AGPLv3 aceita ligar
+com GPLv3 — então as três convivem numa obra AGPL-3.0 sem conflito. **O aviso LGPL precisa
+sobreviver ao empacotamento**, e é por isso que ele está reproduzido abaixo e mantido no cabeçalho
+dos arquivos que o carregam.
+
+---
+
+## As partes
+
+### `@mercuryworkshop/scramjet`, `-controller`, `-utils`
+
+- **Origem:** https://github.com/MercuryWorkshop/scramjet — Mercury Workshop
+- **Licença:** AGPL-3.0-only
+- **Fork:** https://github.com/ArthurCarrenho/vssh-scramjet
+- **O que mudamos:** isolamento entre origens proxiadas (conferência de `targetOrigin`, `Domain=`
+  de cookie, site registrável); `postMessage` por acesso computado; classificação de falha do
+  rewriter (fonte inválida × falha nossa) e recuperação de instância travada; bancada de
+  reprodução. O upstream **não** publica nosso fork; os pacotes trazem os nomes `@mercuryworkshop/*`
+  porque são fork, e não porque temos direito a eles — nada daqui é publicado no npm.
+
+### `@mercuryworkshop/libcurl-transport`
+
+- **Origem:** https://github.com/MercuryWorkshop/libcurl-transport — ading2210
+- **Licença:** AGPL-3.0-only
+- **Fork:** https://github.com/ArthurCarrenho/vssh-libcurl-transport
+- **O que mudamos:** opção de TLS sem verificação; build do libcurl vendorizado com multiplexação
+  HTTP/2; entrega por release com tag imutável.
+
+### `libcurl.js` (vendorizado dentro do transport, em `lib/libcurl_full.mjs`)
+
+- **Origem:** https://github.com/ading2210/libcurl.js — ading2210
+- **Licença:** **LGPL-3.0-or-later** — e o cabeçalho no topo do arquivo diz isso e deve continuar
+  dizendo:
+
+      ading2210/libcurl.js - A port of libcurl to WASM for the browser.
+      Copyright (C) 2024 ading2210
+      Licensed under the GNU LGPL v3.
+
+- **Fork:** https://github.com/ArthurCarrenho/vssh-libcurl.js
+- **O que mudamos:** `CURLOPT_PIPEWAIT` (o transporte não multiplexava HTTP/2 e abria uma conexão
+  por requisição); `--without-ca-bundle --without-ca-path` no `configure` do curl (sem isso o build
+  gravava o caminho de CA da máquina hospedeira dentro do wasm, causando erro 77 em todo handshake).
+
+### Bibliotecas C dentro do `libcurl.js`
+
+O bundle carrega e atribui, em `client/javascript/copyright.js`, as licenças de:
+**libcurl** (curl License), **mbedTLS** (Apache-2.0), **cJSON** (MIT), **zlib** (zlib),
+**brotli** (MIT), **nghttp2** (MIT). Esse arquivo é embutido no bundle final e não deve ser
+removido.
+
+### `@mercuryworkshop/wisp-js` e `vssh-app-toolkit`
+
+Dependências instaladas pelo gerenciador de pacotes, não vendorizadas. Mantêm as próprias licenças
+(AGPL-3.0 e a do toolkit, respectivamente) e não são redistribuídas por este repositório.
+
+---
+
+## Onde está o fonte
+
+O fonte correspondente à versão em execução está em
+https://github.com/ArthurCarrenho/vsshapp-scramjet-wisp e nos forks nomeados acima.
