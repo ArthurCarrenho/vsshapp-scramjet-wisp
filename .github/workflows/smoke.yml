@@ -23,7 +23,24 @@ name: Smoke
 
 on:
   workflow_call:
-  pull_request:
+    inputs:
+      # O motor que este smoke deve testar, como artefato do MESMO run.
+      #
+      # Sem isto o smoke testaria o `backend/vendor/` do checkout — que é o commit que disparou o
+      # run, ou seja, o motor ANTIGO. Quando o `entrega.yml` reconstrói `engines/` e remonta o
+      # vendor, é o resultado dessa remontagem que precisa ser exercitado; testar o commitado
+      # aprovaria um pacote e publicaria outro.
+      #
+      # Vazio (o padrão) = testa o que está no checkout, que é o certo para PR e para execução
+      # avulsa.
+      vendor_artifact:
+        type: string
+        required: false
+        default: ""
+  # Sem `pull_request` próprio: quem roda o smoke em PR é o `entrega.yml`, que o chama depois de
+  # remontar o vendor. Ter os dois gatilhos faria o smoke rodar DUAS vezes por PR — e a execução
+  # avulsa testaria o motor do checkout enquanto a outra testava o remontado, com resultados que
+  # poderiam divergir e nenhuma forma de saber qual valia.
   workflow_dispatch:
 
 concurrency:
@@ -50,6 +67,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # Substitui `backend/vendor/` pelo motor recém-construído, quando o chamador passou um. Ver o
+      # comentário de `vendor_artifact` no topo: sem isto o smoke aprovaria um motor e o publish
+      # empacotaria outro.
+      - name: O motor deste run, se veio um
+        if: inputs.vendor_artifact != ''
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs.vendor_artifact }}
+          path: backend/vendor/
 
       - name: Montar o tarball do mesmo jeito que o publish monta
         run: |
@@ -148,6 +175,16 @@ jobs:
       TOKEN: 'smoke-token-nao-secreto'
     steps:
       - uses: actions/checkout@v5
+
+      # Substitui `backend/vendor/` pelo motor recém-construído, quando o chamador passou um. Ver o
+      # comentário de `vendor_artifact` no topo: sem isto o smoke aprovaria um motor e o publish
+      # empacotaria outro.
+      - name: O motor deste run, se veio um
+        if: inputs.vendor_artifact != ''
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs.vendor_artifact }}
+          path: backend/vendor/
 
       # Node 22: é o que o caminho do portal usa no servidor (`sudo` reescreve o PATH via
       # secure_path e resolve /usr/bin/node, não um nvm pessoal do usuário). Testar noutra major

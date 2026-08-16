@@ -13,18 +13,23 @@ name: Motor
 #     compilado por outro compilador, e viraria um ocultador de não-determinismo;
 #   - **conferir o contrato com quem consome**: os 7 arquivos que `backend/server.js` serve.
 #
-# ⚠ Nada aqui é consumido por produção ainda. O backend continua instalando das releases com tag
-# imutável; a troca é a fase 5 do plano.
+# ⚠ **Este workflow não tem gatilho próprio de push, e isso é de propósito.** Ele é chamado pelo
+# `publish.yml`, que é o CI único: detecta o que mudou, constrói, atualiza `backend/vendor/` e
+# publica, sem ida e volta humana no meio. Ter um `on: push` aqui faria os builds rodarem duas vezes
+# por commit — uma pelo gatilho próprio, outra pela chamada — e as duas escreveriam o mesmo cache.
+#
+# `workflow_dispatch` fica, para reconstruir à mão sem publicar nada.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_call:
+    outputs:
+      scramjet:
+        description: "engines/scramjet mudou e foi reconstruído"
+        value: ${{ jobs.mudou.outputs.scramjet }}
+      transport:
+        description: "engines/libcurl-transport mudou e foi reconstruído"
+        value: ${{ jobs.mudou.outputs.transport }}
   workflow_dispatch:
-
-concurrency:
-  group: motor-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
@@ -159,24 +164,10 @@ jobs:
       - name: Montar os pacotes, e conferir o contrato
         run: bash ../../scripts/montar-motor.sh scramjet
 
-      # O vendor é VERSIONADO, então este job não fecha o ciclo sozinho: ele constrói e confere, e
-      # quem commita é uma pessoa. Este passo existe para que ela saiba o que fazer sem ter que
-      # deduzir — e o gate que REPROVA está no smoke ("O motor commitado corresponde às fontes"),
-      # que compara o `fonte` do BUILD.json com o hash da árvore do fork.
-      #
-      # Aqui não se reprova por diferença de bytes de propósito: sourcemaps carregam caminhos e
-      # nenhum destes builds é reprodutível byte a byte, então um `git diff` daria vermelho por
-      # ruído. O que este passo mede é se algo mudou o bastante para valer uma remontagem.
-      - name: O vendor commitado precisa ser atualizado?
-        run: |
-          cd "$GITHUB_WORKSPACE"
-          if git diff --quiet -- backend/vendor/; then
-            echo "o vendor commitado já reflete este build."
-          else
-            echo "::notice::As fontes do scramjet mudaram e o motor foi remontado. Baixe o artefato 'motor-scramjet', substitua backend/vendor/{scramjet,controller,utils}/ e commite — ou rode 'scripts/montar-motor.sh scramjet' localmente."
-            git diff --stat -- backend/vendor/ | tail -20
-          fi
-
+      # Quem aplica isto em `backend/vendor/` e commita é o job `vendor` do `publish.yml`, no mesmo
+      # run. Havia aqui um passo que só AVISAVA ("baixe o artefato e commite"), e ele era exatamente
+      # a fricção que o CI único eliminou: o gate do smoke reprovava o push, uma pessoa baixava o
+      # zip à mão, commitava, e só então publicava.
       - uses: actions/upload-artifact@v6
         with:
           # ⚠ caminho a partir da RAIZ do workspace: `upload-artifact` ignora o
@@ -216,16 +207,6 @@ jobs:
 
       - name: Montar o pacote, e conferir o contrato
         run: bash ../../scripts/montar-motor.sh transport
-
-      - name: O vendor commitado precisa ser atualizado?
-        run: |
-          cd "$GITHUB_WORKSPACE"
-          if git diff --quiet -- backend/vendor/; then
-            echo "o vendor commitado já reflete este build."
-          else
-            echo "::notice::As fontes do libcurl-transport mudaram e o motor foi remontado. Baixe o artefato 'motor-transport', substitua backend/vendor/libcurl-transport/ e commite — ou rode 'scripts/montar-motor.sh transport' localmente."
-            git diff --stat -- backend/vendor/ | tail -20
-          fi
 
       - uses: actions/upload-artifact@v6
         with:

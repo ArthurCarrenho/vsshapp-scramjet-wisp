@@ -1,0 +1,213 @@
+name: Entrega
+
+# O CI único: detecta o que mudou em `engines/`, constrói, remonta `backend/vendor/`, testa o
+# resultado e publica. Um push, um run, sem pessoa no meio.
+#
+# ─── Por que ele existe ──────────────────────────────────────────────────────────────────────
+#
+# Antes eram dois workflows com um humano entre eles: o `motor.yml` construía e subia um zip, o
+# gate do smoke reprovava o push por o vendor estar velho, e alguém baixava o artefato, substituía
+# `backend/vendor/` e commitava para então publicar. Isso trocou coordenação entre workflows por
+# coordenação humana, que é pior — depende de lembrar, e o aviso só chega depois do push.
+#
+# O gate continua existindo e continua certo: se `backend/vendor/` não corresponder às fontes, o
+# smoke reprova. O que mudou é que agora quase nunca há o que reprovar, porque o job `vendor` já
+# remontou antes de o smoke rodar.
+#
+# ─── A versão pulou para 4.1, e não é enfeite ───────────────────────────────────────────────
+#
+# O sufixo é `github.run_number`, que é POR ARQUIVO de workflow: um arquivo novo começa em 1. Com
+# `4.0.<run>` isso publicaria `4.0.1` contra os `4.0.40` já no repositório — a versão andando para
+# trás. Subir a minor resolve, e é honesto: a forma de publicar mudou de verdade (o motor viaja no
+# tarball, e quem o monta é este arquivo).
+#
+# Seguro porque o Worker não compara números: ele guarda `latest` como o ÚLTIMO publicado, e o
+# `vssh-app-install` pega `cands[0]`, que é esse campo. As 4.0.x ficam no `history`, então
+# `vssh-app-install scramjet-wisp@4.0.40` continua servindo de rollback.
+#
+# Secret necessário (Settings → Secrets and variables → Actions):
+#   - VSSH_REPO_PUBLISH_TOKEN: token de publicação do Worker, escopado `app:scramjet-wisp`.
+# Variable opcional (não secret):
+#   - VSSH_REPO_API (default abaixo): base URL do Worker do repositório.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# `cancel-in-progress: false`, ao contrário do que o `motor.yml` fazia sozinho: aqui o run termina
+# publicando e commitando. Cancelar um pela metade deixa o vendor commitado sem o pacote
+# correspondente publicado — divergência entre repo e Worker, que é exatamente o que este desenho
+# existe para impedir.
+concurrency:
+  group: entrega-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── 1. Construir o que mudou ────────────────────────────────────────────────────────────────
+  motor:
+    name: Motor
+    uses: ./.github/workflows/motor.yml
+
+  # ── 2. Remontar `backend/vendor/` ───────────────────────────────────────────────────────────
+  #
+  # Aplica os artefatos que o passo anterior produziu e, se algo mudou, commita. O commit é feito
+  # com o `GITHUB_TOKEN`, e isso tem uma consequência que aqui é DESEJADA: push com esse token não
+  # dispara workflows. Sem essa regra, cada commit do bot dispararia outra Entrega, que commitaria
+  # de novo — um loop. Como o run continua nos jobs abaixo, nada se perde por ele não disparar.
+  vendor:
+    name: O motor que vai no pacote
+    needs: motor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # `ref` explícito: sem ele um `push` faz checkout do SHA do evento em detached HEAD, e o
+          # `git push` mais abaixo não teria branch para empurrar.
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Baixar o scramjet reconstruído
+        if: needs.motor.outputs.scramjet == 'true'
+        uses: actions/download-artifact@v6
+        with:
+          name: motor-scramjet
+          path: /tmp/motor-scramjet
+
+      - name: Baixar o transport reconstruído
+        if: needs.motor.outputs.transport == 'true'
+        uses: actions/download-artifact@v6
+        with:
+          name: motor-transport
+          path: /tmp/motor-transport
+
+      # `rm -rf` antes do `cp`, e não `cp` por cima: um arquivo que o build DEIXOU de produzir
+      # (bundle renomeado, sourcemap que sumiu) continuaria em `vendor/` para sempre se só
+      # copiássemos por cima. O contrato dos 7 arquivos pegaria a falta, mas não a sobra.
+      - name: Aplicar em backend/vendor/
+        run: |
+          set -euo pipefail
+          aplicou=0
+          if [ -d /tmp/motor-scramjet ]; then
+            for p in scramjet controller utils; do
+              rm -rf "backend/vendor/$p"
+              cp -r "/tmp/motor-scramjet/$p" "backend/vendor/$p"
+            done
+            aplicou=1
+          fi
+          if [ -d /tmp/motor-transport ]; then
+            rm -rf backend/vendor/libcurl-transport
+            cp -r /tmp/motor-transport backend/vendor/libcurl-transport
+            aplicou=1
+          fi
+          [ "$aplicou" = 1 ] || echo "nada foi reconstruído — o vendor do checkout já é o certo."
+
+      # A conferência que o smoke também faz, aqui adiantada: se sobrou divergência DEPOIS de
+      # aplicar, alguma coisa no encadeamento está errada (artefato do fork errado, filtro de
+      # caminho que não acendeu o build que devia). Falhar aqui aponta para a causa; falhar só no
+      # smoke, três jobs adiante, aponta para o sintoma.
+      - name: O vendor corresponde às fontes?
+        run: |
+          set -euo pipefail
+          fail=0
+          for dir in scramjet controller utils libcurl-transport; do
+            fork=$(jq -r .fork "backend/vendor/$dir/BUILD.json")
+            gravado=$(jq -r .fonte "backend/vendor/$dir/BUILD.json")
+            atual=$(git rev-parse "HEAD:$fork")
+            if [ "$gravado" = "$atual" ]; then
+              echo "ok    $dir  ${atual:0:7}"
+            else
+              echo "FALHA $dir: BUILD.json diz ${gravado:0:7}, mas $fork está em ${atual:0:7}"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      # Só em push para main: num PR o vendor é montado e testado, mas não commitado — quem decide
+      # o que entra na branch é o merge.
+      - name: Commitar, se mudou
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- backend/vendor/; then
+            echo "o vendor commitado já reflete este build; nada a fazer."
+            exit 0
+          fi
+          git config user.name  "vssh-ci"
+          git config user.email "vssh-ci@users.noreply.github.com"
+          git add backend/vendor/
+          git commit -q -m "Remonta o motor a partir de ${GITHUB_SHA:0:7}" \
+            -m "$(git diff --cached --stat -- backend/vendor/ | tail -1)"
+          git push
+          echo "vendor remontado e commitado."
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: vendor-do-run
+          path: backend/vendor/
+          if-no-files-found: error
+
+  # ── 3. Testar o que vai ser publicado ───────────────────────────────────────────────────────
+  smoke:
+    name: Smoke
+    needs: vendor
+    uses: ./.github/workflows/smoke.yml
+    with:
+      vendor_artifact: vendor-do-run
+
+  # ── 4. Publicar ─────────────────────────────────────────────────────────────────────────────
+  #
+  # As três etapas do `colabhd/vssh-app-toolkit/.github/workflows/_publish-app-reusable.yml@v4`,
+  # inlineadas — não por gosto, mas porque aquele workflow faz `actions/checkout` limpo em runner
+  # separado e não tem input para injetar o vendor deste run. `tools_ref: v4` continua valendo: a
+  # lógica de verdade (schema, gate de libs, empacotamento) segue vindo pinada do toolkit; o que
+  # está aqui é só a orquestração.
+  publish:
+    name: Publicar no repositório
+    needs: smoke
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do app
+        uses: actions/checkout@v5
+        with:
+          path: app
+
+      - name: Checkout das ferramentas
+        uses: actions/checkout@v5
+        with:
+          repository: colabhd/vssh-app-toolkit
+          ref: v4
+          # `schema` e `package.json` junto de `scripts`: sem o primeiro o `vssh-app-publish`
+          # degrada para as checagens mínimas em vez de recusar a publicação, e sem o segundo ele
+          # pula a conferência de idade das libs vendorizadas.
+          sparse-checkout: |
+            scripts
+            schema
+            package.json
+          path: _tools
+
+      # O motor deste run, por cima do checkout. O commit do job `vendor` já pôs isto em `main`,
+      # mas o checkout acima é do SHA que disparou o run — que é anterior àquele commit. Baixar o
+      # artefato torna o pacote independente dessa corrida.
+      - uses: actions/download-artifact@v6
+        with:
+          name: vendor-do-run
+          path: app/backend/vendor/
+
+      - name: Publicar
+        env:
+          VSSH_REPO_API: ${{ vars.VSSH_REPO_API || 'https://vssh-repo.colabh.org' }}
+          VSSH_REPO_PUBLISH_TOKEN: ${{ secrets.VSSH_REPO_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `add -f` porque `backend/vendor/` pode estar gitignorado localmente algum dia; o
+          # `git add -A` que o script faz logo depois só ADICIONA, nunca desestagia, então isto
+          # sobrevive. E a asserção existe para que "o motor não entrou no pacote" seja um erro
+          # aqui, e não um 503 na máquina de quem instalou.
+          git -C app add -f backend/vendor
+          git -C app diff --cached --name-only | grep -q '^backend/vendor/scramjet/dist/' \
+            || { echo "o motor não está no índice do pacote"; exit 1; }
+          bash _tools/scripts/vssh-app-publish "app/." --version "4.1.${{ github.run_number }}"
