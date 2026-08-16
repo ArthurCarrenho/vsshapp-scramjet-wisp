@@ -314,8 +314,26 @@ jobs:
           echo "delta:        $((b - a)) bytes"
           if cmp -s "$VELHO" "$NOVO"; then
             echo "idêntico — o CA bundle não mudou desde a última vendorização"
+            exit 0
+          fi
+          # O sinal que DISCRIMINA é a contagem de linhas divergentes, não o número de bytes — e
+          # isto é calibração medida, não estimativa. O bundle tem 1.531 linhas, e o módulo do
+          # emscripten (com o `.wasm` em base64, onde o CA bundle vive) é UMA delas, a linha 12.
+          #
+          # O `diff` cospe DUAS linhas por linha modificada (um `<` e um `>`), então o corte é 2:
+          #
+          #   ≤2 → uma linha modificada, a do base64 do wasm. É o CA flutuando; foi o que deu com
+          #        3.1.6: 1.948 bytes de diferença, e as outras 1.530 linhas idênticas.
+          #   >2 → o código de cola JS mudou, e aí é toolchain ou fonte. Com 3.1.72 deu OITO
+          #        (quatro linhas modificadas), e uma delas desfazia o patch do wsproxy.
+          #
+          # Por bytes essa distinção não aparece: 36 KB e 2 KB são "diferente" do mesmo jeito.
+          n=$(diff <(cat "$VELHO") <(cat "$NOVO") | grep -c '^[<>]' || true)
+          echo "linhas divergentes: $n (de $(wc -l < "$VELHO"))"
+          if [ "$n" -le 2 ]; then
+            echo "::notice::o blob difere em $((b - a)) bytes, numa linha só — a do base64 do wasm. É o CA bundle, que flutua de propósito."
           else
-            echo "::notice::o blob difere do fonte reconstruído ($((b - a)) bytes). Pode ser só o CA bundle, que flutua de propósito. Diferença grande, ou sem o libcurl.js ter mudado, merece olhar."
+            echo "::warning::o blob difere em $n linhas, e não só na do wasm. Isso não é o CA bundle: é o código de cola JS mudando, o que aponta para toolchain ou fonte. Baixe o artefato e compare linha a linha antes de re-vendorizar."
           fi
 
       - uses: actions/upload-artifact@v6
