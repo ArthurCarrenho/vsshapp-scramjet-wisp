@@ -153,18 +153,41 @@ jobs:
       # `bootstrap` e `create-proxy-app` NÃO são empacotados. O CI antigo subia artefato dos dois, e
       # `backend/server.js` serve quatro pacotes — nenhum deles é esses.
 
-      # Monta `motor/` e **confere o contrato com o backend**: os arquivos que `server.js` serve
-      # existem e não estão vazios. O script recusa montar se faltar algum — ver o cabeçalho dele
-      # para o porquê de a conferência morar ali e não num job próprio.
+      # Monta `backend/vendor/` e **confere o contrato com o backend**: os arquivos que `server.js`
+      # serve existem e não estão vazios. O script recusa montar se faltar algum — ver o cabeçalho
+      # dele para o porquê de a conferência morar ali e não num job próprio.
       - name: Montar os pacotes, e conferir o contrato
         run: bash ../../scripts/montar-motor.sh scramjet
+
+      # O vendor é VERSIONADO, então este job não fecha o ciclo sozinho: ele constrói e confere, e
+      # quem commita é uma pessoa. Este passo existe para que ela saiba o que fazer sem ter que
+      # deduzir — e o gate que REPROVA está no smoke ("O motor commitado corresponde às fontes"),
+      # que compara o `fonte` do BUILD.json com o hash da árvore do fork.
+      #
+      # Aqui não se reprova por diferença de bytes de propósito: sourcemaps carregam caminhos e
+      # nenhum destes builds é reprodutível byte a byte, então um `git diff` daria vermelho por
+      # ruído. O que este passo mede é se algo mudou o bastante para valer uma remontagem.
+      - name: O vendor commitado precisa ser atualizado?
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if git diff --quiet -- backend/vendor/; then
+            echo "o vendor commitado já reflete este build."
+          else
+            echo "::notice::As fontes do scramjet mudaram e o motor foi remontado. Baixe o artefato 'motor-scramjet', substitua backend/vendor/{scramjet,controller,utils}/ e commite — ou rode 'scripts/montar-motor.sh scramjet' localmente."
+            git diff --stat -- backend/vendor/ | tail -20
+          fi
 
       - uses: actions/upload-artifact@v6
         with:
           # ⚠ caminho a partir da RAIZ do workspace: `upload-artifact` ignora o
-          # `defaults.run.working-directory`.
+          # `defaults.run.working-directory`. E só os três diretórios DESTE fork: o `vendor/`
+          # inteiro traria junto o libcurl-transport que este job não reconstruiu, e quem baixasse
+          # o artefato sobrescreveria com uma cópia que veio de outro run.
           name: motor-scramjet
-          path: engines/scramjet/motor/
+          path: |
+            backend/vendor/scramjet/
+            backend/vendor/controller/
+            backend/vendor/utils/
           if-no-files-found: error
 
   # ── libcurl-transport ──────────────────────────────────────────────────────────────────────
@@ -194,10 +217,20 @@ jobs:
       - name: Montar o pacote, e conferir o contrato
         run: bash ../../scripts/montar-motor.sh transport
 
+      - name: O vendor commitado precisa ser atualizado?
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if git diff --quiet -- backend/vendor/; then
+            echo "o vendor commitado já reflete este build."
+          else
+            echo "::notice::As fontes do libcurl-transport mudaram e o motor foi remontado. Baixe o artefato 'motor-transport', substitua backend/vendor/libcurl-transport/ e commite — ou rode 'scripts/montar-motor.sh transport' localmente."
+            git diff --stat -- backend/vendor/ | tail -20
+          fi
+
       - uses: actions/upload-artifact@v6
         with:
           name: motor-transport
-          path: engines/libcurl-transport/motor/
+          path: backend/vendor/libcurl-transport/
           if-no-files-found: error
 
       # Nenhum `pnpm pack` de `proxy-bootstrap` nem de `create-proxy-app` em lugar nenhum deste

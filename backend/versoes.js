@@ -74,6 +74,63 @@ export function conferirVersoes({ raiz, lerJson = lerJsonDoDisco } = {}) {
   };
 }
 
+/**
+ * O mesmo para o MOTOR, que não passa mais pelo npm.
+ *
+ * Os quatro bundles que este backend serve deixaram de ser dependência declarada: são construídos
+ * de `engines/` e versionados em `backend/vendor/`. A pergunta "o que exatamente está em disco?"
+ * continua valendo — só mudou onde a resposta mora. Cada pacote traz um `BUILD.json` com a versão,
+ * o commit que o construiu e, o que de fato identifica o conteúdo, o hash da ÁRVORE do fork.
+ *
+ * E o `fonte` responde de graça uma pergunta que antes exigia um passo próprio no CI: os três
+ * pacotes do scramjet têm que ter vindo do MESMO build. Quando a entrega era por release, um deles
+ * podia ficar para trás e o sintoma era isolamento entre origens quebrando em produção. Vindos da
+ * mesma árvore, `fonte` diferente dentro de um fork é a prova de que alguém montou pela metade.
+ *
+ * @param {object} opcoes
+ * @param {string}  opcoes.raiz     diretório do backend (o que contém `vendor/`)
+ * @param {string[]} [opcoes.esperados] diretórios que devem existir em `vendor/`
+ * @param {Function} [opcoes.lerJson] injeção para a bancada
+ * @returns {{pacotes: Array, ausentes: string[], desalinhados: Array}}
+ */
+export function conferirMotor({ raiz, esperados = ['scramjet', 'controller', 'utils', 'libcurl-transport'], lerJson = lerJsonDoDisco } = {}) {
+  const pacotes = [];
+  const ausentes = [];
+
+  for (const dir of esperados) {
+    const build = lerJson(path.join(raiz, 'vendor', dir, 'BUILD.json'));
+    if (!build) { ausentes.push(dir); continue; }
+    pacotes.push({
+      dir,
+      versao: build.versao ?? null,
+      origem: build.origem ?? null,
+      fork: build.fork ?? null,
+      fonte: build.fonte ?? null,
+    });
+  }
+
+  // Um fork com mais de um `fonte` entre seus pacotes: metade do motor é de outro build.
+  const porFork = new Map();
+  for (const p of pacotes) {
+    if (!p.fork || !p.fonte) continue;
+    if (!porFork.has(p.fork)) porFork.set(p.fork, new Set());
+    porFork.get(p.fork).add(p.fonte);
+  }
+  const desalinhados = [...porFork.entries()]
+    .filter(([, fontes]) => fontes.size > 1)
+    .map(([fork, fontes]) => ({ fork, fontes: [...fontes] }));
+
+  return { pacotes, ausentes, desalinhados };
+}
+
+/** Uma linha por pacote do motor — `motor scramjet 2.0.67-alpha.14 (engines/scramjet 1988f8b)`. */
+export function resumirMotor(relatorio) {
+  const linhas = relatorio.pacotes.map((p) =>
+    `motor ${p.dir} ${p.versao ?? '?'} (${p.fork ?? '?'} ${p.fonte ? p.fonte.slice(0, 7) : '?'})`);
+  for (const dir of relatorio.ausentes) linhas.push(`motor ${dir} AUSENTE`);
+  return linhas;
+}
+
 /** Uma linha por pacote, para o stdout — `nome dd.dd.dd` ou `nome dd.dd.dd (lockfile pede xx.xx.xx)`. */
 export function resumirVersoes(relatorio) {
   return relatorio.pacotes.map((p) => {
