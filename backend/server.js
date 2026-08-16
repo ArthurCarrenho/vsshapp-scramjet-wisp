@@ -2,21 +2,21 @@
 // próprio. Serve dois papéis pro motor Scramjet consumido por ScramjetEngine.js (custom_xprahtml5):
 //   1. servidor wisp (WebSocket) — o transporte que o BareCompatibleClient/LibcurlClient do lado
 //      cliente usa pra abrir conexões TCP reais através deste processo;
-//   2. estático dos bundles JS do Scramjet/scramjet-controller/libcurl-transport — servidos
-//      direto de node_modules/, nunca copiados/commitados em custom_xprahtml5/ (ver plano).
+//   2. estático dos bundles JS do Scramjet/scramjet-controller/libcurl-transport — servidos de
+//      `backend/vendor/<pacote>/dist/`, nunca copiados/commitados em custom_xprahtml5/ (ver plano).
 //
 // Roda como qualquer outro vssh-app: bind 127.0.0.1:$VSSH_APP_PORT, iniciado sob demanda por
 // AppLauncher.ensureRunning('scramjet-wisp') (não por AppLauncher.open() — não tem janela).
 
 import { createServer } from 'node:http';
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { server as wisp, logging } from '@mercuryworkshop/wisp-js/server';
 import { aplicarPolitica } from './rede.js';
-import { conferirVersoes, resumirVersoes } from './versoes.js';
+import { conferirVersoes, resumirVersoes, conferirMotor, resumirMotor } from './versoes.js';
 
 const require = createRequire(import.meta.url);
 const RAIZ = path.dirname(fileURLToPath(import.meta.url));
@@ -82,10 +82,26 @@ const TOKEN = process.env.VSSH_APP_TOKEN || null;
 // (VSSH_APP_SOCKET e VSSH_APP_PORT), e exigir a porta recusaria um motor perfeitamente configurado
 // em socket. Quem confere é o `escutar()`, lá embaixo, e ele nomeia as duas quando não vem nenhuma.
 
-// dist/ de cada pacote, resolvido via require.resolve (funciona mesmo sendo ESM-only — só
-// localiza o path pelo exports map, nunca executa/`require()` o módulo de fato).
-function distDirOf(pkgName) {
-  return path.dirname(require.resolve(pkgName));
+// dist/ de cada pacote do motor, montado por caminho.
+//
+// Era `path.dirname(require.resolve(pkgName))`, com os quatro pacotes declarados como dependência
+// npm. O comentário de então já dizia a parte mais importante: o resolve "só localiza o path pelo
+// exports map, nunca executa o módulo". Ou seja, **nada em `backend/` importa esses pacotes** —
+// pagávamos resolução, integrity, sincronia de lockfile, `--omit=dev` e hoisting para obter um
+// nome de diretório.
+//
+// Agora o motor é construído neste repositório (`engines/` → `scripts/montar-motor.sh`) e viaja
+// versionado em `backend/vendor/`. O que isso conserta, além de encurtar o caminho:
+//
+//   - a instalação para de baixar 14 MB de tarballs do GitHub a cada `npm ci` — e ele roda em TODA
+//     instalação, porque o instalador passa `VSSH_APP_REBUILD=1`, que é o bypass do gate;
+//   - a integridade sobe de nível: o instalador já confere o sha256 do tarball inteiro contra o que
+//     o Worker declara. Uma checagem no lugar de quatro, cobrindo mais;
+//   - `vssh-app-install scramjet-wisp@4.0.N` passa a reverter app e motor JUNTOS;
+//   - o `.installed-hash` do instalador exclui `*/node_modules/*`. Com o motor morando lá dentro,
+//     atualizá-lo NÃO mudava o hash e o backend não reiniciava sozinho. Em `backend/vendor/`, muda.
+function motorDir(dir) {
+  return path.join(RAIZ, 'vendor', dir, 'dist');
 }
 
 // Resolver NÃO pode ser fatal, e a razão é operacional, não estética. Antes, um require.resolve
@@ -98,30 +114,37 @@ function distDirOf(pkgName) {
 // `essential: false` no /utils/ alinha o servidor ao consumidor: ScramjetEngine.js:163 já carrega o
 // scramjet-utils dentro de try/catch e degrada sem cache de página. O servidor era mais estrito que
 // quem o consome — matava o motor inteiro por um bundle opcional.
+//
+// `pkg` continua sendo o nome do pacote e serve só para NOMEAR o problema em log e em 503 — é o
+// que quem opera reconhece. Quem localiza os arquivos é `dir`, o diretório em `vendor/`.
 const ROUTE_SPECS = [
-  { prefix: '/scram/',      pkg: '@mercuryworkshop/scramjet',           essential: true  },
-  { prefix: '/controller/', pkg: '@mercuryworkshop/scramjet-controller', essential: true  },
-  { prefix: '/libcurl/',    pkg: '@mercuryworkshop/libcurl-transport',   essential: true  },
+  { prefix: '/scram/',      dir: 'scramjet',          pkg: '@mercuryworkshop/scramjet',            essential: true  },
+  { prefix: '/controller/', dir: 'controller',        pkg: '@mercuryworkshop/scramjet-controller', essential: true  },
+  { prefix: '/libcurl/',    dir: 'libcurl-transport', pkg: '@mercuryworkshop/libcurl-transport',   essential: true  },
   // scramjet-utils: bundle IIFE (dist/scramjet-utils.js) do HttpCachePlugin — serve o cache HTTP
   // (CacheStorage) do lado página, carregado sob demanda por ScramjetEngine.js. Mesmo `no-store`
   // dos demais assets do motor (frescor via importScripts/reload; não confundir com o cache de
   // páginas que o próprio plugin gerencia em caches.open('scramjet-http-cache-v2')).
-  { prefix: '/utils/',      pkg: '@mercuryworkshop/scramjet-utils',      essential: false },
+  { prefix: '/utils/',      dir: 'utils',             pkg: '@mercuryworkshop/scramjet-utils',      essential: false },
 ];
 
 const STATIC_ROUTES = [];
 const MISSING = [];
 
+// Some o try/catch que existia em volta do `require.resolve`: um caminho ou existe ou não, e
+// `existsSync` responde isso sem lançar. O comportamento observável é o mesmo — porta aberta, 503
+// nomeando o pacote —, que é o que importa e está coberto por teste no smoke.
 for (const spec of ROUTE_SPECS) {
-  try {
-    STATIC_ROUTES.push({ prefix: spec.prefix, root: distDirOf(spec.pkg) });
-  } catch (err) {
-    MISSING.push({ pkg: spec.pkg, prefix: spec.prefix, essential: spec.essential, reason: err.code || String(err) });
-    log('package-unresolved', { package: spec.pkg, route: spec.prefix, essential: spec.essential, code: err.code || null });
+  const root = motorDir(spec.dir);
+  if (existsSync(root)) {
+    STATIC_ROUTES.push({ prefix: spec.prefix, root });
+  } else {
+    MISSING.push({ pkg: spec.pkg, prefix: spec.prefix, essential: spec.essential, reason: 'ENOENT' });
+    log('package-unresolved', { package: spec.pkg, route: spec.prefix, essential: spec.essential, code: 'ENOENT' });
     console.error(
-      `[scramjet-wisp] pacote ${spec.essential ? 'ESSENCIAL' : 'opcional'} não resolvido: ` +
-      `${spec.pkg} (${err.code || err.message}) — rota ${spec.prefix} indisponível. ` +
-      `Rode o installCommand do manifesto (npm ci --omit=dev em backend/).`
+      `[scramjet-wisp] pacote ${spec.essential ? 'ESSENCIAL' : 'opcional'} ausente: ` +
+      `${spec.pkg} (esperado em ${root}) — rota ${spec.prefix} indisponível. ` +
+      `O motor viaja no tarball do app: reinstale com vssh-app-install scramjet-wisp --force.`
     );
   }
 }
@@ -155,7 +178,10 @@ async function tryServeStatic(req, res) {
         route: missing.prefix,
         essential: missing.essential,
         reason: missing.reason,
-        hint: 'rode o installCommand do manifesto: cd backend && npm ci --omit=dev',
+        // NÃO é mais `npm ci`: o motor deixou de ser dependência npm e viaja versionado no tarball
+        // do app. Mandar rodar o installCommand aqui levaria quem opera a repetir um comando que
+        // não pode consertar isto — o que falta é o pacote inteiro, e ele vem na reinstalação.
+        hint: 'reinstale o app: sudo vssh-app-install scramjet-wisp --force',
       }));
       return true;
     }
@@ -206,7 +232,7 @@ const server = createServer((req, res) => {
         status: 'degraded',
         error: 'pacotes essenciais do motor não resolvidos',
         missing: MISSING.map(m => ({ package: m.pkg, route: m.prefix, essential: m.essential, reason: m.reason })),
-        hint: 'rode o installCommand do manifesto: cd backend && npm ci --omit=dev',
+        hint: 'reinstale o app: sudo vssh-app-install scramjet-wisp --force',
       }));
       return;
     }
@@ -249,9 +275,19 @@ try {
   log('versoes-falhou', { message: err.message });
 }
 
+// O motor não passa mais pelo npm, então não aparece no relatório acima. Ele responde à mesma
+// pergunta, lendo os `BUILD.json` de `vendor/` — mesma regra: nunca fatal.
+let MOTOR = { pacotes: [], ausentes: [], desalinhados: [] };
+try {
+  MOTOR = conferirMotor({ raiz: RAIZ, esperados: ROUTE_SPECS.map(s => s.dir) });
+} catch (err) {
+  log('motor-falhou', { message: err.message });
+}
+
 escutar(server).then(({ transporte, endereco }) => {
   console.log(`[scramjet-wisp] listening on ${endereco} (${transporte})`);
   for (const linha of resumirVersoes(VERSOES)) console.log(`[scramjet-wisp]   ${linha}`);
+  for (const linha of resumirMotor(MOTOR)) console.log(`[scramjet-wisp]   ${linha}`);
   log('startup', {
     transporte,
     endereco,
@@ -263,6 +299,8 @@ escutar(server).then(({ transporte, endereco }) => {
     // Objeto plano nome->versão: é o formato que se quer diffar entre dois boots.
     versoes: Object.fromEntries(VERSOES.pacotes.map(p => [p.nome, p.instalado])),
     versoesDivergentes: VERSOES.divergentes.map(p => ({ pacote: p.nome, instalado: p.instalado, lockfile: p.declarado })),
+    motor: Object.fromEntries(MOTOR.pacotes.map(p => [p.dir, p.versao])),
+    motorFonte: Object.fromEntries(MOTOR.pacotes.map(p => [p.dir, p.fonte])),
   });
 
   // Divergência não impede navegar, então não vira 503 — mas vai para stderr, em uma linha que
@@ -278,6 +316,16 @@ escutar(server).then(({ transporte, endereco }) => {
   }
   if (VERSOES.lockAusente) {
     console.error('[scramjet-wisp] package-lock.json não encontrado — as versões acima não puderam ser conferidas.');
+  }
+  // Pacotes do mesmo fork com `fonte` diferente: o motor foi montado pela metade. Antes isso só
+  // seria visto por um passo do CI comparando strings de versão dentro dos bundles; agora o próprio
+  // boot acusa, que é onde a informação serve a quem está diante do incidente.
+  if (MOTOR.desalinhados.length) {
+    console.error(
+      `[scramjet-wisp] ATENÇÃO: motor montado de árvores diferentes — ` +
+      MOTOR.desalinhados.map(d => `${d.fork}: ${d.fontes.map(f => f.slice(0, 7)).join(' != ')}`).join('; ') +
+      `. Os pacotes de um mesmo fork têm que sair do MESMO build.`
+    );
   }
   if (MISSING_ESSENTIAL.length) {
     console.error(

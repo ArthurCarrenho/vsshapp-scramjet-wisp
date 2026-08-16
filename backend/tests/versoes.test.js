@@ -156,3 +156,80 @@ test('o backend instalado nesta máquina está alinhado com o próprio lockfile'
     [],
   );
 });
+
+// ─── O motor, que não passa mais pelo npm ────────────────────────────────────────────────
+//
+// Mesma cegueira, outro caminho: os quatro bundles que o backend serve saíram do `package.json` e
+// passaram a ser construídos de `engines/` e versionados em `backend/vendor/`. A pergunta continua
+// sendo "o que exatamente está em disco?", e quem responde agora é o `BUILD.json` de cada pacote.
+
+import { conferirMotor, resumirMotor } from '../versoes.js';
+
+/** `lerJson` de mentira para `vendor/<dir>/BUILD.json`. */
+function motor(tabela) {
+  return (caminho) => {
+    const rel = path.relative(RAIZ, caminho).split(path.sep).join('/');
+    const m = rel.match(/^vendor\/(.+)\/BUILD\.json$/);
+    return m && tabela[m[1]] ? tabela[m[1]] : null;
+  };
+}
+
+const OK = {
+  scramjet:   { pacote: 'scramjet',   versao: '2.0.67-alpha.14', fork: 'engines/scramjet', fonte: 'aaaa111' },
+  controller: { pacote: 'controller', versao: '0.0.25',          fork: 'engines/scramjet', fonte: 'aaaa111' },
+};
+
+test('lê versão e procedência de cada pacote do motor', () => {
+  const r = conferirMotor({ raiz: RAIZ, esperados: ['scramjet', 'controller'], lerJson: motor(OK) });
+  assert.deepEqual(r.ausentes, []);
+  assert.deepEqual(r.desalinhados, []);
+  assert.deepEqual(r.pacotes.map((p) => `${p.dir} ${p.versao}`), [
+    'scramjet 2.0.67-alpha.14',
+    'controller 0.0.25',
+  ]);
+});
+
+test('pacote sem BUILD.json é nomeado como ausente, e não derruba o resto', () => {
+  const r = conferirMotor({ raiz: RAIZ, esperados: ['scramjet', 'utils'], lerJson: motor(OK) });
+  assert.deepEqual(r.ausentes, ['utils']);
+  assert.equal(r.pacotes.length, 1);
+  assert.ok(resumirMotor(r).includes('motor utils AUSENTE'));
+});
+
+// Este é o teste que substitui um passo inteiro do CI. Quando a entrega era por release, um dos
+// três pacotes do scramjet podia ficar para trás, e o sintoma aparecia como isolamento entre
+// origens quebrando em produção. Saindo todos da mesma árvore, `fonte` diferente dentro de um fork
+// é a prova de que alguém montou o motor pela metade.
+test('pacotes do mesmo fork com fonte diferente acusam motor montado pela metade', () => {
+  const meio = { ...OK, controller: { ...OK.controller, fonte: 'bbbb222' } };
+  const r = conferirMotor({ raiz: RAIZ, esperados: ['scramjet', 'controller'], lerJson: motor(meio) });
+  assert.equal(r.desalinhados.length, 1);
+  assert.equal(r.desalinhados[0].fork, 'engines/scramjet');
+  assert.deepEqual(r.desalinhados[0].fontes.sort(), ['aaaa111', 'bbbb222']);
+});
+
+test('forks diferentes têm fontes diferentes por definição, e isso NÃO é desalinhamento', () => {
+  const dois = { ...OK, transporte: { pacote: 'libcurl-transport', versao: '2.0.6', fork: 'engines/libcurl-transport', fonte: 'cccc333' } };
+  const r = conferirMotor({ raiz: RAIZ, esperados: ['scramjet', 'controller', 'transporte'], lerJson: motor(dois) });
+  assert.deepEqual(r.desalinhados, []);
+});
+
+test('vendor inteiro ilegível não lança — devolve tudo como ausente', () => {
+  const r = conferirMotor({ raiz: RAIZ, esperados: ['scramjet'], lerJson: () => null });
+  assert.deepEqual(r.pacotes, []);
+  assert.deepEqual(r.ausentes, ['scramjet']);
+});
+
+// ─── O vendor de verdade deste repo ──────────────────────────────────────────────────────
+
+test('o motor versionado neste repo está completo e alinhado', () => {
+  const raiz = path.join(import.meta.dirname, '..');
+  const r = conferirMotor({ raiz });
+
+  assert.deepEqual(r.ausentes, [], 'falta pacote em backend/vendor/ — o servidor daria 503 na rota');
+  assert.deepEqual(r.desalinhados, [], 'motor montado de árvores diferentes');
+  for (const p of r.pacotes) {
+    assert.ok(p.versao, `${p.dir} sem versão no BUILD.json`);
+    assert.ok(p.fonte, `${p.dir} sem fonte no BUILD.json`);
+  }
+});

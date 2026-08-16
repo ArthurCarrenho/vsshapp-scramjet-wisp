@@ -60,13 +60,27 @@ jobs:
           echo "--- conteúdo ($(wc -l < /tmp/conteudo.txt) entradas, $(stat -c%s /tmp/app.tar.gz) bytes) ---"
           cat /tmp/conteudo.txt
 
-      # ⚠ Quando o motor construído passar a viajar no pacote, `backend/vendor/<pkg>/dist/` entra
-      # NESTA lista. É o único lugar que pega o acidente do `.gitattributes` sem âncora — medido:
-      # com `vendor/ export-ignore` em vez de `/vendor/`, o `backend/vendor/` sai do tarball com
-      # zero entradas, e o app instala sem motor sem nada ficar vermelho.
+      # O motor construído JÁ viaja no pacote, e por isso os sete arquivos dele estão nesta lista.
+      # É o único lugar que pega o acidente do `.gitattributes` sem âncora — medido: com
+      # `vendor/ export-ignore` em vez de `/vendor/`, o `backend/vendor/` sai do tarball com zero
+      # entradas, e o app instala sem motor sem nada ficar vermelho.
       - name: O que precisa estar, está
         run: |
           erro=0
+          # Os sete arquivos que `backend/server.js` serve. A mesma lista vive em
+          # `scripts/montar-motor.sh`, que recusa MONTAR sem eles; aqui se confere o outro lado —
+          # que eles chegaram ao PACOTE. São perguntas diferentes: montar certo e empacotar certo
+          # falham por motivos diferentes, e o segundo é o que o servidor do usuário sente.
+          for arq in scramjet/dist/scramjet.js scramjet/dist/scramjet.wasm \
+                     controller/dist/controller.api.js controller/dist/controller.inject.js \
+                     controller/dist/controller.sw.js utils/dist/scramjet-utils.js \
+                     libcurl-transport/dist/index.js; do
+            grep -qx "backend/vendor/$arq" /tmp/conteudo.txt || { echo "FALTA no tarball: backend/vendor/$arq"; erro=1; }
+          done
+          # E o BUILD.json de cada um: é o que o boot lê para dizer qual motor está rodando.
+          for dir in scramjet controller utils libcurl-transport; do
+            grep -qx "backend/vendor/$dir/BUILD.json" /tmp/conteudo.txt || { echo "FALTA no tarball: backend/vendor/$dir/BUILD.json"; erro=1; }
+          done
           # O manifesto tem que cair na RAIZ do tarball: é onde o instalador o procura.
           # LICENSE e NOTICE viajam de propósito: o motor é AGPL, e a §13 dá a quem usa o serviço
           # o direito de saber o que está rodando e onde está o fonte. Um `export-ignore` distraído
@@ -107,13 +121,16 @@ jobs:
           # quer pegar é ordem de grandeza — pacote vazio (algo foi excluído demais) ou pacote
           # inchado (fonte ou dump vazou para dentro).
           #
-          # Hoje são ~34 KB comprimidos (123 KB de tar antes do gzip — o `vssh-app-publish` gzipa,
-          # então é o número comprimido que vale). O teto sobe DE PROPÓSITO no dia em que o motor
-          # construído passar a viajar no pacote; até lá, 8 MB é folga suficiente para não
-          # incomodar e apertada o bastante para pegar um vazamento de verdade.
+          # Com o motor dentro são ~3,74 MB comprimidos (medido: 3.919.979 bytes em 60 entradas).
+          #
+          # ⚠ O PISO subiu de 20 KB para 2 MB, e é a metade que importa agora. Sem o motor o pacote
+          # volta a ter ~55 KB — e 55 KB passava folgado no piso antigo. Ou seja: depois do cutover,
+          # um piso de 20 KB deixaria passar exatamente o acidente que este job existe para pegar,
+          # o app instalando sem motor. O piso tem que ficar ACIMA do tamanho do pacote sem motor,
+          # não acima de zero.
           BYTES=$(stat -c%s /tmp/app.tar.gz)
-          MIN=20480      # 20 KB
-          MAX=8388608    # 8 MB
+          MIN=2097152    # 2 MB — abaixo disto o motor não está no pacote
+          MAX=8388608    # 8 MB — ~2x o tamanho atual, folga para o motor crescer
           echo "tarball: ${BYTES} bytes (faixa aceita: ${MIN}..${MAX})"
           [ "$BYTES" -ge "$MIN" ] || { echo "pequeno demais — algo essencial saiu do pacote"; exit 1; }
           [ "$BYTES" -le "$MAX" ] || { echo "grande demais — algo vazou para dentro do pacote"; exit 1; }
@@ -200,24 +217,77 @@ jobs:
       # NO CONSTRUTOR e LANÇA — e o `new Controller(...)` do ScramjetEngine.js não está sob nenhum
       # try/catch que degrade. Ou seja: trio desalinhado não é "sem cache", é motor nenhum.
       #
-      # E o desalinho é fácil de produzir sem perceber, porque os tarballs moram na tag mutável
-      # `latest` e o nome do arquivo carrega a versão. Subir só o core deixa as URLs de controller e
-      # utils IDÊNTICAS — e aí o npm do consumidor reusa o tarball antigo pelo integrity do
-      # lockfile, enquanto o CI do fork já republicou aqueles dois esperando a versão nova.
-      # Aconteceu: controller 0.0.16 e utils 0.0.4 ficaram esperando alpha.4 depois do bump para
-      # alpha.5. A regra prática é subir a versão dos três a cada release.
+      # O motor é construído de `engines/` e VERSIONADO em `backend/vendor/`. Duas coisas versionadas
+      # que precisam andar juntas podem se separar, e a forma de separá-las é banal: mexer no fonte e
+      # esquecer de remontar. O sintoma seria produção rodando um motor de outra árvore — a mesma
+      # divergência invisível que fez o alpha.4 durar seis releases, só que por outro caminho.
       #
-      # A checagem é decisiva sem ser frouxa: um bundle antigo NÃO PODE conter uma string de versão
-      # que ainda não existia quando ele foi construído.
+      # A conferência é por HASH DE ÁRVORE e não por comparação de bytes, e isso é escolha: refazer o
+      # build aqui para diffar o resultado exigiria que ele fosse reprodutível byte a byte, o que
+      # nenhum dos dois é (sourcemaps carregam caminhos, o CA bundle do libcurl flutua de propósito).
+      # Um job assim ficaria vermelho por ruído, e vermelho por ruído é ignorado. `fonte` responde a
+      # pergunta certa — "este artefato saiu DESTA árvore?" — e responde em milissegundos.
+      #
+      # Roda no smoke, que é o gate do publish: com o vendor atrasado, o push não publica.
+      - name: O motor commitado corresponde às fontes de engines/
+        run: |
+          fail=0
+          for dir in scramjet controller utils libcurl-transport; do
+            fork=$(jq -r .fork "backend/vendor/$dir/BUILD.json")
+            gravado=$(jq -r .fonte "backend/vendor/$dir/BUILD.json")
+            atual=$(git rev-parse "HEAD:$fork")
+            if [ "$gravado" = "$atual" ]; then
+              echo "ok    $dir  $fork  ${atual:0:7}"
+            else
+              echo "FALHA $dir: BUILD.json diz ${gravado:0:7}, mas $fork está em ${atual:0:7}"
+              echo "      O fonte mudou e o motor não foi remontado. Rode, de dentro do fork:"
+              echo "        scripts/montar-motor.sh <scramjet|transport>"
+              echo "      e commite backend/vendor/."
+              fail=1
+            fi
+          done
+          exit $fail
+
+      # ⚠ A ORIGEM do desalinho mudou, e por isso a checagem ganhou uma primeira metade.
+      #
+      # Antes, o desalinho era fácil de produzir sem perceber porque os tarballs moravam na tag
+      # mutável `latest` e o nome do arquivo carregava a versão: subir só o core deixava as URLs de
+      # controller e utils IDÊNTICAS, o npm do consumidor reusava o tarball antigo pelo integrity do
+      # lockfile, e o CI do fork já havia republicado aqueles dois esperando a versão nova.
+      # Aconteceu: controller 0.0.16 e utils 0.0.4 ficaram esperando alpha.4 depois do bump para
+      # alpha.5.
+      #
+      # Esse caminho morreu duas vezes: a `latest` foi congelada, e agora os três saem do MESMO
+      # build da MESMA árvore. Daí a checagem nova, que é a decisiva: cada `BUILD.json` carrega o
+      # hash da árvore do fork que o produziu, e três pacotes de `engines/scramjet` com `fonte`
+      # diferente significam motor montado pela metade. É a mesma conferência que o boot do backend
+      # faz (`conferirMotor`), aqui para reprovar antes de publicar.
+      #
+      # A checagem antiga FICA, e não por nostalgia: ela olha o conteúdo do bundle, não o metadado
+      # ao lado dele. Um `montar-motor.sh` que copiasse o `dist` errado com o `BUILD.json` certo
+      # passaria na primeira e cairia na segunda. Um bundle antigo NÃO PODE conter uma string de
+      # versão que ainda não existia quando ele foi construído.
       - name: O trio scramjet está alinhado
         run: |
           node --input-type=module -e '
             import { readFileSync, readdirSync } from "node:fs";
             import { join } from "node:path";
-            const NM = "backend/node_modules/@mercuryworkshop";
+            const NM = "backend/vendor";
             const ver = (p) => JSON.parse(readFileSync(join(NM, p, "package.json"), "utf8")).version;
-            const core = ver("scramjet"), ctrl = ver("scramjet-controller"), utils = ver("scramjet-utils");
-            console.log(`instalados: core=${core} controller=${ctrl} utils=${utils}`);
+
+            const fonteDe = (p) => JSON.parse(readFileSync(join(NM, p, "BUILD.json"), "utf8")).fonte;
+            const fontes = ["scramjet", "controller", "utils"].map((p) => [p, fonteDe(p)]);
+            console.log("fontes: " + fontes.map(([p, f]) => `${p}=${String(f).slice(0, 7)}`).join(" "));
+            const distintas = new Set(fontes.map(([, f]) => f));
+            if (distintas.size !== 1) {
+              console.error(`FALHA: os três pacotes de engines/scramjet vieram de ${distintas.size} árvores diferentes.`);
+              console.error("Motor montado pela metade: rode scripts/montar-motor.sh scramjet e commite backend/vendor/.");
+              process.exit(1);
+            }
+            console.log("ok   os três saíram da mesma árvore");
+
+            const core = ver("scramjet"), ctrl = ver("controller"), utils = ver("utils");
+            console.log(`versões: core=${core} controller=${ctrl} utils=${utils}`);
             const bundles = (p) => {
               const d = join(NM, p, "dist");
               return readdirSync(d).filter((f) => f.endsWith(".js"))
@@ -229,11 +299,11 @@ jobs:
               console.log(`${ok ? "ok  " : "FALHA"} ${quem} traz a versão de ${dequem} (${versao})`);
               if (!ok) bad = 1;
             };
-            const bc = bundles("scramjet-controller"), bu = bundles("scramjet-utils");
+            const bc = bundles("controller"), bu = bundles("utils");
             exige("controller", bc, core,  "core");
             exige("utils",      bu, core,  "core");
             exige("utils",      bu, ctrl,  "controller");
-            if (bad) console.error("\nTrio desalinhado: o Controller vai LANÇAR no construtor e o motor não sobe. Suba a versão dos três no fork e atualize as três URLs aqui.");
+            if (bad) console.error("\nTrio desalinhado: o Controller vai LANÇAR no construtor e o motor não sobe. Reconstrua os três juntos (scripts/montar-motor.sh scramjet) e commite backend/vendor/.");
             process.exit(bad);
           '
 
@@ -294,38 +364,74 @@ jobs:
           done
           grep -q 'ATENÇÃO' server.log && { echo "FALHA: avisou divergência numa árvore alinhada"; fail=1; }
 
-          # 2. Árvore divergente: forjar uma versão em disco e exigir que o boot grite. Mexe só no
-          #    package.json do pacote instalado — não precisa de rede, e é exatamente a forma do
+          # 1b. O MOTOR também tem que estar nomeado. Ele saiu do `package.json` — é construído de
+          #     `engines/` e versionado em `backend/vendor/` —, então o laço acima não o alcança, e
+          #     sem esta conferência a metade mais importante do boot poderia emudecer sem ninguém ver.
+          for dir in scramjet controller utils libcurl-transport; do
+            v=$(jq -r .versao "backend/vendor/$dir/BUILD.json")
+            if grep -qF "motor $dir $v" server.log; then
+              echo "ok    motor $dir $v no log de boot"
+            else
+              echo "FALHA: o boot não nomeou o motor $dir $v"; fail=1
+            fi
+          done
+
+          # Sobe o backend com a árvore mexida e devolve tudo ao lugar. `$1` é o rótulo do log.
+          boot_com_arvore_torta() {
+            VSSH_APP_SOCKET="/tmp/scramjet-$1.sock" \
+              node "$(jq -r .backend.entrypoint vssh-app.json)" > "$1.log" 2>&1 &
+            pid=$!
+            for _ in $(seq 1 30); do
+              curl -sS -o /dev/null --unix-socket "/tmp/scramjet-$1.sock" "http://app/" 2>/dev/null && break
+              sleep 0.4
+            done
+            vivo=$(kill -0 $pid 2>/dev/null && echo sim || echo nao)
+            codigo=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "/tmp/scramjet-$1.sock" "http://app/" || echo 000)
+            kill $pid 2>/dev/null || true; sleep 1
+            echo "--- log do boot $1 ---"; cat "$1.log"
+            # Divergência não impede navegar: o motor tem que continuar de pé e o healthcheck 200. Um
+            # aviso que derruba o app seria pior que a cegueira que ele conserta.
+            [ "$vivo" = "sim" ]   || { echo "FALHA ($1): o processo morreu por causa de uma divergência"; fail=1; }
+            [ "$codigo" = "200" ] || { echo "FALHA ($1): healthcheck virou $codigo com árvore divergente"; fail=1; }
+          }
+
+          # 2. Dependência npm divergente: forjar uma versão em disco e exigir que o boot grite. Mexe
+          #    só no package.json do pacote instalado — não precisa de rede, e é exatamente a forma do
           #    incidente (disco atrasado em relação ao lockfile).
-          ALVO=backend/node_modules/@mercuryworkshop/scramjet
-          cp "$ALVO/package.json" /tmp/scramjet-pkg.orig
+          #
+          #    O alvo é o `wisp-js` porque o scramjet SAIU do npm; das duas dependências que restaram
+          #    é a que o motor não pode perder. O mecanismo exercitado é o mesmo de antes.
+          ALVO=backend/node_modules/@mercuryworkshop/wisp-js
+          cp "$ALVO/package.json" /tmp/wisp-pkg.orig
           node -e '
             const fs = require("fs"), p = process.argv[1] + "/package.json";
             const j = JSON.parse(fs.readFileSync(p, "utf8"));
             j.version = "0.0.0-forjada";
             fs.writeFileSync(p, JSON.stringify(j, null, 2));
           ' "$ALVO"
-
-          VSSH_APP_SOCKET=/tmp/scramjet-divergente.sock \
-            node "$(jq -r .backend.entrypoint vssh-app.json)" > divergente.log 2>&1 &
-          pid=$!
-          for _ in $(seq 1 30); do
-            curl -sS -o /dev/null --unix-socket /tmp/scramjet-divergente.sock "http://app/" 2>/dev/null && break
-            sleep 0.4
-          done
-          vivo=$(kill -0 $pid 2>/dev/null && echo sim || echo nao)
-          codigo=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket /tmp/scramjet-divergente.sock "http://app/" || echo 000)
-          kill $pid 2>/dev/null || true; sleep 1
-          cp /tmp/scramjet-pkg.orig "$ALVO/package.json"
-
-          echo "--- log do boot divergente ---"; cat divergente.log
-          # Divergência não impede navegar: o motor tem que continuar de pé e o healthcheck 200. Um
-          # aviso que derruba o app seria pior que a cegueira que ele conserta.
-          [ "$vivo" = "sim" ]  || { echo "FALHA: o processo morreu por causa de uma divergência de versão"; fail=1; }
-          [ "$codigo" = "200" ] || { echo "FALHA: healthcheck virou $codigo com dependência divergente"; fail=1; }
+          boot_com_arvore_torta divergente
+          cp /tmp/wisp-pkg.orig "$ALVO/package.json"
           grep -q 'ATENÇÃO' divergente.log       || { echo "FALHA: não avisou a divergência"; fail=1; }
           grep -q '0.0.0-forjada' divergente.log || { echo "FALHA: o aviso não diz a versão que está em disco"; fail=1; }
-          grep -qF '@mercuryworkshop/scramjet' divergente.log || { echo "FALHA: o aviso não nomeia o pacote"; fail=1; }
+          grep -qF '@mercuryworkshop/wisp-js' divergente.log || { echo "FALHA: o aviso não nomeia o pacote"; fail=1; }
+
+          # 3. Motor montado pela metade. É a divergência que NASCEU com o monorepo: os três pacotes
+          #    do scramjet saem da mesma árvore, e `fonte` diferente entre eles prova que alguém
+          #    montou um build por cima de outro. O passo "O trio scramjet está alinhado" reprova
+          #    isso antes de publicar; aqui se mede a outra ponta — que o SERVIDOR JÁ INSTALADO
+          #    também acusa, que é onde a informação serve a quem está diante do incidente.
+          cp backend/vendor/controller/BUILD.json /tmp/controller-build.orig
+          node -e '
+            const fs = require("fs"), p = process.argv[1];
+            const j = JSON.parse(fs.readFileSync(p, "utf8"));
+            j.fonte = "0000000forjada0000000000000000000000000";
+            fs.writeFileSync(p, JSON.stringify(j, null, 2));
+          ' backend/vendor/controller/BUILD.json
+          boot_com_arvore_torta motor-torto
+          cp /tmp/controller-build.orig backend/vendor/controller/BUILD.json
+          grep -q 'montado de árvores diferentes' motor-torto.log || { echo "FALHA: não acusou motor montado pela metade"; fail=1; }
+          grep -q 'engines/scramjet' motor-torto.log || { echo "FALHA: o aviso não nomeia o fork"; fail=1; }
+
           exit $fail
 
       # A verificação de maior valor do arquivo. Cada caminho abaixo é carregado nominalmente pelo
@@ -436,8 +542,12 @@ jobs:
       # trata como sucesso, deixando o cliente convencido de que carregou o motor.
       - name: Degradação nomeia o pacote em vez de matar o processo
         run: |
-          NM=backend/node_modules/@mercuryworkshop
-          check() {  # $1=pacote  $2=status esperado em /  $3=rota  $4=status esperado na rota
+          # `backend/vendor` e não mais `node_modules`: o motor deixou de ser dependência npm. O
+          # cenário que este teste monta ficou, se alguma coisa, MAIS realista — antes ele simulava
+          # um `npm ci` incompleto, e agora simula o que de fato pode chegar ao servidor: um tarball
+          # do app a que falta parte do motor.
+          NM=backend/vendor
+          check() {  # $1=dir em vendor/  $2=status em /  $3=rota  $4=status na rota  $5=pacote nomeado no 503
             mv "$NM/$1" "$NM/.bak"
             VSSH_APP_SOCKET="$SOCK" node "$(jq -r .backend.entrypoint vssh-app.json)" > d.log 2>&1 &
             pid=$!
@@ -451,11 +561,14 @@ jobs:
             [ "$alive" = "sim" ] || { echo "  ^ o processo MORREU — é a regressão que este teste existe para pegar"; return 1; }
             [ "$root" = "$2" ]   || { echo "  ^ healthcheck inesperado: $(head -c 200 root.txt)"; return 1; }
             [ "$rota" = "$4" ]   || { echo "  ^ rota inesperada: $(head -c 200 rota.txt)"; return 1; }
-            grep -q "$1" rota.txt || [ "$4" = "200" ] || { echo "  ^ o 503 não nomeia o pacote"; return 1; }
+            # O NOME DO PACOTE, e não o do diretório: é `@mercuryworkshop/scramjet-utils` que quem
+            # opera reconhece, e conferir pelo diretório passaria por acaso (`utils` casa dentro de
+            # `scramjet-utils`) mesmo que o 503 tivesse deixado de nomeá-lo.
+            grep -qF "$5" rota.txt || [ "$4" = "200" ] || { echo "  ^ o 503 não nomeia o pacote ($5)"; return 1; }
           }
           rc=0
-          check scramjet-utils 200 utils/scramjet-utils.js 503 || rc=1
-          check scramjet       503 scram/scramjet.js       503 || rc=1
+          check utils    200 utils/scramjet-utils.js 503 @mercuryworkshop/scramjet-utils || rc=1
+          check scramjet 503 scram/scramjet.js       503 @mercuryworkshop/scramjet       || rc=1
           exit $rc
 
       - name: Log do backend

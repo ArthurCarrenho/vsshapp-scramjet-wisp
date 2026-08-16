@@ -38,11 +38,15 @@ const { aplicarPolitica } = await import(pathToFileURL(path.join(BACKEND, 'rede.
 logging.set_level(logging.WARN);
 aplicarPolitica(wisp, { aoFalhar: () => {}, aoRecuar: () => {} });
 
-// Por padrão o dist do transporte instalado no backend (o que roda hoje). BENCH_LIBCURL_DIST aponta
+// Por padrão o dist do transporte que o backend SERVE (o que roda hoje). BENCH_LIBCURL_DIST aponta
 // para um build recém-feito — é assim que se prova o transporte VENDORIZADO antes de publicar, e não
 // só o wasm solto: o que o cliente carrega é este bundle, com o libcurl inlineado dentro.
+//
+// Era `node_modules/@mercuryworkshop/libcurl-transport/dist`. O motor deixou de ser dependência npm
+// e passou a ser construído neste repositório: mora em `backend/vendor/`, versionado, e é de lá que
+// o `server.js` o serve. A bancada mede o mesmo arquivo que produção entrega.
 const LIBCURL_DIST = process.env.BENCH_LIBCURL_DIST
-  || path.join(BACKEND, 'node_modules/@mercuryworkshop/libcurl-transport/dist');
+  || path.join(BACKEND, 'vendor/libcurl-transport/dist');
 
 const s = createServer((req, res) => {
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`);
