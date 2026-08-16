@@ -1,5 +1,19 @@
+# vssh fork: nightly DATADA, e não `nightly`.
+#
+# `channel = "nightly"` parece um pin e não é: resolve para o que o runner encontrar naquele dia.
+# Duas consequências, e as duas doem.
+#
+# A primeira é o `.wasm` publicado mudar sem uma linha de código mudar — o que também inviabiliza
+# qualquer cache por hash de conteúdo, porque a chave derivada dos fontes passaria a servir um
+# binário compilado por outro compilador. Cachear antes de fixar transforma o cache num ocultador
+# de não-determinismo, e é por isso que este arquivo vem ANTES do cache no plano.
+#
+# A segunda é o build quebrar sozinho, num horário que ninguém escolheu. Este projeto depende de
+# `-Z build-std=panic_abort,std` (ver `wasm/build.sh`), que é instável por definição.
+#
+# Esta data foi verificada: `rustc 1.99.0-nightly (d453bdd8f 2026-08-14)` constrói o rewriter e
+# passa os testes do crate `js`. Subir daqui é decisão consciente, com build para conferir.
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-08-15"
 targets = ["wasm32-unknown-unknown"]
 components = ["rust-src"]
-

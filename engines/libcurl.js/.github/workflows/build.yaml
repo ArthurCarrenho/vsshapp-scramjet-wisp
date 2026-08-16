@@ -1,5 +1,10 @@
 name: build
 run-name: Build libcurl.js
+
+# ⚠ vssh fork: este arquivo está INERTE neste repositório — o GitHub só lê workflows em
+# `.github/workflows/` da RAIZ, e aqui isto é `engines/libcurl.js/.github/workflows/`. Ele fica
+# como fonte da verdade do que o build precisa, e é daqui que sai o job do `engines.yml` da raiz.
+
 on: [push]
 
 jobs:
@@ -8,14 +13,46 @@ jobs:
     steps:
       - name: download repo
         uses: actions/checkout@v4
-        with:
-          submodules: 'true'
-      
+        # vssh fork: sem `submodules`. Os dois submódulos deixaram de existir na importação: o
+        # `client/wisp_client` virou arquivo comum (o build.sh o exige) e o `server/` foi descartado.
+
       - name: install deps
-        run: | 
+        run: |
           sudo apt-get update
-          sudo apt-get install -y make cmake emscripten autoconf automake libtool pkg-config wget xxd python3-selenium python3-websockets
-      
+          # vssh fork, três mudanças nesta linha:
+          #
+          #  - saiu `emscripten`: vinha do apt SEM VERSÃO FIXADA, então o `.wasm` — e por tabela o
+          #    `libcurl_full.mjs` de 2 MB que o transport vendoriza — mudava sozinho quando a imagem
+          #    do runner mudasse. Agora vem do emsdk, na versão do `client/.emsdk-version`;
+          #  - entrou `jq`: o `build.sh` o usa na linha 96 para ler a versão do package.json, e só
+          #    funcionava porque a imagem do runner o traz por acaso. Uma dependência real que não
+          #    estava declarada;
+          #  - saíram `python3-selenium` e `python3-websockets`: instalados e nunca usados — os
+          #    testes em `client/tests/` não são invocados por este workflow.
+          sudo apt-get install -y make cmake autoconf automake libtool pkg-config wget xxd jq
+
+      # vssh fork: emsdk por clone de tag, e não action de terceiro. A versão fica num arquivo do
+      # repositório para que um build local use exatamente a mesma — um pin que só existe no YAML
+      # não vale para quem constrói na própria máquina, e é justamente aí que o blob vendorizado é
+      # gerado hoje.
+      - name: emscripten (versão fixada em client/.emsdk-version)
+        run: |
+          set -euo pipefail
+          EMV="$(tr -d '[:space:]' < client/.emsdk-version)"
+          echo "emsdk $EMV"
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git /opt/emsdk
+          /opt/emsdk/emsdk install "$EMV"
+          /opt/emsdk/emsdk activate "$EMV"
+          # shellcheck disable=SC1091
+          source /opt/emsdk/emsdk_env.sh
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          echo "$EMSDK/node/$(ls "$EMSDK/node" | head -1)/bin" >> "$GITHUB_PATH"
+          echo "$EMSDK" >> "$GITHUB_PATH"
+
+      - name: conferir a versão ativa
+        run: emcc --version | head -1
+
       - name: run build
         working-directory: ./client
         run: ./build.sh all

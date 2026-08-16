@@ -18,6 +18,21 @@ MODULE_FILE="$OUT_DIR/emscripten_compiled.js"
 COMPILED_FILE="$OUT_DIR/emscripten_compiled.wasm"
 WASM_FILE="$OUT_DIR/libcurl.wasm"
 
+# vssh fork: a versão do emscripten é FIXADA em `.emsdk-version`, e este aviso existe para que o
+# pin valha também fora do CI. O `libcurl_full.mjs` de 2 MB que o libcurl-transport vendoriza é
+# gerado por builds locais tanto quanto por builds de CI — um pin que só existisse no YAML não
+# cobriria o caminho pelo qual o artefato de fato nasce hoje.
+#
+# Avisa, não falha: construir com outra versão é legítimo (para testar uma nova, por exemplo), o que
+# não é legítimo é fazer isso sem saber.
+if [ -f .emsdk-version ]; then
+  EMSDK_PIN="$(tr -d '[:space:]' < .emsdk-version)"
+  if ! emcc --version 2>/dev/null | head -1 | grep -q "$EMSDK_PIN"; then
+    echo "AVISO: .emsdk-version pede ${EMSDK_PIN}, mas o emcc ativo é: $(emcc --version 2>/dev/null | head -1)" >&2
+    echo "       o .wasm gerado NÃO será o mesmo que o CI produz." >&2
+  fi
+fi
+
 #check last used emscripten version
 CURRENT_EMCC_VER="$(emcc --version)"
 LAST_EMCC_VER="$(cat "$BUILD_DIR/emcc_version.txt" || emcc --version)"

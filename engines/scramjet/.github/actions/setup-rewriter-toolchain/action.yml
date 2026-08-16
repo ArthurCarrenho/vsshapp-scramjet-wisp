@@ -6,12 +6,23 @@ inputs:
     description: "Version of wasm-bindgen-cli to install"
     required: false
     default: "0.2.105"
+  # vssh fork: as três ferramentas que tocam no `.wasm` publicado ficam fixadas aqui, juntas e
+  # visíveis. Qualquer uma delas solta faz o binário mudar sem o código mudar — e uma chave de
+  # cache derivada só dos fontes passaria a servir um artefato compilado por outra ferramenta.
+  binaryen-version:
+    description: "Release do binaryen (fornece o wasm-opt)"
+    required: false
+    default: "version_123"
+  wasm-snip-rev:
+    description: "Commit exato do wasm-snip"
+    required: false
+    default: "e9c9e133f15f3b9849704c653b87cb12067e629f"
   rewriter-path:
     description: "Path to the rewriter directory for Rust cache"
     required: true
   github-token:
-    description: "GitHub token for Binaryen setup"
-    required: true
+    description: "Não é mais usado — o binaryen vem por download direto, sem action de terceiro"
+    required: false
 
 runs:
   using: "composite"
@@ -27,9 +38,12 @@ runs:
       uses: actions/cache@v5
       with:
         path: ~/.cargo/bin
-        key: cargo-bin-${{ runner.os }}-wbg${{ inputs.wasm-bindgen-version }}-wasm-snip
+        # vssh fork: o rev do wasm-snip entra na chave. Antes o sufixo era o literal `wasm-snip`,
+        # então trocar o commit dele reaproveitava o binário velho do cache — um pin que o cache
+        # desfazia em silêncio.
+        key: cargo-bin-${{ runner.os }}-wbg${{ inputs.wasm-bindgen-version }}-snip${{ inputs.wasm-snip-rev }}
         restore-keys: |
-          cargo-bin-${{ runner.os }}-
+          cargo-bin-${{ runner.os }}-wbg${{ inputs.wasm-bindgen-version }}-
 
     - name: Install wasm-bindgen-cli
       shell: bash
@@ -38,22 +52,34 @@ runs:
           cargo install wasm-bindgen-cli --version ${{ inputs.wasm-bindgen-version }}
         fi
 
-    # vssh fork: esta é a única action que sobrou em Node 16 (as demais foram para majors que rodam
-    # em Node 24). Não há versão mais nova publicada — v1.0.0 é a última tag do repositório — então
-    # o aviso de deprecação daqui não sai por bump.
+    # vssh fork: era `Aandreba/setup-binaryen@v1.0.0` — a última action em Node 16 aqui (sem versão
+    # mais nova publicada, então o aviso de deprecação não saía por bump) e, pior que o aviso, ela
+    # resolvia a ÚLTIMA release do binaryen. O `wasm-opt` é quem otimiza o `.wasm` do rewriter, então
+    # isso significava o binário publicado mudar sozinho, no dia em que o binaryen publicasse.
     #
-    # Substituí-la é fácil (baixar o tarball do binaryen e pôr no PATH), mas exige FIXAR uma versão,
-    # e hoje a action resolve a mais recente. Fixar troca o wasm-opt que otimiza o WASM do rewriter,
-    # ou seja, muda o binário publicado — isso é decisão própria, com build para conferir, e não
-    # carona numa limpeza de avisos.
-    - name: Setup Binaryen
-      uses: Aandreba/setup-binaryen@v1.0.0
-      with:
-        token: ${{ inputs.github-token }}
+    # O comentário que estava aqui dizia que substituir era fácil mas exigia fixar uma versão, e que
+    # fixar "é decisão própria, com build para conferir, e não carona numa limpeza de avisos". É esta
+    # a decisão, e o build foi feito: a `version_123` construiu o rewriter localmente, com o pipeline
+    # completo de `wasm-opt` do modo RELEASE.
+    #
+    # Baixar o tarball oficial sai mais rápido que a action e não traz terceiro para dentro do
+    # caminho que produz o artefato.
+    - name: Setup Binaryen ${{ inputs.binaryen-version }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        BN="binaryen-${{ inputs.binaryen-version }}"
+        curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${{ inputs.binaryen-version }}/${BN}-x86_64-linux.tar.gz" \
+          | tar -xz -C /opt
+        echo "/opt/${BN}/bin" >> "$GITHUB_PATH"
+        "/opt/${BN}/bin/wasm-opt" --version
 
+    # vssh fork: `--rev` fixo. Sem ele, `cargo install --git` pega o HEAD do repositório no momento
+    # do build — outro jeito de o binário publicado mudar sozinho. O `wasm-snip` substitui o corpo
+    # das funções podadas por `unreachable`, então uma mudança nele muda o `.wasm` diretamente.
     - name: Setup wasm-snip
       shell: bash
       run: |
         if ! command -v wasm-snip &> /dev/null; then
-          cargo install --git https://github.com/r58playz/wasm-snip
+          cargo install --git https://github.com/r58playz/wasm-snip --rev ${{ inputs.wasm-snip-rev }}
         fi
