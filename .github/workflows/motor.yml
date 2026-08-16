@@ -255,6 +255,40 @@ jobs:
         run: ./build.sh all
         working-directory: engines/libcurl.js/client
 
+      # ⚠ O `tools/patch_js.py` aplica os `fragments/` por expressão regular sobre a saída do
+      # emscripten e, quando um deles não casa, ele **imprime um aviso e segue** — com exit 0. Não é
+      # hipótese: com o emsdk 3.1.72 (que este repositório chegou a fixar) QUATRO dos cinco fragments
+      # não casaram, o build "passou", o artefato subiu, e ele fazia 0 de 40 requisições.
+      #
+      # A conferência é sobre o RESULTADO, e não sobre o casamento, porque nem todo aviso é defeito:
+      # os fragments vêm em pares por versão de emscripten — `load_later.js` traz `var asm` E
+      # `var wasmExports` — então um dos dois falhar É o desenho funcionando. Reprovar por aviso
+      # quebraria o build legítimo; o que decide é o que sobrou no bundle.
+      #
+      # O que não pode sobrar é a leitura que desfaz o patch do wsproxy. O INSERT de
+      # `force_wsproxy.js` monta o endereço com `host:porta`; se a linha que lê
+      # `SOCKFS.websocketArgs["url"]` sobreviver, ela sobrescreve tudo com a URL crua logo depois, e
+      # cada CONNECT do wisp sai com host vazio e porta 0.
+      - name: O patch do wsproxy pegou?
+        run: |
+          set -euo pipefail
+          ruim=0
+          for f in engines/libcurl.js/client/out/*.js engines/libcurl.js/client/out/*.mjs; do
+            [ -f "$f" ] || continue
+            if grep -qE 'url ?= ?SOCKFS\.websocketArgs\[' "$f"; then
+              echo "::error::$(basename "$f"): o REPLACE de fragments/force_wsproxy.js não foi aplicado." >&2
+              ruim=1
+            fi
+          done
+          if [ "$ruim" != 0 ]; then
+            echo "O bundle ainda lê a URL de SOCKFS.websocketArgs, o que desfaz o patch do wsproxy:" >&2
+            echo "o endereço montado com host:porta é sobrescrito pela URL crua, e o wisp recebe" >&2
+            echo "CONNECT com host vazio e porta 0. Navegar com este artefato falha em 100% das" >&2
+            echo "requisições. Confira se o emcc ativo é o de client/.emsdk-version." >&2
+            exit 1
+          fi
+          echo "ok: o patch do wsproxy está aplicado em todos os bundles."
+
       # ⚠ **Avisa, não reprova, e o motivo é concreto:** `client/tools/generate_cert.sh` baixa o CA
       # bundle de `curl.se/ca/cacert.pem` SEMPRE ATUALIZADO, e ele vai dentro do `.wasm`. Fixá-lo
       # compraria reprodutibilidade byte a byte ao preço de uma trust store envelhecendo — troca
@@ -264,6 +298,12 @@ jobs:
       # O que ele entrega é sinal: o tamanho da diferença, e o blob reconstruído como artefato para
       # quem quiser comparar à mão. Uma diferença GRANDE, ou uma que apareça sem o libcurl.js ter
       # mudado, é que merece olhar.
+      #
+      # E foi exatamente assim que ele pagou o próprio custo na PRIMEIRA execução: acusou 36.373
+      # bytes de diferença, o que é grande demais para um CA bundle. A suspeita registrada na hora
+      # era "emscripten diferente gera código diferente" — verdade, mas não a parte que importava.
+      # Baixando o artefato e comparando linha a linha, só OITO linhas diferiam, e uma delas era a
+      # do wsproxy. Daí veio o passo acima. O aviso estava certo; o palpite sobre ele, não.
       - name: O blob commitado ainda corresponde ao fonte?
         run: |
           NOVO=engines/libcurl.js/client/out/libcurl_full.mjs

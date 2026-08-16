@@ -23,13 +23,29 @@ WASM_FILE="$OUT_DIR/libcurl.wasm"
 # gerado por builds locais tanto quanto por builds de CI — um pin que só existisse no YAML não
 # cobriria o caminho pelo qual o artefato de fato nasce hoje.
 #
+# ⚠ A versão fixada é `3.1.6` e ISSO NÃO É DESCUIDO. O `patch_js.py` aplica os `fragments/` por
+# expressão regular sobre a saída do emscripten, e com 3.1.72 o REPLACE do `force_wsproxy.js` deixa
+# de casar: ele procura `url = SOCKFS.websocketArgs["url"];` e o 3.1.72 gera
+# `if(SOCKFS.websocketArgs["url"]){url=SOCKFS.websocketArgs["url"]}`. O INSERT continua casando e
+# monta a URL do wsproxy com `host:porta`; a linha sobrevivente a sobrescreve logo depois pela URL
+# crua. Resultado medido: 0 de 40 requisições, `error code 7`, e o servidor wisp registrando
+# `creating a stream to :0 failed - hostname must be a non-empty string`.
+#
+# Medido, não deduzido: o blob que roda em produção nasceu do `emscripten 3.1.6~dfsg-7` do apt, e
+# entrega 40/40 com UMA conexão TCP. Fixar 3.1.6 é o que faz o pin descrever o artefato real.
+# Suportar emscripten moderno é consertar aquele regex — trabalho de valor, e separado deste.
+#
+# Comparação EXATA, e não `grep` do pin na linha: `3.1.6` é prefixo de `3.1.60`..`3.1.69`, então um
+# `grep -q` acharia "3.1.6" dentro de "3.1.61" e ficaria calado justamente quando devia falar.
+#
 # Avisa, não falha: construir com outra versão é legítimo (para testar uma nova, por exemplo), o que
 # não é legítimo é fazer isso sem saber.
 if [ -f .emsdk-version ]; then
   EMSDK_PIN="$(tr -d '[:space:]' < .emsdk-version)"
-  if ! emcc --version 2>/dev/null | head -1 | grep -q "$EMSDK_PIN"; then
-    echo "AVISO: .emsdk-version pede ${EMSDK_PIN}, mas o emcc ativo é: $(emcc --version 2>/dev/null | head -1)" >&2
-    echo "       o .wasm gerado NÃO será o mesmo que o CI produz." >&2
+  EMCC_ATUAL="$(emcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [ "$EMCC_ATUAL" != "$EMSDK_PIN" ]; then
+    echo "AVISO: .emsdk-version pede ${EMSDK_PIN}, mas o emcc ativo é: ${EMCC_ATUAL:-desconhecido}" >&2
+    echo "       o .wasm gerado NÃO será o mesmo que o CI produz, e os fragments/ podem não casar." >&2
   fi
 fi
 
