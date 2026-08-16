@@ -113,6 +113,44 @@ where
 		}
 	}
 
+	/// Um alvo de atribuição que aparece DENTRO de um padrão de desestruturação.
+	///
+	/// Existiam três cópias deste `match` — uma aqui embaixo em cada `recurse_*`, outra em
+	/// `handle_for_of_in` — e duas delas estavam incompletas: alvo-membro caía num `_ => {}` e saía
+	/// sem tratamento nenhum. Medido: `({a: obj[location]} = x)` lia a `location` real e
+	/// `({a: window.location} = x)` escrevia na real, enquanto os mesmos alvos FORA da
+	/// desestruturação (`obj[location] = x`, `window.location = x`) eram reescritos normalmente.
+	/// Uma cópia só, com todos os braços, é o que impede a divergência de voltar.
+	fn recurse_assignment_target(
+		&mut self,
+		target: &AssignmentTarget<'data>,
+		restids: &mut Vec<Atom<'data>>,
+		location_assigned: &mut bool,
+	) {
+		match target {
+			AssignmentTarget::AssignmentTargetIdentifier(i) => {
+				if i.name == "location" {
+					self.jschanges.add(rewrite!(i.span, TempVar));
+					*location_assigned = true;
+				}
+			}
+			AssignmentTarget::ObjectAssignmentTarget(o) => {
+				self.recurse_object_assignment_target(o, restids, location_assigned);
+			}
+			AssignmentTarget::ArrayAssignmentTarget(a) => {
+				self.recurse_array_assignment_target(a, restids, location_assigned);
+			}
+			AssignmentTarget::StaticMemberExpression(s) => self.handle_static_member_target(s),
+			AssignmentTarget::ComputedMemberExpression(s) => self.handle_computed_member_target(s),
+			AssignmentTarget::PrivateFieldExpression(_) => {
+				// `({a: location.#p} = x)` — a checagem de marca do campo privado lança TypeError
+				// antes de o valor do identificador chegar ao programa.
+				audit_skip!("PrivateField em desestruturação: a marca lança antes de expor o valor");
+			}
+			_ => {}
+		}
+	}
+
 	fn recurse_object_assignment_target(
 		&mut self,
 		s: &ObjectAssignmentTarget<'data>,
@@ -131,7 +169,15 @@ where
 						restids.push(i.name);
 					}
 				}
-				_ => panic!("what?"),
+				// `({...obj.a} = x)` é JS VÁLIDO — o alvo de um rest pode ser qualquer expressão de
+				// membro — e aqui havia um `panic!("what?")`. O workspace compila com
+				// `panic = "abort"`, então em release isso é um trap do wasm: uma página com essa
+				// sintaxe derruba o rewriter inteiro, não só aquele script.
+				//
+				// Não entra em `restids` porque `$clean` recebe o NOME de quem guardou o rest, e
+				// aqui não há nome. Hoje isso não custa nada: o `$clean` do runtime
+				// (`core/src/client/shared/wrap.ts`) é um corpo vazio com um TODO.
+				_ => self.recurse_assignment_target(&r.target, restids, location_assigned),
 			}
 		}
 		for prop in &s.properties {
@@ -191,39 +237,26 @@ where
 						_ => {
 							// { ["location"]: x } = self;
 							self.jschanges.add(rewrite!(p.name.span(), WrapProperty));
+							// A chave é uma EXPRESSÃO, e ela também precisa ser percorrida:
+							// `({[location]: x} = y)` saía com a `location` crua dentro do
+							// `$prop(...)`, enquanto `obj[location] = x` — o mesmo acesso fora da
+							// desestruturação — já saía `$prop(($wrap(location)))`.
+							walk::walk_property_key(self, &p.name);
 						}
 					}
 
-					let mut target;
-
-					if let Some(t) = p.binding.as_assignment_target() {
-					    target = t;
-					} else {
-    					match &p.binding {
-    						AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
-                                target = &d.binding;
-                                // { location: x = parent } = {};
-    							// we still need to rewrite whatever stuff might be in the default expression
-    							walk::walk_expression(self, &d.init);
-                            }
-                            _=>unreachable!()
-                        }
-					}
-
-					match &target {
-						AssignmentTarget::ObjectAssignmentTarget(p) => {
-							self.recurse_object_assignment_target(&p, restids, location_assigned);
-						}
-						AssignmentTarget::AssignmentTargetIdentifier(p) => {
-							if p.name == "location" {
-								self.jschanges.add(rewrite!(p.span(), TempVar));
-								*location_assigned = true;
-							}
-						}
-						AssignmentTarget::ArrayAssignmentTarget(a) => {
-							self.recurse_array_assignment_target(&a, restids, location_assigned);
-						}
-						_ => {}
+					// O `unreachable!()` que morava aqui dependia de `as_assignment_target()` só
+					// devolver `None` para o caso do default — verdade hoje, e uma variante nova do
+					// oxc amanhã seria um trap do wasm em release. Perguntar pelo default primeiro
+					// dispensa a suposição, e de quebra o verificador de cobertura consegue seguir o
+					// caminho (`&d.binding` e `p.binding` creditam o mesmo campo).
+					if let AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) = &p.binding {
+						// { location: x = parent } = {};
+						// we still need to rewrite whatever stuff might be in the default expression
+						walk::walk_expression(self, &d.init);
+						self.recurse_assignment_target(&d.binding, restids, location_assigned);
+					} else if let Some(t) = p.binding.as_assignment_target() {
+						self.recurse_assignment_target(t, restids, location_assigned);
 					}
 				}
 			}
@@ -235,17 +268,23 @@ where
 		restids: &mut Vec<Atom<'data>>,
 		location_assigned: &mut bool,
 	) {
-		// note that i don't actually have to care about the rest param here since it wont have dangerous props. i still need to keep track of the object destructure rests though
+		// O rest de um ARRAY não ganha props reescritas — daí ele nunca ter entrado em `restids`,
+		// e isso segue certo. Mas o ALVO dele é um alvo como outro qualquer: `[...obj[location]] = x`
+		// lê a `location` real, e `[...location] = x` escreve nela.
+		if let Some(r) = &s.rest {
+			self.recurse_assignment_target(&r.target, restids, location_assigned);
+		}
 		for elem in &s.elements {
 			if let Some(elem) = elem {
 				match elem {
 					AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(p) => {
-						if let Some(name) = p.binding.get_identifier_name()
-							&& name == "location"
-						{
-							self.jschanges.add(rewrite!(p.span(), TempVar));
-							*location_assigned = true;
-						}
+						// O alvo do default é um alvo inteiro, não só um nome: `[{location} = 1] = x`
+						// e `[obj[location] = 1] = x` passavam batido porque só se perguntava por
+						// `get_identifier_name()`. E o `TempVar` ia sobre o span de `p` — o
+						// `location = 1` inteiro —, então `[location = 1] = x` virava
+						// `[$temploc] = x` e PERDIA o default. Sobre o span do alvo, vira
+						// `[$temploc = 1] = x`, que é o que o lado do objeto sempre fez.
+						self.recurse_assignment_target(&p.binding, restids, location_assigned);
 						walk::walk_expression(self, &p.init);
 					}
 					AssignmentTargetMaybeDefault::AssignmentTargetIdentifier(p) => {
@@ -259,6 +298,15 @@ where
 					}
 					AssignmentTargetMaybeDefault::ArrayAssignmentTarget(a) => {
 						self.recurse_array_assignment_target(a, restids, location_assigned);
+					}
+					AssignmentTargetMaybeDefault::StaticMemberExpression(m) => {
+						self.handle_static_member_target(m);
+					}
+					AssignmentTargetMaybeDefault::ComputedMemberExpression(m) => {
+						self.handle_computed_member_target(m);
+					}
+					AssignmentTargetMaybeDefault::PrivateFieldExpression(_) => {
+						audit_skip!("PrivateField em desestruturação: a marca lança antes de expor o valor");
 					}
 					_ => {}
 				}
@@ -414,30 +462,40 @@ where
 		}
 	}
 
+	// Separado de `handle_assignment_target_member` porque os mesmos dois alvos aparecem também
+	// como variantes de `AssignmentTargetMaybeDefault` (dentro de um array desestruturado), onde
+	// não existe um `&AssignmentTarget` para passar adiante.
+	fn handle_static_member_target(
+		&mut self,
+		s: &oxc::ast::ast::StaticMemberExpression<'data>,
+	) {
+		// window.location = ...
+		if UNSAFE_GLOBALS.contains(&s.property.name.as_str()) {
+			self.jschanges.add(rewrite!(
+				s.property.span(),
+				RewriteProperty {
+					ident: s.property.name
+				}
+			));
+		}
+
+		// walk the left hand side of the member expression (`window` for the `window.location = ...` case)
+		walk::walk_expression(self, &s.object);
+	}
+
+	fn handle_computed_member_target(&mut self, s: &ComputedMemberExpression<'data>) {
+		// window["location"] = ...
+		self.handle_computed_member_expression(s);
+		// `window`
+		walk::walk_expression(self, &s.object);
+		// `"location"`
+		walk::walk_expression(self, &s.expression);
+	}
+
 	fn handle_assignment_target_member(&mut self, target: &AssignmentTarget<'data>) {
 		match target {
-			AssignmentTarget::StaticMemberExpression(s) => {
-				// window.location = ...
-				if UNSAFE_GLOBALS.contains(&s.property.name.as_str()) {
-					self.jschanges.add(rewrite!(
-						s.property.span(),
-						RewriteProperty {
-							ident: s.property.name
-						}
-					));
-				}
-
-				// walk the left hand side of the member expression (`window` for the `window.location = ...` case)
-				walk::walk_expression(self, &s.object);
-			}
-			AssignmentTarget::ComputedMemberExpression(s) => {
-				// window["location"] = ...
-				self.handle_computed_member_expression(s);
-				// `window`
-				walk::walk_expression(self, &s.object);
-				// `"location"`
-				walk::walk_expression(self, &s.expression);
-			}
+			AssignmentTarget::StaticMemberExpression(s) => self.handle_static_member_target(s),
+			AssignmentTarget::ComputedMemberExpression(s) => self.handle_computed_member_target(s),
 			_ => {}
 		}
 	}
@@ -456,29 +514,7 @@ where
 			declare_local_location = location_assigned;
 		} else {
 		    let target = left.as_assignment_target().unwrap();
-		    match target {
-				AssignmentTarget::AssignmentTargetIdentifier(s) => {
-					if &s.name == "location" {
-						self.jschanges.add(rewrite!(s.span, TempVar));
-						location_assigned = true;
-					}
-				}
-
-				AssignmentTarget::StaticMemberExpression(_) | AssignmentTarget::ComputedMemberExpression(_) => {
-					self.handle_assignment_target_member(target);
-				}
-				AssignmentTarget::ObjectAssignmentTarget(o) => {
-					self.recurse_object_assignment_target(o, &mut restids, &mut location_assigned);
-				}
-				AssignmentTarget::ArrayAssignmentTarget(a) => {
-					self.recurse_array_assignment_target(a, &mut restids, &mut location_assigned);
-				}
-				AssignmentTarget::PrivateFieldExpression(_) => {
-					// `for (location.#p of ...)`
-					audit_skip!("private field can never contain anything unsafe");
-				}
-				_ => {}
-			}
+		    self.recurse_assignment_target(target, &mut restids, &mut location_assigned);
 			declare_local_location = false;
 		}
 
@@ -721,11 +757,17 @@ where
 			{
 				self.jschanges
 					.add(rewrite!(s.span, ShorthandObj { name: s.name }));
-				return;
+				// Não percorrer ESTE prop: num shorthand a chave e o valor ocupam o mesmo span, e o
+				// `$wrap` que `visit_identifier_reference` poria ali colidiria com o `ShorthandObj`
+				// acima. Mas era um `return`, e ele cegava o objeto INTEIRO a partir do primeiro
+				// shorthand perigoso — inclusive os props anteriores, que o laço só tinha
+				// inspecionado. Medido: `({location, k: parent})` saía com `parent` cru, e
+				// `({k: parent})` sozinho saía `({k: $wrap(parent)})`.
+				continue;
 			}
-		}
 
-		walk::walk_object_expression(self, it);
+			walk::walk_object_property_kind(self, prop);
+		}
 	}
 
 	#[coverage_checked(Function)]
@@ -944,6 +986,21 @@ where
 		}
 	}
 
+	/// ⚠ Este método deixa UM aviso de `coverage_checked` de pé, e ele é VERDADEIRO. A causa foi
+	/// medida, não deduzida: tirando o `if self.flags.destructure_rewrites` dos dois braços de
+	/// desestruturação abaixo, o aviso some. Um `if` sem `else` não cobre nada no caminho em que a
+	/// condição é falsa — e é isso mesmo que acontece aqui: com o flag DESLIGADO,
+	/// `({a: obj[location]} = x)` sai intocado, lendo a `location` real, enquanto o mesmo acesso
+	/// fora da desestruturação (`obj[location] = x`) sai `obj[$prop(($wrap(location)))]`.
+	///
+	/// Não está silenciado de propósito. O flag é do upstream, descrito lá como "enable support for
+	/// rewriting es6 destructure syntax (currently experimental)", e produção o liga
+	/// (`packages/core/src/index.ts`). Fechar o aviso pede escolher um dos dois lados — ou o modo
+	/// desligado passa a reescrever desestruturação (e o flag deixa de fazer o que promete), ou o
+	/// `handle_for_of_in` passa a respeitá-lo (hoje ele NÃO respeita: medido, `for ({a: location}
+	/// of y)` recebe o tratamento do `$temploc` com o flag desligado). As duas mudam a semântica de
+	/// um flag do upstream, o que é decisão de quem o mantém, e não efeito colateral de calar um
+	/// verificador.
 	#[coverage_checked(AssignmentExpression)]
 	fn visit_assignment_expression(&mut self, it: &AssignmentExpression<'data>) {
 		match &it.left {

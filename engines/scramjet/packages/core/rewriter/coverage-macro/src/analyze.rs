@@ -674,6 +674,12 @@ fn arm_covers_variant(
         if paths.iter().all(|p| p.covered.all) {
             return true;
         }
+        // An arm that hands the WHOLE scrutinee to oxc's own walker covers every
+        // variant it matches: `walk::walk_<T>` dispatches on the real variant and
+        // traverses the entire subtree. Same justification `walk_all!` rests on.
+        if body_walks_scrutinee(arm, scrut_expr) {
+            return true;
+        }
         // Otherwise fall back to the helper-on-scrutinee check.
         return body_covers_variant_via_helper(arm, scrut_expr, variant, ctx);
     }
@@ -717,6 +723,36 @@ fn arm_covers_variant(
         }
     }
     true
+}
+
+/// Does this arm hand the whole scrutinee to `walk::walk_*`?
+///
+/// Only TOP-LEVEL statements of the arm body count. A walk nested inside an
+/// `if` runs on some paths and not others, and crediting it would be exactly
+/// the kind of "covered, except when it isn't" this checker exists to catch.
+fn body_walks_scrutinee(arm: &syn::Arm, scrut_expr: &Expr) -> bool {
+    let scrut_repr = expr_canonical(scrut_expr);
+    let stmts: Vec<Stmt> = match arm.body.as_ref() {
+        Expr::Block(b) => b.block.stmts.clone(),
+        other => vec![Stmt::Expr(other.clone(), None)],
+    };
+    for s in &stmts {
+        let Stmt::Expr(Expr::Call(call), _) = s else {
+            continue;
+        };
+        let Expr::Path(p) = call.func.as_ref() else {
+            continue;
+        };
+        let segs: Vec<String> = p.path.segments.iter().map(|s| s.ident.to_string()).collect();
+        if segs.len() < 2 || segs[0] != "walk" || !segs[1].starts_with("walk_") {
+            continue;
+        }
+        let Some(arg) = call.args.get(1) else { continue };
+        if expr_canonical(arg) == scrut_repr || ref_canonical(arg) == scrut_repr {
+            return true;
+        }
+    }
+    false
 }
 
 /// Scan an arm's body for a `self.helper(scrut_expr)` call where the helper's

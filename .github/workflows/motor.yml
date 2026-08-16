@@ -136,6 +136,21 @@ jobs:
         with:
           rewriter-path: engines/scramjet/packages/core/rewriter
 
+      # Os testes do rewriter nunca rodaram em CI nenhum — nem no do fork, nem aqui. Ficavam na
+      # máquina de quem os escreveu, que é o mesmo que não existirem.
+      #
+      # ⚠ O `if` é o do cache do wasm DE PROPÓSITO, e não um `if` novo: a chave daquele cache cobre
+      # todo `rewriter/**/*.rs`, então um cache-hit é prova de que o Rust não mudou e o resultado
+      # seria o mesmo do run anterior. Quando o Rust muda — que é exatamente quando estes testes
+      # importam — o cache erra, a toolchain é instalada e eles rodam. Custo zero no caminho comum.
+      #
+      # Antes do build do wasm porque falha aqui é barata: o pipeline de `wasm-opt` do modo RELEASE
+      # leva ~2 min sozinho, e não faz sentido pagá-lo para descobrir depois que o visitor quebrou.
+      - name: Testes do rewriter
+        if: steps.cache-wasm.outputs.cache-hit != 'true'
+        run: cargo test -p js
+        working-directory: engines/scramjet/packages/core/rewriter
+
       - run: pnpm install --frozen-lockfile
 
       # `pnpm pack` de core PRIMEIRO, e não por gosto: `rspack.config.ts` lê

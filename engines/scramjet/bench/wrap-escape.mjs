@@ -5,8 +5,11 @@
 // mandar o navegador para fora do proxy — é o mesmo tipo de furo que `06e978c0` fechou em quatro
 // lugares.
 //
-// O `coverage_checked` do próprio rewriter já cospe seis avisos desses no build, e `53973c91` os
-// afrouxou "temporariamente" no CI. Este script diz quais deles são reais.
+// O `coverage_checked` do próprio rewriter aponta esses caminhos no build, e este script diz quais
+// deles são reais. Dos seis avisos originais, cinco viraram conserto: dois eram o buraco do
+// `ArrayPattern` (`130e658`), um era o `return` que cegava o objeto depois do primeiro shorthand, e
+// dois se fecharam junto com os alvos de membro dentro de desestruturação. O que sobra está
+// documentado em `visit_assignment_expression`, e é verdadeiro.
 //
 //   node bench/wrap-escape.mjs
 //
@@ -87,6 +90,31 @@ const CASOS = [
 	["catch desestruturado", "try {} catch ([e = location]) {}"],
 ];
 
+// Estes NÃO podem ser julgados pela regra de cima, e isso não é detalhe de implementação: a saída
+// CORRETA deles contém `location` cru de propósito (`$tryset(location,"=",$temploc)`), e a chave de
+// um shorthand se chama literalmente `location`. A regex diria "ESCAPA" para a saída certa.
+//
+// A pergunta certa aqui é outra: o alvo DENTRO da desestruturação recebeu o mesmo tratamento que o
+// mesmo alvo receberia SOLTO? Cada linha traz o marcador que o equivalente solto produz — e os
+// equivalentes soltos estão medidos nos testes do Rust (`js/src/lib.rs`), então os literais abaixo
+// não são invenção.
+const CASOS_MARCA = [
+	["shorthand não cega o objeto", "({location, k: parent})", "$wrap(parent)"],
+	["shorthand, prop anterior", "({k: parent, location})", "$wrap(parent)"],
+	["membro computado em objeto", "({a: obj[location]} = x)", "obj[$prop(($wrap(location)))]"],
+	["membro computado em array", "[obj[location]] = x", "obj[$prop(($wrap(location)))]"],
+	["membro estático em objeto", "({a: window.location} = x)", "window.$sj_location"],
+	["membro estático em array", "[window.location] = x", "window.$sj_location"],
+	["membro em for-of", "for ({a: obj[location]} of y);", "obj[$prop(($wrap(location)))]"],
+	["membro atrás de default", "[obj[location] = 1] = x", "obj[$prop(($wrap(location)))]"],
+	["membro em rest de array", "[...obj[location]] = x", "obj[$prop(($wrap(location)))]"],
+	["chave computada", "({[location]: x} = y)", "$prop(($wrap(location)))"],
+	["default não é engolido", "[location = 1] = x", "[$temploc = 1]"],
+	// Este não vaza nada: é o `panic!("what?")` que existia no alvo do rest. Com `panic = "abort"`
+	// em release, uma página com essa sintaxe derrubava o rewriter inteiro.
+	["rest com alvo de membro", "({...obj.a} = x)", "({...obj.a} = x)"],
+];
+
 function rewrite(fonte, destructure) {
 	const out = rw.rewrite_js(
 		CONFIG,
@@ -130,8 +158,32 @@ for (const [nome, fonte] of CASOS) {
 }
 
 console.log("-".repeat(76));
+
+console.log("\nAlvos de desestruturação: recebem o mesmo tratamento que o alvo solto?\n");
+console.log(`${"caso".padEnd(32)} ${"destructure=false".padEnd(20)} destructure=true`);
+console.log("-".repeat(76));
+
+let faltas = 0;
+for (const [nome, fonte, esperado] of CASOS_MARCA) {
+	const linha = [];
+	for (const d of [false, true]) {
+		try {
+			linha.push(rewrite(fonte, d).includes(esperado) ? "ok" : "FALTA");
+		} catch (e) {
+			linha.push("erro: " + String(e?.message ?? e).slice(0, 14));
+		}
+	}
+	if (linha[1] !== "ok") faltas++;
+	console.log(`${nome.padEnd(32)} ${linha[0].padEnd(20)} ${linha[1]}`);
+}
+
+console.log("-".repeat(76));
 console.log(
 	`${escapes} caso(s) escapam no estado de PRODUÇÃO (destructureRewrites=true).` +
 		(escapes ? "  ← cada um é um script lendo a origem real do servidor." : "")
 );
-process.exit(escapes ? 1 : 0);
+console.log(
+	`${faltas} alvo(s) de desestruturação sem o tratamento do equivalente solto.` +
+		(faltas ? "  ← mesma consequência, por outro caminho." : "")
+);
+process.exit(escapes || faltas ? 1 : 0);

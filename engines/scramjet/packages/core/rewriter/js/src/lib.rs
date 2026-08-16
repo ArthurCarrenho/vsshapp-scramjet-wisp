@@ -428,6 +428,110 @@ mod tests {
 		}
 	}
 
+	/// O `return` que existia depois do primeiro shorthand perigoso cegava o objeto INTEIRO —
+	/// inclusive os props ANTERIORES, que o laço só tinha inspecionado sem percorrer. Medido:
+	/// `({k: parent})` sozinho já saía `({k: $wrap(parent)})`, mas `({location, k: parent})` saía
+	/// com o `parent` cru. Cada `$wrap` que falta é a origem real do servidor chegando ao script
+	/// da página — o mesmo furo de `[x = location]`, por outro caminho.
+	///
+	/// O aviso de `coverage_checked` em `ObjectExpression.properties` apontava exatamente para cá,
+	/// e o programa mínimo que ele imprimia (`({k: location})`) NÃO demonstrava o escape: era só um
+	/// programa que alcança o nó. Quem demonstra precisa de dois props.
+	#[test]
+	fn um_shorthand_perigoso_nao_cega_o_resto_do_objeto() {
+		// A contraprova primeiro: sozinhos, estes sempre foram embrulhados.
+		assert_eq!(reescrever("({k: parent})", true), "({k: $wrap(parent)})");
+
+		for (js, esperados) in [
+			("({location, k: parent})", 2),
+			("({k: parent, location})", 2),
+			("({location, top})", 2),
+			("({location, [top]: 1})", 2),
+		] {
+			let saida = reescrever(js, true);
+			let n = saida.matches("$wrap(").count();
+			assert_eq!(
+				n, esperados,
+				"`{js}` devia embrulhar {esperados} globais; saiu `{saida}`"
+			);
+		}
+
+		// E o segundo prop continua sendo tratado mesmo quando não é um `$wrap`.
+		let saida = reescrever("({location, k: window.location})", true);
+		assert!(saida.contains("window.$sj_location"), "saiu `{saida}`");
+	}
+
+	/// Um alvo de atribuição DENTRO de um padrão de desestruturação recebia tratamento diferente do
+	/// mesmo alvo fora dele. A causa: três cópias do mesmo `match` — uma em cada `recurse_*`, mais
+	/// a de `handle_for_of_in` — e duas delas com um `_ => {}` no lugar dos braços de membro. É a
+	/// mesma forma do defeito de `ArrayPattern` que `130e658` fechou: um catch-all engolindo uma
+	/// variante que precisava de braço.
+	///
+    /// Cada par abaixo é (desestruturado, o que o equivalente SOLTO produz). Os equivalentes soltos
+	/// estão medidos na contraprova, para os literais esperados não serem invenção minha.
+	#[test]
+	fn alvo_de_membro_em_desestruturacao_recebe_o_mesmo_tratamento() {
+		const LE: &str = "obj[$prop(($wrap(location)))]";
+		const ESCREVE: &str = "window.$sj_location";
+
+		// Contraprova: fora da desestruturação, sempre funcionou.
+		assert!(reescrever("obj[location] = x", true).contains(LE));
+		assert!(reescrever("window.location = x", true).contains(ESCREVE));
+
+		for (js, esperado) in [
+			("({a: obj[location]} = x)", LE),
+			("[obj[location]] = x", LE),
+			("({a: window.location} = x)", ESCREVE),
+			("[window.location] = x", ESCREVE),
+			("for ({a: obj[location]} of y);", LE),
+			("for ([window.location] of y);", ESCREVE),
+			("[obj[location] = 1] = x", LE),
+			("[...obj[location]] = x", LE),
+			// a CHAVE de um prop desestruturado também é uma expressão
+			("({[location]: x} = y)", "$prop(($wrap(location)))"),
+		] {
+			let saida = reescrever(js, true);
+			assert!(
+				saida.contains(esperado),
+				"`{js}` devia conter `{esperado}`; saiu `{saida}`"
+			);
+		}
+	}
+
+	/// `({...obj.a} = x)` é JS VÁLIDO — o alvo de um rest pode ser qualquer expressão de membro — e
+	/// caía num `panic!("what?")`. O workspace compila com `panic = "abort"`, então em release o
+	/// pânico é um trap do wasm: uma página com essa sintaxe derruba o rewriter inteiro, e não só
+	/// aquele script. É indisponibilidade, não vazamento — e por isso nenhuma bancada de escape
+	/// jamais o encontraria.
+	#[test]
+	fn rest_com_alvo_de_membro_nao_derruba_o_rewriter() {
+		assert_eq!(reescrever("({...obj.a} = x)", true), "({...obj.a} = x)");
+
+		// E o alvo do rest passou a ser percorrido, nas duas formas.
+		let saida = reescrever("({...obj[location]} = x)", true);
+		assert!(saida.contains("$wrap(location)"), "saiu `{saida}`");
+		let saida = reescrever("[...location] = x", true);
+		assert!(saida.contains("$temploc"), "saiu `{saida}`");
+	}
+
+	/// `[location = 1] = x` aplicava o `TempVar` sobre o span do `location = 1` INTEIRO e saía
+	/// `[$temploc] = x`: o default sumia, e `location` recebia `undefined` em vez de 1 quando `x[0]`
+	/// não existe. Sobre o span do alvo vira `[$temploc = 1]`, que é o que o lado do OBJETO
+	/// (`({a: location = 1} = x)`) sempre fez — a assimetria entre os dois é que denunciou.
+	/// Defeito de correção, não de isolamento; o outro tipo que uma bancada de escape não pega.
+	#[test]
+	fn default_de_array_desestruturado_sobrevive_a_reescrita() {
+		let saida = reescrever("[location = 1] = x", true);
+		assert!(
+			saida.contains("[$temploc = 1]"),
+			"o default foi engolido; saiu `{saida}`"
+		);
+
+		// E um padrão aninhado atrás de um default deixou de passar batido.
+		let saida = reescrever("[{location} = 1] = x", true);
+		assert!(saida.contains("$sj_location"), "saiu `{saida}`");
+	}
+
 	#[test]
 	fn only_invalid_source_is_the_sources_fault() {
 		assert!(RewriterError::InvalidSource(String::new()).is_source_fault());
