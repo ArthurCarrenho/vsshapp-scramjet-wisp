@@ -35,12 +35,12 @@ jobs:
       SOCK: '/tmp/scramjet-smoke.sock'
       TOKEN: 'smoke-token-nao-secreto'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Node 22: é o que o caminho do portal usa no servidor (`sudo` reescreve o PATH via
       # secure_path e resolve /usr/bin/node, não um nvm pessoal do usuário). Testar noutra major
       # aqui provaria algo que produção não executa.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -176,6 +176,64 @@ jobs:
           code=$(curl -sS -o body.txt -w '%{http_code}' --unix-socket "$SOCK" "http://app/")
           [ "$code" = "200" ] || { echo "healthcheck devolveu $code"; exit 1; }
           grep -q 'scramjet-wisp ok' body.txt || { echo "corpo inesperado: $(cat body.txt)"; exit 1; }
+
+      # O boot diz que versões estão em disco — e acusa quando elas não são as do lockfile.
+      #
+      # Isto fecha o outro lado do buraco que prendeu produção no alpha.4. O `installCommand` já foi
+      # consertado (e tem teste acima), mas o que faltava era o jeito de PERCEBER: nada no boot dizia
+      # qual versão estava rodando, então a divergência só apareceu batendo números de linha de um
+      # stack trace do console de um usuário contra os sourcemaps de cada release.
+      #
+      # Como no teste do installCommand, o que importa são as duas direções. Um aviso que aparece
+      # sempre é ignorado sempre; um que nunca aparece não conserta nada.
+      - name: O boot lista as versões, e acusa divergência
+        run: |
+          # 1. Árvore alinhada (é o estado depois do installCommand lá em cima): cada dependência
+          #    declarada tem que estar nomeada no log, com a versão do lockfile ao lado.
+          fail=0
+          for pkg in $(jq -r '.dependencies | keys[]' backend/package.json); do
+            ver=$(jq -r --arg p "node_modules/$pkg" '.packages[$p].version' backend/package-lock.json)
+            if grep -qF "$pkg $ver" server.log; then
+              echo "ok    $pkg $ver no log de boot"
+            else
+              echo "FALHA: o boot não nomeou $pkg $ver"; fail=1
+            fi
+          done
+          grep -q 'ATENÇÃO' server.log && { echo "FALHA: avisou divergência numa árvore alinhada"; fail=1; }
+
+          # 2. Árvore divergente: forjar uma versão em disco e exigir que o boot grite. Mexe só no
+          #    package.json do pacote instalado — não precisa de rede, e é exatamente a forma do
+          #    incidente (disco atrasado em relação ao lockfile).
+          ALVO=backend/node_modules/@mercuryworkshop/scramjet
+          cp "$ALVO/package.json" /tmp/scramjet-pkg.orig
+          node -e '
+            const fs = require("fs"), p = process.argv[1] + "/package.json";
+            const j = JSON.parse(fs.readFileSync(p, "utf8"));
+            j.version = "0.0.0-forjada";
+            fs.writeFileSync(p, JSON.stringify(j, null, 2));
+          ' "$ALVO"
+
+          VSSH_APP_SOCKET=/tmp/scramjet-divergente.sock \
+            node "$(jq -r .backend.entrypoint vssh-app.json)" > divergente.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 30); do
+            curl -sS -o /dev/null --unix-socket /tmp/scramjet-divergente.sock "http://app/" 2>/dev/null && break
+            sleep 0.4
+          done
+          vivo=$(kill -0 $pid 2>/dev/null && echo sim || echo nao)
+          codigo=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket /tmp/scramjet-divergente.sock "http://app/" || echo 000)
+          kill $pid 2>/dev/null || true; sleep 1
+          cp /tmp/scramjet-pkg.orig "$ALVO/package.json"
+
+          echo "--- log do boot divergente ---"; cat divergente.log
+          # Divergência não impede navegar: o motor tem que continuar de pé e o healthcheck 200. Um
+          # aviso que derruba o app seria pior que a cegueira que ele conserta.
+          [ "$vivo" = "sim" ]  || { echo "FALHA: o processo morreu por causa de uma divergência de versão"; fail=1; }
+          [ "$codigo" = "200" ] || { echo "FALHA: healthcheck virou $codigo com dependência divergente"; fail=1; }
+          grep -q 'ATENÇÃO' divergente.log       || { echo "FALHA: não avisou a divergência"; fail=1; }
+          grep -q '0.0.0-forjada' divergente.log || { echo "FALHA: o aviso não diz a versão que está em disco"; fail=1; }
+          grep -qF '@mercuryworkshop/scramjet' divergente.log || { echo "FALHA: o aviso não nomeia o pacote"; fail=1; }
+          exit $fail
 
       # A verificação de maior valor do arquivo. Cada caminho abaixo é carregado nominalmente pelo
       # consumidor no vssh-sso — se um upgrade de dependência renomear qualquer um, isto fica
