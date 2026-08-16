@@ -178,6 +178,25 @@ for (const [nome, fonte, esperado] of CASOS_MARCA) {
 }
 
 console.log("-".repeat(76));
+
+// A terceira pergunta, e a mais barata das três: a saída ainda é JS?
+//
+// É o pior modo de falha de uma mudança no visitor — um rewrite emitido sobre o span errado produz
+// sintaxe inválida, e aí não importa se o `location` foi embrulhado: o script inteiro morre na
+// página. As duas tabelas acima procuram por SUBSTRING e passariam feliz por cima disso.
+// `new Function` só parseia; nada aqui executa, e `$wrap`/`$temploc` não precisam existir.
+let invalidos = 0;
+for (const fonte of [...CASOS.map((c) => c[1]), ...CASOS_MARCA.map((c) => c[1])]) {
+	for (const d of [false, true]) {
+		try {
+			new Function(rewrite(fonte, d));
+		} catch (e) {
+			invalidos++;
+			console.log(`NÃO PARSEIA (destructure=${d})  ${fonte}\n   ${e.message}`);
+		}
+	}
+}
+
 console.log(
 	`${escapes} caso(s) escapam no estado de PRODUÇÃO (destructureRewrites=true).` +
 		(escapes ? "  ← cada um é um script lendo a origem real do servidor." : "")
@@ -186,4 +205,8 @@ console.log(
 	`${faltas} alvo(s) de desestruturação sem o tratamento do equivalente solto.` +
 		(faltas ? "  ← mesma consequência, por outro caminho." : "")
 );
-process.exit(escapes || faltas ? 1 : 0);
+console.log(
+	`${invalidos} saída(s) não parseiam como JS.` +
+		(invalidos ? "  ← o script morre inteiro na página." : "")
+);
+process.exit(escapes || faltas || invalidos ? 1 : 0);
