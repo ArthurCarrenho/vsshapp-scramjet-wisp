@@ -1,0 +1,40 @@
+{
+  "_comentario": [
+    "De onde veio cada subárvore de engines/, e em que ponto ela foi sincronizada.",
+    "",
+    "Isto existe porque a procedência estava SÓ na primeira linha da mensagem do commit de import",
+    "('Importa o fork do Scramjet, verbatim, de 0c9a1ec6'). Serve para ler, não para uma máquina:",
+    "qualquer rebase, squash ou reescrita de mensagem levaria o dado embora, e o .github/workflows/",
+    "upstream.yml precisa dele para saber contra o que comparar.",
+    "",
+    "'sincronizado' é o commit DO NOSSO FORK que foi copiado para engines/. O ponto correspondente",
+    "no upstream é o merge-base, que a API do GitHub calcula — não precisa ser anotado aqui, e",
+    "anotá-lo criaria um segundo dado para manter em dia.",
+    "",
+    "AO SINCRONIZAR com o upstream: atualize 'sincronizado' no mesmo commit que traz o código. Os",
+    "dois juntos, ou o arquivo vira ficção."
+  ],
+  "engines/scramjet": {
+    "fork": "ArthurCarrenho/vssh-scramjet",
+    "upstream": "MercuryWorkshop/scramjet",
+    "branch": "main",
+    "sincronizado": "0c9a1ec6",
+    "licenca": "AGPL-3.0-only"
+  },
+  "engines/libcurl.js": {
+    "fork": "ArthurCarrenho/vssh-libcurl.js",
+    "upstream": "ading2210/libcurl.js",
+    "branch": "main",
+    "sincronizado": "fb9341e",
+    "licenca": "LGPL-3.0",
+    "nota": "não é cópia verbatim: client/wisp_client deixou de ser submódulo e server/ foi descartado"
+  },
+  "engines/libcurl-transport": {
+    "fork": "ArthurCarrenho/vssh-libcurl-transport",
+    "upstream": "MercuryWorkshop/libcurl-transport",
+    "branch": "master",
+    "sincronizado": "af6da67",
+    "licenca": "AGPL-3.0-only",
+    "nota": "o branch é master, e não main — a diferença já seria um workflow calado se assumida"
+  }
+}

@@ -7,22 +7,24 @@ name: Smoke
 # Chamado como gate pelo publish.yml (workflow_call) — nunca publicar um pacote cujo `npm ci` não
 # resolve ou cujas rotas de asset sumiram — e roda sozinho em PR.
 #
-# O `schedule` semanal nasceu porque as 4 dependências vinham de `releases/download/latest/...`, e
-# a tag `latest` é MUTÁVEL — os bytes já foram republicados sob o mesmo nome uma vez, quebrando o
-# `integrity` do lockfile (ver o commit 06d49be).
+# O `schedule` semanal SAIU, e a história dele vale a nota. Ele nasceu porque as 4 dependências
+# vinham de `releases/download/latest/...`, e a tag `latest` é MUTÁVEL — os bytes já foram
+# republicados sob o mesmo nome uma vez, quebrando o `integrity` do lockfile (commit 06d49be). Um
+# cron que reinstalasse toda semana era o jeito de descobrir isso aqui em vez de no servidor.
 #
-# **Essa razão morreu:** as URLs agora apontam para releases com tag que não se move
-# (`engine-<run>-<sha>`, `transport-<run>-<sha>`), e a `latest` dos dois forks ficou congelada. O
-# cron fica assim mesmo, por um motivo menor e ainda real: uma release pode ser apagada à mão, e
-# um asset pode sumir. Continua sendo melhor descobrir isso aqui do que na próxima instalação no
-# servidor do cliente.
+# A razão morreu em duas etapas. Primeiro as URLs passaram a apontar para tags que não se movem, e o
+# cron ficou "por um motivo menor e ainda real: uma release pode ser apagada à mão". Depois o motor
+# saiu do npm: **`backend/package.json` não referencia release nenhuma**, então não há asset que
+# possa sumir debaixo dele. Sobrava vigiar a tag `v4` do toolkit e o npm público — e para isso o
+# próximo push serve, porque nada aqui muda sem push.
+#
+# O horário semanal não se perdeu: foi para o `upstream.yml`, onde a pergunta ("o upstream mexeu?")
+# de fato acontece sem ninguém tocar neste repositório.
 
 on:
   workflow_call:
   pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: '17 6 * * 1'
 
 concurrency:
   group: smoke-${{ github.workflow }}-${{ github.ref }}

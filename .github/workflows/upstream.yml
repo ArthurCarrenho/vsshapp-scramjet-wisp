@@ -1,0 +1,142 @@
+name: Upstream
+
+# Avisa quando o upstream de alguma subárvore de `engines/` andar.
+#
+# Trazer o código continua sendo manual — a decisão de sincronizar um fork com 32 commits nossos por
+# cima não é de robô. O que este workflow garante é que ela seja **avisada** em vez de lembrada: sem
+# ele, "o upstream mexeu" é uma coisa que alguém descobre meses depois, por acaso, ao abrir o
+# repositório dele por outro motivo.
+#
+# Como ele sabe o que comparar: `engines/UPSTREAM.json` diz, para cada subárvore, qual é o fork, qual
+# é o upstream, qual é o branch DELE e em que commit do nosso fork a cópia foi feita. O ponto
+# correspondente no upstream é o merge-base, e quem o calcula é a própria API do GitHub — o
+# endpoint `compare` de um fork enxerga os commits do parent, então nada precisa ser clonado.
+#
+# ⚠ O branch do upstream NÃO é sempre `main`: o `libcurl-transport` usa `master`. Assumir `main`
+# faria a comparação falhar para ele — e falhar de um jeito que se parece com "nada mudou".
+#
+# ⚠⚠ **O campo é `ahead_by`, e NÃO `behind_by`.** Em `compare/<base>...<head>` os dois se leem do
+# ponto de vista do HEAD, que aqui é o upstream:
+#
+#     ahead_by  = commits que o UPSTREAM tem e nós não   ← é isto que se vigia
+#     behind_by = commits NOSSOS que eles não têm        ← é a nossa divergência, e ela é o normal
+#
+# A primeira versão deste arquivo vigiava `behind_by`, e teria aberto issue toda semana dizendo "o
+# upstream andou" sem ninguém ter andado: no dia em que foi escrito, `behind_by` valia 33, 7 e 6 —
+# que são exatamente os NOSSOS commits em cada fork. O sinal de que a leitura estava invertida
+# estava na mesma resposta e passou batido: `merge_base` era igual ao HEAD do upstream, e a lista
+# `.commits` vinha VAZIA. Quando a contagem não bate com nada, olhe a lista.
+#
+# Uma issue só, atualizada, e nunca uma por execução: um alarme que abre issue toda semana vira
+# ruído e passa a ser fechado sem ler, que é o oposto do que ele existe para fazer.
+
+on:
+  schedule:
+    # Segunda de manhã. O mesmo horário do antigo cron do smoke, que morreu quando as dependências
+    # deixaram de vir de release — o intervalo semanal continua certo para "o upstream mexeu?", que
+    # é uma pergunta cuja resposta não fica velha em horas.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  olhar:
+    name: O upstream andou?
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Comparar cada subárvore com o upstream dela
+        id: comparar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          linhas=""
+          atrasados=0
+
+          # `to_entries` pulando as chaves que começam com `_`: o `_comentario` do JSON é para quem
+          # lê o arquivo, e tratá-lo como subárvore renderia um erro obscuro em vez de ser ignorado.
+          while IFS=$'\t' read -r caminho fork upstream branch sinc; do
+            [ -n "$caminho" ] || continue
+            dono="${upstream%%/*}"
+
+            # `compare/<nosso-sha>...<dono>:<branch>` — três pontos, que compara pelo merge-base.
+            # `|| true` para que um upstream renomeado ou removido vire uma LINHA no relatório em
+            # vez de derrubar o job inteiro e levar junto o aviso das outras duas subárvores.
+            resp=$(gh api "repos/$fork/compare/$sinc...$dono:$branch" 2>/dev/null || echo '')
+            if [ -z "$resp" ]; then
+              linhas="${linhas}| \`$caminho\` | $upstream | **não deu para comparar** | — | — |"$'\n'
+              atrasados=$((atrasados + 1))
+              continue
+            fi
+
+            # `deles` é o que se vigia; `nossos` entra no relatório porque é o tamanho do enxerto que
+            # a sincronização vai ter que reaplicar — é o número que decide se ela é uma tarde ou uma
+            # semana, e quem lê a issue precisa dele para decidir.
+            deles=$(printf '%s' "$resp" | jq -r '.ahead_by')
+            nossos=$(printf '%s' "$resp" | jq -r '.behind_by')
+            base=$(printf '%s' "$resp" | jq -r '.merge_base_commit.sha[0:7]')
+            if [ "$deles" -gt 0 ]; then
+              linhas="${linhas}| \`$caminho\` | [$upstream](https://github.com/$upstream/compare/$base...$branch) | **$deles** | $nossos | \`$base\` |"$'\n'
+              atrasados=$((atrasados + 1))
+            else
+              echo "em dia: $caminho (upstream parado em $base; $nossos commits nossos por cima)"
+            fi
+          done < <(jq -r 'to_entries[] | select(.key | startswith("_") | not) | [.key, .value.fork, .value.upstream, .value.branch, .value.sincronizado] | @tsv' engines/UPSTREAM.json)
+
+          {
+            echo "atrasados=$atrasados"
+            echo "tabela<<FIM"
+            printf '%s' "$linhas"
+            echo "FIM"
+          } >> "$GITHUB_OUTPUT"
+
+      # Sem nada atrasado não se toca em issue nenhuma — nem para fechar. Fechar sozinho uma issue
+      # que alguém está usando para anotar o plano de sincronização seria pior que deixá-la aberta.
+      - name: Abrir ou atualizar a issue
+        if: steps.comparar.outputs.atrasados != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TABELA: ${{ steps.comparar.outputs.tabela }}
+        run: |
+          set -euo pipefail
+          TITULO="Upstream andou desde a última sincronização"
+
+          corpo=$(cat <<CORPO
+          O upstream das subárvores abaixo ganhou commits que \`engines/\` não tem. Isto é um aviso,
+          não uma tarefa: sincronizar um fork com dezenas de commits nossos por cima é decisão, e o
+          valor disto é a decisão ser tomada sabendo, e não descoberta por acaso.
+
+          | subárvore | upstream | commits deles | commits nossos | desde |
+          |---|---|---|---|---|
+          ${TABELA}
+
+          "commits deles" é o que falta trazer. "commits nossos" é o enxerto que a sincronização vai
+          ter que reaplicar por cima — é ele que diz se isso é uma tarde ou uma semana.
+
+          O link do upstream abre o diff a partir do merge-base — é exatamente o que eles fizeram e
+          nós não temos.
+
+          **Ao sincronizar**, atualize \`sincronizado\` em \`engines/UPSTREAM.json\` no MESMO commit
+          que traz o código, ou este relatório passa a mentir. E rode \`rewritertests\` do fork do
+          scramjet: é a única coisa que pega os nossos 32 commits quebrando contra código novo deles.
+
+          <sub>Atualizado automaticamente por \`.github/workflows/upstream.yml\`.</sub>
+          CORPO
+          )
+          # `sed` para tirar a indentação do heredoc: manter o texto alinhado no YAML é o que o faz
+          # legível aqui, e 10 espaços à esquerda no markdown viram bloco de código no GitHub.
+          corpo=$(printf '%s' "$corpo" | sed 's/^          //')
+
+          existente=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITULO in:title" --json number,title --jq ".[] | select(.title == \"$TITULO\") | .number" | head -1)
+
+          if [ -n "$existente" ]; then
+            gh issue edit "$existente" --repo "$GITHUB_REPOSITORY" --body "$corpo"
+            echo "issue #$existente atualizada"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITULO" --body "$corpo"
+          fi
