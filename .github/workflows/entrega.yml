@@ -205,9 +205,28 @@ jobs:
           set -euo pipefail
           # `add -f` porque `backend/vendor/` pode estar gitignorado localmente algum dia; o
           # `git add -A` que o script faz logo depois só ADICIONA, nunca desestagia, então isto
-          # sobrevive. E a asserção existe para que "o motor não entrou no pacote" seja um erro
-          # aqui, e não um 503 na máquina de quem instalou.
+          # sobrevive.
           git -C app add -f backend/vendor
-          git -C app diff --cached --name-only | grep -q '^backend/vendor/scramjet/dist/' \
-            || { echo "o motor não está no índice do pacote"; exit 1; }
+
+          # ⚠ A conferência é `ls-files` (está RASTREADO?) e não `diff --cached` (está DIFERENTE do
+          # HEAD?). A primeira versão usava a segunda e falhava sempre: como o vendor é versionado e
+          # o artefato baixado é idêntico ao commitado, não há diferença nenhuma para mostrar —
+          # `git diff --cached` vinha vazio justamente quando estava tudo certo. Aquela asserção
+          # tinha sido escrita para o desenho anterior, em que o vendor era gitignorado e injetado
+          # no CI, e ali o `add -f` de fato produzia diff.
+          #
+          # O que precisa ser verdade é outra coisa: os arquivos que `backend/server.js` serve estão
+          # no índice e não estão vazios, porque é isso que o `git archive` do `vssh-app-publish`
+          # leva. Sem isto, "o motor não entrou no pacote" viraria um 503 na máquina de quem instalou.
+          for arq in scramjet/dist/scramjet.js scramjet/dist/scramjet.wasm \
+                     controller/dist/controller.api.js controller/dist/controller.inject.js \
+                     controller/dist/controller.sw.js utils/dist/scramjet-utils.js \
+                     libcurl-transport/dist/index.js; do
+            git -C app ls-files --error-unmatch "backend/vendor/$arq" >/dev/null 2>&1 \
+              || { echo "não está no índice do pacote: backend/vendor/$arq"; exit 1; }
+            [ -s "app/backend/vendor/$arq" ] \
+              || { echo "vazio ou ausente: backend/vendor/$arq"; exit 1; }
+          done
+          echo "os 7 arquivos do contrato estão no pacote."
+
           bash _tools/scripts/vssh-app-publish "app/." --version "4.1.${{ github.run_number }}"
