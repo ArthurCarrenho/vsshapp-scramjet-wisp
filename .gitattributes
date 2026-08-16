@@ -14,3 +14,10 @@
 # nunca use o mesmo nome de pasta para "fonte que fica de fora" e "artefato que entra".
 /bench/ export-ignore
 /.gitattributes export-ignore
+
+# As fontes do motor. Elas são construídas pelo CI; o que o servidor recebe é o resultado, nunca o
+# fonte — são ~400 arquivos, mais Rust e C que nada em produção compila.
+#
+# `LICENSE` e `NOTICE` da raiz NÃO estão aqui, e é de propósito: o motor é AGPL, e quem usa o
+# serviço tem direito a saber o que roda e onde está o fonte. Eles viajam.
+/engines/ export-ignore
