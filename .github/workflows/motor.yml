@@ -328,7 +328,11 @@ jobs:
           #        (quatro linhas modificadas), e uma delas desfazia o patch do wsproxy.
           #
           # Por bytes essa distinção não aparece: 36 KB e 2 KB são "diferente" do mesmo jeito.
-          n=$(diff <(cat "$VELHO") <(cat "$NOVO") | grep -c '^[<>]' || true)
+          # `--strip-trailing-cr` não é zelo à toa: o blob é versionado e este repositório é editado
+          # no Windows, onde o working copy fica CRLF. Sem a opção, um checkout que trouxesse CR
+          # faria as 1.531 linhas "diferirem" e o job acusaria mudança de cola JS para sempre — um
+          # alarme permanente, que é o mesmo que alarme nenhum. Medido: sem ela, aqui dá 3.062.
+          n=$(diff --strip-trailing-cr <(cat "$VELHO") <(cat "$NOVO") | grep -c '^[<>]' || true)
           echo "linhas divergentes: $n (de $(wc -l < "$VELHO"))"
           if [ "$n" -le 2 ]; then
             echo "::notice::o blob difere em $((b - a)) bytes, numa linha só — a do base64 do wasm. É o CA bundle, que flutua de propósito."
