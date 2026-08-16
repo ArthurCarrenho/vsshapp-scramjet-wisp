@@ -21,3 +21,6 @@
 # `LICENSE` e `NOTICE` da raiz NÃO estão aqui, e é de propósito: o motor é AGPL, e quem usa o
 # serviço tem direito a saber o que roda e onde está o fonte. Eles viajam.
 /engines/ export-ignore
+
+# Scripts de build. Rodam no CI e na máquina de quem desenvolve; o servidor recebe o resultado.
+/scripts/ export-ignore

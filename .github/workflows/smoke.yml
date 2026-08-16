@@ -95,6 +95,7 @@ jobs:
           bench/
           .gitattributes
           engines/
+          scripts/
           PADROES
           # Nada de node_modules: quem instala é o installCommand, no servidor.
           if grep -q "node_modules/" /tmp/conteudo.txt; then echo "NÃO DEVIA: node_modules no tarball"; erro=1; fi

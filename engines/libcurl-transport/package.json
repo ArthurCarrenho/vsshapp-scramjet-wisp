@@ -7,6 +7,7 @@
   "author": "ading2210",
   "license": "AGPL-3.0-only",
   "type": "module",
+  "packageManager": "pnpm@10.12.1",
   "repository": {
 		"type": "git",
 		"url": "git+https://github.com/MercuryWorkshop/libcurl-transport.git"

@@ -42,7 +42,18 @@ fi
 	if [ "${OPTIMIZE_FOR_SPEED:-0}" = "0" ]; then
 		STD_FEATURES="${STD_FEATURES},optimize_for_size"
 	fi
-	cargo +nightly build --release --target wasm32-unknown-unknown \
+	# vssh fork: era `cargo +nightly`. O `+<toolchain>` explícito **ignora o `rust-toolchain.toml`**,
+	# então o pin datado que existe ali ao lado era inerte para o build que realmente roda — o
+	# arquivo dizia `nightly-2026-08-15` e o cargo usava o nightly rolante do dia.
+	#
+	# Isso não é teoria: o primeiro build do CI do monorepo morreu com `rust-src` ausente em
+	# `nightly-x86_64-unknown-linux-gnu`, que é justamente o rolante. Localmente passava porque a
+	# nightly rolante desta máquina tinha o componente instalado de antes — o tipo de diferença que
+	# só aparece num runner limpo.
+	#
+	# Sem o `+nightly`, o rustup resolve pelo `rust-toolchain.toml`, que declara o canal datado, o
+	# target `wasm32-unknown-unknown` e o componente `rust-src` — os três de uma vez.
+	cargo build --release --target wasm32-unknown-unknown \
 		-Z build-std=panic_abort,std -Z build-std-features=${STD_FEATURES} \
 		--no-default-features --features "$FEATURES"
 )
