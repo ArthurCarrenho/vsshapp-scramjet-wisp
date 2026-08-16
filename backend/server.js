@@ -13,10 +13,13 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { server as wisp, logging } from '@mercuryworkshop/wisp-js/server';
 import { aplicarPolitica } from './rede.js';
+import { conferirVersoes, resumirVersoes } from './versoes.js';
 
 const require = createRequire(import.meta.url);
+const RAIZ = path.dirname(fileURLToPath(import.meta.url));
 
 // Log estruturado em $VSSH_APP_DATA_DIR (~/.vssh-apps/<id>/data/app.log), do
 // colabhd/vssh-app-toolkit — instalado por npm, como as outras dependências deste backend, e não
@@ -233,8 +236,22 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
+// Que versões estão realmente em disco. Roda no boot, antes do listen, porque o valor disto é
+// aparecer no começo do log de um incidente — quem abre run.log depois de um problema vê a lista na
+// primeira tela, sem procurar.
+//
+// Nunca fatal: um relatório de versões que derrubasse o motor seria pior que a cegueira que ele
+// conserta. `conferirVersoes` já é escrito para não lançar, e o try aqui é a segunda rede.
+let VERSOES = { pacotes: [], divergentes: [], lockAusente: false };
+try {
+  VERSOES = conferirVersoes({ raiz: RAIZ });
+} catch (err) {
+  log('versoes-falhou', { message: err.message });
+}
+
 escutar(server).then(({ transporte, endereco }) => {
   console.log(`[scramjet-wisp] listening on ${endereco} (${transporte})`);
+  for (const linha of resumirVersoes(VERSOES)) console.log(`[scramjet-wisp]   ${linha}`);
   log('startup', {
     transporte,
     endereco,
@@ -243,7 +260,25 @@ escutar(server).then(({ transporte, endereco }) => {
     routes: STATIC_ROUTES.map(r => r.prefix),
     degraded: MISSING_ESSENTIAL.length > 0,
     missing: MISSING.map(m => m.pkg),
+    // Objeto plano nome->versão: é o formato que se quer diffar entre dois boots.
+    versoes: Object.fromEntries(VERSOES.pacotes.map(p => [p.nome, p.instalado])),
+    versoesDivergentes: VERSOES.divergentes.map(p => ({ pacote: p.nome, instalado: p.instalado, lockfile: p.declarado })),
   });
+
+  // Divergência não impede navegar, então não vira 503 — mas vai para stderr, em uma linha que
+  // nomeia os pacotes. Foi a ausência EXATA desta linha que deixou o alpha.4 rodando por seis
+  // releases: o motor funcionava, ninguém tinha motivo para desconfiar, e a única pista era um
+  // stack trace com números de linha de outra versão.
+  if (VERSOES.divergentes.length) {
+    console.error(
+      `[scramjet-wisp] ATENÇÃO: ${VERSOES.divergentes.length} dependência(s) fora do lockfile — ` +
+      VERSOES.divergentes.map(p => `${p.nome} ${p.instalado ?? 'AUSENTE'} (lockfile pede ${p.declarado ?? '?'})`).join('; ') +
+      `. Rode o installCommand do manifesto: cd backend && npm ci --omit=dev`
+    );
+  }
+  if (VERSOES.lockAusente) {
+    console.error('[scramjet-wisp] package-lock.json não encontrado — as versões acima não puderam ser conferidas.');
+  }
   if (MISSING_ESSENTIAL.length) {
     console.error(
       `[scramjet-wisp] DEGRADADO: ${MISSING_ESSENTIAL.map(m => m.pkg).join(', ')} ` +

@@ -45,7 +45,7 @@ jobs:
   publish:
     name: Publish scramjet-wisp → repo
     needs: smoke
-    uses: colabhd/vssh-app-toolkit/.github/workflows/_publish-app-reusable.yml@v4
+    uses: colabhd/vssh-app-toolkit/.github/workflows/_publish-app-reusable.yml@v5
     with:
       app_dir: "."
       repo_api: ${{ vars.VSSH_REPO_API || 'https://vssh-repo.colabh.org' }}
