@@ -15,6 +15,6 @@
     "@mercuryworkshop/scramjet": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-2.0.67-alpha.10.tgz",
     "@mercuryworkshop/scramjet-controller": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-controller-0.0.21.tgz",
     "@mercuryworkshop/scramjet-utils": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-utils-0.0.9.tgz",
-    "@mercuryworkshop/libcurl-transport": "https://github.com/ArthurCarrenho/vssh-libcurl-transport/releases/download/latest/mercuryworkshop-libcurl-transport-2.0.5.tgz"
+    "@mercuryworkshop/libcurl-transport": "https://github.com/ArthurCarrenho/vssh-libcurl-transport/releases/download/latest/mercuryworkshop-libcurl-transport-2.0.6.tgz"
   }
 }
