@@ -1,0 +1,290 @@
+name: Motor
+
+# Constrói as fontes de `engines/`. Substitui os três CIs que viviam em três repositórios separados
+# (os workflows que ficaram dentro de `engines/` estão INERTES — o GitHub só lê os da raiz).
+#
+# Três coisas que nenhum dos três fazia, e que só passam a ser possíveis com tudo num repo:
+#
+#   - **filtro por caminho**: mexer em `backend/server.js` não paga os 4-5 min do scramjet nem os
+#     7 min do libcurl.js;
+#   - **cache por conteúdo**: o `build.sh` do rewriter já calculava um hash dos fontes e pulava o
+#     build, mas o `out/` nascia vazio a cada job, então o guard só valia localmente. Aqui a chave
+#     inclui os fontes E as versões das ferramentas — sem isso o cache serviria um `.wasm`
+#     compilado por outro compilador, e viraria um ocultador de não-determinismo;
+#   - **conferir o contrato com quem consome**: os 7 arquivos que `backend/server.js` serve.
+#
+# ⚠ Nada aqui é consumido por produção ainda. O backend continua instalando das releases com tag
+# imutável; a troca é a fase 5 do plano.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: motor-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+jobs:
+  # ── O que mudou ────────────────────────────────────────────────────────────────────────────
+  #
+  # Feito com `git diff` e não com uma action de filtro de caminho: são doze linhas de shell, e o
+  # caminho que produz o artefato publicado é o último lugar onde vale a pena ter dependência de
+  # terceiro. Na dúvida (branch nova, força bruta, `workflow_dispatch`) constrói tudo — errar
+  # construindo demais custa minutos; errar construindo de menos publica um motor velho.
+  mudou:
+    name: O que mudou
+    runs-on: ubuntu-latest
+    outputs:
+      scramjet: ${{ steps.d.outputs.scramjet }}
+      transport: ${{ steps.d.outputs.transport }}
+      libcurljs: ${{ steps.d.outputs.libcurljs }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - id: d
+        run: |
+          set -euo pipefail
+          BASE=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          fi
+          # Zeros = branch nova; vazio = workflow_dispatch. Nos dois casos, tudo.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "sem base comparável — construindo tudo"
+            printf 'scramjet=true\ntransport=true\nlibcurljs=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          MUD="$(git diff --name-only "$BASE" "${{ github.sha }}")"
+          echo "$MUD" | sed 's/^/  /'
+          casa() { echo "$MUD" | grep -q "^$1" && echo true || echo false; }
+          {
+            echo "scramjet=$(casa engines/scramjet/)"
+            echo "transport=$(casa engines/libcurl-transport/)"
+            echo "libcurljs=$(casa engines/libcurl.js/)"
+          } >> "$GITHUB_OUTPUT"
+
+  # ── Scramjet: core, controller e utils ─────────────────────────────────────────────────────
+  scramjet:
+    name: Scramjet
+    needs: mudou
+    if: needs.mudou.outputs.scramjet == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engines/scramjet
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      # pnpm por corepack, e não por `pnpm/action-setup`: a versão já está declarada em
+      # `packageManager` do package.json, então a action só repetia o que o repositório diz.
+      - name: pnpm
+        run: |
+          corepack enable
+          corepack prepare --activate
+          pnpm --version
+
+      - name: Cache do store do pnpm
+        uses: actions/cache@v5
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('engines/scramjet/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      # ⚠ O `.wasm` é o passo caro (o pipeline de `wasm-opt` do modo RELEASE leva ~2 min sozinho) e
+      # o mais estável — muda só quando o Rust muda. A chave junta as duas metades que determinam o
+      # binário: os FONTES e as FERRAMENTAS. Faltando a segunda, um bump de toolchain reaproveitaria
+      # um wasm compilado pela versão anterior, em silêncio.
+      - name: Cache do wasm do rewriter
+        id: cache-wasm
+        uses: actions/cache@v5
+        with:
+          path: |
+            engines/scramjet/packages/core/dist/scramjet.wasm
+            engines/scramjet/packages/core/rewriter/wasm/out
+          key: >-
+            wasm-${{ runner.os }}-${{ hashFiles(
+              'engines/scramjet/packages/core/rewriter/**/*.rs',
+              'engines/scramjet/packages/core/rewriter/**/Cargo.toml',
+              'engines/scramjet/packages/core/rewriter/Cargo.lock',
+              'engines/scramjet/packages/core/rewriter/rust-toolchain.toml',
+              'engines/scramjet/packages/core/rewriter/wasm/build.sh',
+              'engines/scramjet/.github/actions/setup-rewriter-toolchain/action.yml'
+            ) }}
+
+      - name: Toolchain do rewriter
+        if: steps.cache-wasm.outputs.cache-hit != 'true'
+        uses: ./engines/scramjet/.github/actions/setup-rewriter-toolchain
+        with:
+          rewriter-path: engines/scramjet/packages/core/rewriter
+
+      - run: pnpm install --frozen-lockfile
+
+      # `pnpm pack` de core PRIMEIRO, e não por gosto: `rspack.config.ts` lê
+      # `packages/core/dist/scramjet.wasm` no CARREGAMENTO da config e o converte em base64. Ou
+      # seja, o build de controller e utils falha se o core não tiver rodado antes. Hoje isso só
+      # funciona pela ordem literal dos passos — está escrito aqui para não ser reordenado por
+      # engano.
+      - name: Empacotar core (constrói o wasm, se o cache não pegou)
+        run: pnpm pack
+        working-directory: engines/scramjet/packages/core
+
+      - name: Empacotar controller
+        run: pnpm pack
+        working-directory: engines/scramjet/packages/controller
+
+      - name: Empacotar utils
+        run: pnpm pack
+        working-directory: engines/scramjet/packages/utils
+
+      # `bootstrap` e `create-proxy-app` NÃO são empacotados. O CI antigo subia artefato dos dois, e
+      # `backend/server.js` serve quatro pacotes — nenhum deles é esses.
+
+      # Monta `motor/` e **confere o contrato com o backend**: os arquivos que `server.js` serve
+      # existem e não estão vazios. O script recusa montar se faltar algum — ver o cabeçalho dele
+      # para o porquê de a conferência morar ali e não num job próprio.
+      - name: Montar os pacotes, e conferir o contrato
+        run: bash ../../scripts/montar-motor.sh scramjet
+
+      - uses: actions/upload-artifact@v6
+        with:
+          # ⚠ caminho a partir da RAIZ do workspace: `upload-artifact` ignora o
+          # `defaults.run.working-directory`.
+          name: motor-scramjet
+          path: engines/scramjet/motor/
+          if-no-files-found: error
+
+  # ── libcurl-transport ──────────────────────────────────────────────────────────────────────
+  transport:
+    name: libcurl-transport
+    needs: mudou
+    if: needs.mudou.outputs.transport == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engines/libcurl-transport
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: pnpm
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm pack
+
+      - name: Montar o pacote, e conferir o contrato
+        run: bash ../../scripts/montar-motor.sh transport
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: motor-transport
+          path: engines/libcurl-transport/motor/
+          if-no-files-found: error
+
+      # Nenhum `pnpm pack` de `proxy-bootstrap` nem de `create-proxy-app` em lugar nenhum deste
+      # arquivo: o CI antigo subia artefato dos dois, e `backend/server.js` serve QUATRO pacotes —
+      # nenhum deles é esses.
+
+  # ── libcurl.js ─────────────────────────────────────────────────────────────────────────────
+  #
+  # Não produz nada que produção consuma: o que o transport usa é o `lib/libcurl_full.mjs`
+  # COMMITADO. Este job existe para dizer se aquele blob ainda corresponde ao fonte — ver o
+  # comentário do passo de comparação, que explica por que ele avisa e não reprova.
+  libcurljs:
+    name: libcurl.js (deriva do blob)
+    needs: mudou
+    if: needs.mudou.outputs.libcurljs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Dependências de sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make cmake autoconf automake libtool pkg-config wget xxd jq
+
+      # As seis bibliotecas C (curl, mbedtls, brotli, nghttp2, zlib, cJSON) são compiladas com
+      # emscripten, DUAS vezes (`release` e `single_file`). Sem cache isso é o build mais caro dos
+      # três: 7 minutos, a cada push, sempre. A chave são os scripts que fixam as versões das libs
+      # mais a versão do emsdk — nada mais muda o conteúdo de `client/build/`.
+      - name: Cache das bibliotecas C
+        uses: actions/cache@v5
+        with:
+          path: engines/libcurl.js/client/build
+          key: >-
+            libcurl-c-${{ runner.os }}-${{ hashFiles(
+              'engines/libcurl.js/client/tools/*.sh',
+              'engines/libcurl.js/client/.emsdk-version'
+            ) }}
+
+      - name: emscripten (versão de client/.emsdk-version)
+        run: |
+          set -euo pipefail
+          EMV="$(tr -d '[:space:]' < engines/libcurl.js/client/.emsdk-version)"
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git /opt/emsdk
+          /opt/emsdk/emsdk install "$EMV"
+          /opt/emsdk/emsdk activate "$EMV"
+          # shellcheck disable=SC1091
+          source /opt/emsdk/emsdk_env.sh
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          echo "$EMSDK" >> "$GITHUB_PATH"
+
+      - run: emcc --version | head -1
+
+      - name: Construir
+        run: ./build.sh all
+        working-directory: engines/libcurl.js/client
+
+      # ⚠ **Avisa, não reprova, e o motivo é concreto:** `client/tools/generate_cert.sh` baixa o CA
+      # bundle de `curl.se/ca/cacert.pem` SEMPRE ATUALIZADO, e ele vai dentro do `.wasm`. Fixá-lo
+      # compraria reprodutibilidade byte a byte ao preço de uma trust store envelhecendo — troca
+      # ruim para um proxy de navegação. Então uma diferença aqui pode ser só o CA, e um job que
+      # reprovasse por isso ficaria vermelho para sempre, por motivo errado.
+      #
+      # O que ele entrega é sinal: o tamanho da diferença, e o blob reconstruído como artefato para
+      # quem quiser comparar à mão. Uma diferença GRANDE, ou uma que apareça sem o libcurl.js ter
+      # mudado, é que merece olhar.
+      - name: O blob commitado ainda corresponde ao fonte?
+        run: |
+          NOVO=engines/libcurl.js/client/out/libcurl_full.mjs
+          VELHO=engines/libcurl-transport/lib/libcurl_full.mjs
+          a=$(stat -c%s "$VELHO"); b=$(stat -c%s "$NOVO")
+          echo "commitado:    $a bytes"
+          echo "reconstruído: $b bytes"
+          echo "delta:        $((b - a)) bytes"
+          if cmp -s "$VELHO" "$NOVO"; then
+            echo "idêntico — o CA bundle não mudou desde a última vendorização"
+          else
+            echo "::notice::o blob difere do fonte reconstruído ($((b - a)) bytes). Pode ser só o CA bundle, que flutua de propósito. Diferença grande, ou sem o libcurl.js ter mudado, merece olhar."
+          fi
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: libcurl-reconstruido
+          path: engines/libcurl.js/client/out/*
+
+  # Não há job `contrato` separado, e isso é decisão e não esquecimento. Um job assim precisaria de
+  # TODOS os pacotes construídos no mesmo run para ter o que conferir — e com filtro de caminho isso
+  # quase nunca acontece: mexer só no rewriter não reconstrói o transport. Ele passaria a vida
+  # pulado, que é a pior forma de um teste existir. A conferência mora dentro do
+  # `montar-motor.sh`, onde cada build confere o que acabou de produzir, sempre.
