@@ -1,0 +1,69 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bench de conexões</title>
+<script src="/libcurl/index.js"></script>
+<script>
+// Mede o transporte real: LibcurlClient (WASM) -> wisp -> TCP local. Um cliente por rodada, para
+// que o teto de conexões da rodada seja o único que valeu — trocar `connections` numa sessão viva
+// não é o que acontece em produção, onde o valor é fixado na construção.
+window.__bench = async function (cfg) {
+  const { total, cache, perHost, urls, rotulo } = cfg;
+
+  const client = new window.LibcurlTransport.LibcurlClient({
+    websocket: `ws://${location.host}/wisp/`,
+    connections: [total, cache, perHost],
+  });
+  await client.init();
+
+  // Uma requisição: TTFB é quando os cabeçalhos voltam, `fim` é quando o corpo acabou. Os dois
+  // importam por motivos diferentes — TTFB é o que a pessoa sente como "travou", vazão é o que o
+  // vídeo consome.
+  async function uma(u) {
+    const t0 = performance.now();
+    let bytes = 0;
+    try {
+      const r = await client.request(new URL(u), 'GET', null, [], undefined);
+      const ttfb = performance.now() - t0;
+      const b = r.body;
+      if (b && typeof b.getReader === 'function') {
+        const rd = b.getReader();
+        for (;;) {
+          const { done, value } = await rd.read();
+          if (done) break;
+          bytes += value.byteLength ?? value.length ?? 0;
+        }
+      } else if (b instanceof ArrayBuffer) bytes = b.byteLength;
+      else if (b && b.byteLength != null) bytes = b.byteLength;
+      else if (typeof b === 'string') bytes = b.length;
+      return { ok: r.status === 200, ttfb, fim: performance.now() - t0, bytes };
+    } catch (e) {
+      return { ok: false, erro: String(e && e.message || e), ttfb: performance.now() - t0, fim: performance.now() - t0, bytes: 0 };
+    }
+  }
+
+  const t0 = performance.now();
+  const res = await Promise.all(urls.map(uma));
+  const parede = performance.now() - t0;
+
+  try { client.session?.close?.(); } catch {}
+
+  const ok = res.filter((r) => r.ok);
+  const ttfbs = ok.map((r) => r.ttfb).sort((a, b) => a - b);
+  const pct = (p) => (ttfbs.length ? ttfbs[Math.min(ttfbs.length - 1, Math.floor(ttfbs.length * p))] : NaN);
+  const bytes = ok.reduce((s, r) => s + r.bytes, 0);
+
+  return {
+    rotulo, total, perHost,
+    pedidos: urls.length,
+    ok: ok.length,
+    falhas: res.length - ok.length,
+    erroExemplo: (res.find((r) => !r.ok) || {}).erro || null,
+    paredeMs: Math.round(parede),
+    ttfbMedianaMs: Math.round(pct(0.5)),
+    ttfbP95Ms: Math.round(pct(0.95)),
+    mbps: +(bytes * 8 / 1e6 / (parede / 1000)).toFixed(2),
+    mbTotal: +(bytes / 1e6).toFixed(2),
+  };
+};
+</script>
+<body>bench pronto</body>

@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>suíte do fork, runner próprio</title>
+<script>
+// Mesmo papel do client/tests/index.html do fork, com uma diferença: aqui se ESPERA a promise do
+// `load_wasm` em vez de depender do evento `libcurl_load` disparado no document. Com o index.html
+// original os nove testes estouram os 30 s nos DOIS builds (publicado e patchado), então o
+// travamento é do runner e não diz nada sobre o patch — mas os scripts de teste em si são bons e
+// cobrem o que a bancada de conexões não cobre: POST, redirect, hash de download, sessões múltiplas,
+// TLS socket cru e websocket.
+const versao = new URLSearchParams(location.search).get('v') || 'antigo';
+document.write(`<script src="/lc/${versao}/libcurl.js"><\/script>`);
+</script>
+<script>
+function assert(condition, message) {
+  if (!condition) throw new Error(message || "Assertion failed");
+}
+window.__suite = async function (script) {
+  const v = new URLSearchParams(location.search).get('v') || 'antigo';
+  await libcurl.load_wasm(`/lc/${v}/libcurl.wasm`);
+  libcurl.set_websocket(`ws://${location.host}/wisp/`);
+  const fonte = await (await fetch(`/suite/${script}`)).text();
+  // Os scripts do fork são `async function test() { ... }` soltos — o mesmo eval que o runner
+  // original faz. Fica no escopo global para que `test` seja visível na chamada seguinte.
+  (0, eval)(fonte);
+  const t0 = performance.now();
+  await test();
+  return Math.round(performance.now() - t0);
+};
+</script>
+<body>suite pronta</body>

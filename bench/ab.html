@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A/B multiplexação</title>
+<script>
+// O script do libcurl é escolhido pela query (?v=novo|antigo), para que a MESMA página meça as
+// duas versões — o A/B tem que diferir só no wasm.
+const versao = new URLSearchParams(location.search).get('v') || 'antigo';
+document.write(`<script src="/lc/${versao}/libcurl.js"><\/script>`);
+</script>
+<script>
+window.__ab = async function ({ urls, perHost }) {
+  // `libcurl.js` (avulso) NÃO carrega o wasm sozinho — é preciso chamar `load_wasm` com a URL, e
+  // ela devolve uma promise que resolve quando está pronto. Só o `libcurl_full.js` traz o wasm
+  // embutido. Esperar por `ready`/`onload` sem isso trava para sempre: foi o que pendurou as duas
+  // primeiras versões deste teste, e o erro que aparecia depois era "wasm not loaded".
+  await libcurl.load_wasm(`/lc/${new URLSearchParams(location.search).get('v') || 'antigo'}/libcurl.wasm`);
+  libcurl.set_websocket(`ws://${location.host}/wisp/`);
+
+  // Diagnóstico do erro 77 (CURLE_SSL_CACERT_BADFILE): o bundle de CA é gerado em C, em memória,
+  // no init. Se ele sair vazio ou truncado, todo handshake falha e o número de conexões dispara
+  // (nenhuma pode ser reusada). Comparar isto entre as versões separa "meu patch quebrou algo" de
+  // "este build gerou o bundle errado".
+  let diag = {};
+  try {
+    const pem = libcurl.get_cacert ? libcurl.get_cacert() : null;
+    diag = {
+      pemTamanho: pem ? pem.length : -1,
+      pemComeco: pem ? String(pem).slice(0, 28) : null,
+      pemCerts: pem ? (String(pem).match(/BEGIN CERTIFICATE/g) || []).length : -1,
+    };
+  } catch (e) { diag = { erroCacert: String((e && e.message) || e).slice(0, 60) }; }
+
+  const sessao = new libcurl.HTTPSession({});
+  sessao.set_connections(64, 48, perHost);
+
+  const t0 = performance.now();
+  const res = await Promise.all(urls.map(async (u) => {
+    try {
+      const r = await sessao.fetch(u);
+      const b = await r.arrayBuffer();
+      return { ok: r.status === 200, bytes: b.byteLength };
+    } catch (e) { return { ok: false, erro: String((e && e.message) || e) }; }
+  }));
+  const parede = performance.now() - t0;
+  try { sessao.close(); } catch {}
+
+  return {
+    diag,
+    versaoLib: libcurl.version ? libcurl.version.lib : '?',
+    perHost,
+    ok: res.filter((r) => r.ok).length,
+    total: urls.length,
+    paredeMs: Math.round(parede),
+    erro: (res.find((r) => !r.ok) || {}).erro || null,
+  };
+};
+</script>
+<body>ab pronto</body>

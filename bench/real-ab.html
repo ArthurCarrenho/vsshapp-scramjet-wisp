@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A/B em sites reais</title>
+<script>
+// A versão do libcurl vem pela query, para que a MESMA página meça as duas — o A/B tem que diferir
+// só no wasm. Mede direto no libcurl.js cru, sem o libcurl-transport no meio: o que está em jogo é
+// quantas conexões TCP o WASM abre, e a camada de cookies/headers acima só adiciona ruído.
+const versao = new URLSearchParams(location.search).get('v') || 'antigo';
+document.write(`<script src="/lc/${versao}/libcurl.js"><\/script>`);
+</script>
+<script>
+window.__real = async function ({ urls, total, cache, perHost }) {
+  // `libcurl.js` avulso não carrega o wasm sozinho — sem `load_wasm` a espera por `ready` nunca
+  // resolve. Ver a armadilha registrada no handoff.
+  await libcurl.load_wasm(`/lc/${new URLSearchParams(location.search).get('v') || 'antigo'}/libcurl.wasm`);
+  libcurl.set_websocket(`ws://${location.host}/wisp/`);
+
+  const sessao = new libcurl.HTTPSession({});
+  sessao.set_connections(total, cache, perHost);
+
+  async function uma(u) {
+    const t0 = performance.now();
+    try {
+      const r = await sessao.fetch(u);
+      const ttfb = performance.now() - t0;
+      const b = await r.arrayBuffer();
+      return { ok: r.status >= 200 && r.status < 400, ttfb, bytes: b.byteLength };
+    } catch (e) {
+      return { ok: false, ttfb: performance.now() - t0, bytes: 0, erro: String((e && e.message) || e) };
+    }
+  }
+
+  const t0 = performance.now();
+  const res = await Promise.all(urls.map(uma));
+  const parede = performance.now() - t0;
+  try { sessao.close(); } catch {}
+
+  const ok = res.filter((r) => r.ok);
+  const ttfbs = ok.map((r) => r.ttfb).sort((a, b) => a - b);
+  const pct = (p) => (ttfbs.length ? ttfbs[Math.min(ttfbs.length - 1, Math.floor(ttfbs.length * p))] : NaN);
+
+  // Erros AGRUPADOS por texto, não só o primeiro. Em produção apareceu uma enxurrada de
+  // "error code 35: SSL connect error" que não existia antes; contar quantos e de que tipo é o que
+  // separa "um host chato" de "regressão do transporte".
+  const porErro = {};
+  for (const r of res) if (!r.ok && r.erro) porErro[String(r.erro).slice(0, 60)] = (porErro[String(r.erro).slice(0, 60)] || 0) + 1;
+
+  return {
+    pedidos: urls.length,
+    ok: ok.length,
+    falhas: res.length - ok.length,
+    porErro,
+    erroExemplo: (res.find((r) => !r.ok) || {}).erro || null,
+    paredeMs: Math.round(parede),
+    ttfbMedianaMs: Math.round(pct(0.5)),
+    ttfbP95Ms: Math.round(pct(0.95)),
+    mbTotal: +(ok.reduce((s, r) => s + r.bytes, 0) / 1e6).toFixed(2),
+  };
+};
+</script>
+<body>real-ab pronto</body>
