@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,15 +18,14 @@ import {
 } from "@rspack/core";
 import { RsdoctorRspackPlugin } from "@rsdoctor/rspack-plugin";
 import { TsCheckerRspackPlugin } from "ts-checker-rspack-plugin";
-if (!process.env.CI) {
-	try {
-		writeFileSync(
-			".git/hooks/pre-commit",
-			"pnpm format\ngit update-index --again"
-		);
-		chmodSync(".git/hooks/pre-commit", 0o755);
-	} catch {}
-}
+// vssh fork: aqui havia um bloco que escrevia `.git/hooks/pre-commit` toda vez que esta config era
+// CARREGADA — não construída, carregada. Ele saiu, e não é preferência: o hook que ele escrevia
+// nasce quebrado. Não tem shebang, e chama um `pnpm format` que a raiz do workspace não define (o
+// script `format` só existe em `packages/core`). O resultado é um hook que sai com erro e bloqueia
+// todo commit, recriado a cada `pnpm dev`. Renomeá-lo à mão resolvia até o próximo build.
+//
+// Neste repositório há uma razão a mais: o caminho é relativo ao cwd, então rodar rspack da raiz
+// do monorepo escreveria o hook do monorepo inteiro.
 
 function nodeExternals(
 	{ context, request }: ExternalItemFunctionData,
