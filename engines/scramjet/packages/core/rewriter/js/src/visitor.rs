@@ -367,6 +367,32 @@ where
 					}
 				}
 			}
+			// vssh fork: `const [a = location] = x;` — este braço NÃO EXISTIA, e o `_ => {}` abaixo
+			// engolia todo ArrayPattern em silêncio. Consequência medida: `location` dentro de um
+			// padrão de array saía do rewriter **sem `$wrap`**, ou seja, o script lia a origem REAL
+			// do servidor em vez da do site proxiado. Pega função, arrow, método de objeto, método de
+			// classe, `catch ([e = location])`, declaração solta e aninhamento — tudo que passa por
+			// aqui. `{a = location}` sempre funcionou, e é essa assimetria que denuncia o buraco:
+			// não havia razão para as duas formas divergirem.
+			//
+			// Só vale com `destructure_rewrites` LIGADO, que é o estado de produção
+			// (`packages/core/src/index.ts`). Com o flag desligado o visitor delega ao `walk` padrão
+			// do oxc, que desce nos elementos sozinho — por isso o defeito não aparecia nos testes
+			// do Rust nem na bancada, que herdaram o `false` do `Config::test`.
+			BindingPatternKind::ArrayPattern(p) => {
+				// `elements` é `Vec<Option<BindingPattern>>`: o `None` é o buraco de `[, a] = x`.
+				for elem in p.elements.iter().flatten() {
+					self.recurse_binding_pattern(elem, restids, no_shadow, location_assigned);
+				}
+				// O rest de um ARRAY não entra em `restids`, e a diferença é real: `restids` existe
+				// para o `$clean` limpar as propriedades reescritas que um rest de OBJETO recolhe
+				// (`const {...r} = x` traz `$sj_location`). Um rest de array recolhe valores, não
+				// propriedades — não há o que limpar. O que ele ainda precisa é do tratamento de
+				// sombra, e recursar dá isso de graça pelo braço BindingIdentifier.
+				if let Some(r) = &p.rest {
+					self.recurse_binding_pattern(&r.argument, restids, no_shadow, location_assigned);
+				}
+			}
 			_ => {}
 		}
 	}

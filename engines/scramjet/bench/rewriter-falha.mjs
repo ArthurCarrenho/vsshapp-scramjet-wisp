@@ -42,7 +42,12 @@ const FLAGS = {
 	captureErrors: false,
 	scramitize: false,
 	disableComputedWrap: false,
-	destructureRewrites: false,
+	// `true` porque é o que `packages/core/src/index.ts` põe no `defaultConfig` — ou seja, o caminho
+	// que produção realmente percorre. Estava `false`, herdado do `Config::test` do Rust, e não era
+	// detalhe: com o flag desligado o visitor delega ao `walk` padrão do oxc, que é um percurso
+	// DIFERENTE. Foi assim que o buraco do ArrayPattern (`function f([x = location]) {}` saindo sem
+	// `$wrap`) sobreviveu a uma bancada e a uma suíte de testes — as duas mediam o outro caminho.
+	destructureRewrites: true,
 };
 
 // O `codec.encode` do scramjet: recebe uma URL, devolve a reescrita. É uma função JS chamada de

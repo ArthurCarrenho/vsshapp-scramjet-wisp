@@ -368,6 +368,66 @@ mod tests {
 			.expect("the rewriter has to survive a url rewriter failure");
 	}
 
+	/// Reescreve e devolve o JS como texto, para as asserções de conteúdo.
+	fn reescrever(js: &str, destructure: bool) -> String {
+		let alloc = Allocator::default();
+		let rewriter = Rewriter::new();
+		let mut f = flags(false);
+		f.destructure_rewrites = destructure;
+
+		let out = rewriter
+			.rewrite(&alloc, js, config(), f, &UrlOk)
+			.expect("fonte válida tem que reescrever");
+
+		String::from_utf8(out.js.to_vec()).expect("saída é utf-8")
+	}
+
+	/// `location` dentro de um padrão de ARRAY saía sem `$wrap`, e sair sem wrap significa que o
+	/// script lê a origem real do servidor em vez da do site proxiado — o mesmo furo de isolamento
+	/// que `06e978c0` fechou em quatro outros lugares.
+	///
+	/// A causa era um `_ => {}` em `recurse_binding_pattern`: `ObjectPattern` tinha braço,
+	/// `ArrayPattern` caía no catch-all e nunca era percorrido. O `coverage_checked` do próprio
+	/// rewriter apontava para cá com dois avisos (`Function.params` e
+	/// `ArrowFunctionExpression.params`), que sumiram com o conserto.
+	///
+    /// ⚠ Só reproduz com `destructure_rewrites` LIGADO — que é o estado de PRODUÇÃO
+	/// (`packages/core/src/index.ts`). O `flags()` destes testes usa `false`, herdado do upstream,
+	/// e é por isso que nada aqui pegava o defeito: os testes exercitavam o caminho que produção
+	/// não usa.
+	#[test]
+	fn location_em_padrao_de_array_nao_escapa_do_wrap() {
+		let casos = [
+			"function f([x = location]) {}",
+			"const f = ([x = location]) => {};",
+			"const o = { m([x = location]) {} };",
+			"class C { m([x = location]) {} }",
+			"function f([[x = location]]) {}",
+			"function f([x = top]) {}",
+			"function f([x = parent]) {}",
+			"let [x = location] = a;",
+			"try {} catch ([e = location]) {}",
+		];
+
+		for js in casos {
+			let saida = reescrever(js, true);
+			assert!(
+				saida.contains("$wrap("),
+				"não embrulhou o global em `{js}`; saiu `{saida}`"
+			);
+		}
+	}
+
+	/// A contraprova: o padrão de OBJETO sempre funcionou. Se um dia esta afirmação cair junto com
+	/// a de cima, o defeito é outro — e é essa assimetria que denunciou o buraco.
+	#[test]
+	fn location_em_padrao_de_objeto_continua_embrulhado() {
+		for js in ["function f({x = location}) {}", "const f = ({x = location}) => {};"] {
+			let saida = reescrever(js, true);
+			assert!(saida.contains("$wrap("), "regressão em `{js}`; saiu `{saida}`");
+		}
+	}
+
 	#[test]
 	fn only_invalid_source_is_the_sources_fault() {
 		assert!(RewriterError::InvalidSource(String::new()).is_source_fault());
