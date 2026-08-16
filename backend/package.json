@@ -12,9 +12,9 @@
   "dependencies": {
     "vssh-app-toolkit": "github:colabhd/vssh-app-toolkit#v4",
     "@mercuryworkshop/wisp-js": "^0.4.1",
-    "@mercuryworkshop/scramjet": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-2.0.67-alpha.13.tgz",
-    "@mercuryworkshop/scramjet-controller": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-controller-0.0.24.tgz",
-    "@mercuryworkshop/scramjet-utils": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-utils-0.0.12.tgz",
-    "@mercuryworkshop/libcurl-transport": "https://github.com/ArthurCarrenho/vssh-libcurl-transport/releases/download/latest/mercuryworkshop-libcurl-transport-2.0.6.tgz"
+    "@mercuryworkshop/scramjet": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/engine-24-0c9a1ec/mercuryworkshop-scramjet-2.0.67-alpha.14.tgz",
+    "@mercuryworkshop/scramjet-controller": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/engine-24-0c9a1ec/mercuryworkshop-scramjet-controller-0.0.25.tgz",
+    "@mercuryworkshop/scramjet-utils": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/engine-24-0c9a1ec/mercuryworkshop-scramjet-utils-0.0.13.tgz",
+    "@mercuryworkshop/libcurl-transport": "https://github.com/ArthurCarrenho/vssh-libcurl-transport/releases/download/transport-6-af6da67/mercuryworkshop-libcurl-transport-2.0.6.tgz"
   }
 }
