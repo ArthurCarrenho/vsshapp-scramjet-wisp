@@ -12,9 +12,9 @@
   "dependencies": {
     "vssh-app-toolkit": "github:colabhd/vssh-app-toolkit#v4",
     "@mercuryworkshop/wisp-js": "^0.4.1",
-    "@mercuryworkshop/scramjet": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-2.0.67-alpha.11.tgz",
-    "@mercuryworkshop/scramjet-controller": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-controller-0.0.22.tgz",
-    "@mercuryworkshop/scramjet-utils": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-utils-0.0.10.tgz",
+    "@mercuryworkshop/scramjet": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-2.0.67-alpha.12.tgz",
+    "@mercuryworkshop/scramjet-controller": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-controller-0.0.23.tgz",
+    "@mercuryworkshop/scramjet-utils": "https://github.com/ArthurCarrenho/vssh-scramjet/releases/download/latest/mercuryworkshop-scramjet-utils-0.0.11.tgz",
     "@mercuryworkshop/libcurl-transport": "https://github.com/ArthurCarrenho/vssh-libcurl-transport/releases/download/latest/mercuryworkshop-libcurl-transport-2.0.6.tgz"
   }
 }
