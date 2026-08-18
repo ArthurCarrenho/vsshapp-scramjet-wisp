@@ -282,4 +282,42 @@ export default [
 			assertEqual(n, 1, "deduped with identical options");
 		`,
 	}),
+	basicTest({
+		// `addEventListener(...)` solto e `window.addEventListener(...)` são a MESMA operação: a
+		// WebIDL manda tratar `this` nulo ou indefinido como o objeto global. Um registro que trate
+		// as duas como alvos distintos guarda o embrulho num balde e procura no outro, e aí a
+		// remoção não acha o que traduzir — o ouvinte fica registrado para sempre.
+		//
+		// A chamada solta é a forma mais comum de escutar `message`, e não havia teste cruzando as
+		// duas: foi por essa fresta que passou um `TypeError` levantado dentro do
+		// `addEventListener` do site, que derrubou treze testes de `postmessage` de uma vez.
+		name: "events-chamada-solta-e-window-sao-o-mesmo-alvo",
+		js: `
+			let n = 0;
+			const fn = () => n++;
+			addEventListener("adversarial-solto", fn);
+			window.dispatchEvent(new Event("adversarial-solto"));
+			assertEqual(n, 1, "a chamada solta registra no global");
+			window.removeEventListener("adversarial-solto", fn);
+			window.dispatchEvent(new Event("adversarial-solto"));
+			assertEqual(n, 1, "remover por window desfaz o que a chamada solta registrou");
+
+			let m = 0;
+			const gn = () => m++;
+			window.addEventListener("adversarial-por-window", gn);
+			dispatchEvent(new Event("adversarial-por-window"));
+			assertEqual(m, 1, "o despacho solto alcança o que window registrou");
+			removeEventListener("adversarial-por-window", gn);
+			window.dispatchEvent(new Event("adversarial-por-window"));
+			assertEqual(m, 1, "a remoção solta desfaz o que window registrou");
+
+			let d = 0;
+			const dn = () => d++;
+			addEventListener("adversarial-solto-dedup", dn);
+			window.addEventListener("adversarial-solto-dedup", dn);
+			window.dispatchEvent(new Event("adversarial-solto-dedup"));
+			window.removeEventListener("adversarial-solto-dedup", dn);
+			assertEqual(d, 1, "as duas formas são um registro só, e a plataforma deduplica");
+		`,
+	}),
 ];
