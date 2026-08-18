@@ -36,7 +36,19 @@ export const defaultConfig: ScramjetConfig = {
 		disableComputedWrap: false,
 		rewriterLogs: false,
 		captureErrors: false,
-		cleanErrors: false,
+		// vssh fork: LIGADA. Código anti-bot lê pilha de erro, e sem isto a pilha entrega o
+		// ambiente inteiro: host do proxy, prefixo do motor e a URL de destino escapada dentro do
+		// caminho. Um único carregamento do reCAPTCHA produz 54 `new Error()` que o próprio widget
+		// captura e inspeciona (ver `bench/captcha-erros.mjs`) — cada um deles lia essa assinatura.
+		//
+		// Medido com `bench/pilha-vaza.mjs`: 3 de 3 formas de um site ler a própria pilha
+		// denunciavam o proxy; com a flag ligada, 0 de 3 — a pilha sai igual à de um navegador sem
+		// proxy nenhum.
+		//
+		// ⚠ Ela ficou anos sem efeito: `client.Trap` desiste quando a propriedade não existe, e
+		// `Error.prepareStackTrace` NÃO existe no Chromium até alguém defini-la. Ligar a flag antes
+		// do conserto em `client/shared/error.ts` não mudava nada.
+		cleanErrors: true,
 		scramitize: false,
 		sourcemaps: true,
 		destructureRewrites: true,
@@ -60,6 +72,10 @@ export const defaultConfigDev: ScramjetConfig = {
 		...defaultConfig.flags,
 		rewriterLogs: false,
 		captureErrors: true,
+		// Fica DESLIGADA no devserver de propósito: `debugTrampolines` salva e restaura
+		// `Error.prepareStackTrace` em volta de cada trap, e o `set` que o cleanErrors instala
+		// ignora justamente esse tipo de escrita — as duas juntas deixariam o trampolim sem o
+		// formatador dele. Aqui `debugSourceURL` já faz a pilha apontar para a URL lógica.
 		cleanErrors: false,
 		debugTrampolines: true,
 		debugSourceURL: true,
