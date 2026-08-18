@@ -938,7 +938,46 @@ export class Frame {
 		this.element.contentWindow?.location.reload();
 	}
 
+	// vssh fork: um documento SEM service worker controlando nunca vai funcionar, e falhava calado.
+	//
+	// O controlador de um documento é fixado no instante em que ele nasce: quem carrega antes de o
+	// service worker estar ativo fica sem controlador PARA SEMPRE — não existe recuperação, só
+	// recarregar. Isso acontece de verdade quando o portal restaura as abas da sessão anterior e
+	// navega os frames antes de o registro terminar.
+	//
+	// E o modo de falha é o pior possível: sem ninguém para interceptar, o `src` reescrito vira uma
+	// requisição de verdade para o próprio servidor do portal, que não tem rota para o prefixo do
+	// proxy e responde o catch-all — **200 OK com a SPA do portal inteira**. A aba do usuário exibe
+	// a tela de login do portal dentro dela e parece estar "carregando para sempre". Nada no
+	// console, nada de erro, e `getStatus()` do motor continua dizendo "connected".
+	//
+	// Medido ao vivo numa sessão real: duas abas, o MESMO controller, o mesmo prefixo — a que
+	// nasceu antes do service worker mostrava o portal por dentro (`document.title` =
+	// "VSSH-SSO — Portal de Acesso Remoto") e não estava na lista de clientes controlados; a aberta
+	// depois carregou o site em 1,3 s.
+	//
+	// Avisar não conserta a corrida — quem tem de esperar o controlador é quem navega o frame —
+	// mas troca uma tela parada e muda por uma linha que diz o que houve e o que fazer.
+	private avisouSemControlador = false;
+
 	go(url: string) {
+		if (
+			typeof navigator !== "undefined" &&
+			navigator.serviceWorker &&
+			!navigator.serviceWorker.controller &&
+			!this.avisouSemControlador
+		) {
+			this.avisouSemControlador = true;
+			console.error(
+				"[scramjet] Este documento não é controlado por um service worker, então NADA será " +
+					"reescrito: a navegação vai sair para o servidor real e a aba vai exibir o que ele " +
+					"responder (no portal, a própria SPA, com 200). Um documento que nasce sem " +
+					"controlador não passa a ser controlado depois — é preciso recarregá-lo. Espere " +
+					"`navigator.serviceWorker.controller` existir antes de navegar o frame.",
+				{ url, prefixo: this.prefix }
+			);
+		}
+
 		const encoded = rewriteUrl(url, this.context, {
 			//@ts-expect-error
 			origin: new URL(location.href),
