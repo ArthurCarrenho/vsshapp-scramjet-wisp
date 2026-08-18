@@ -243,18 +243,44 @@ export default function (client: ScramjetClient, self: Self) {
 		};
 	}
 
+	// ⚠ `addEventListener("message", h)` — solto, sem receptor — é a forma mais comum de escutar
+	// `message`, e nela `ctx.this` é `undefined`. A WebIDL manda tratar `this` nulo ou indefinido
+	// como o objeto global, e é por isso que a chamada solta funciona e registra na window.
+	//
+	// Enquanto o registro era um `Map` isso passava despercebido: `undefined` é chave válida, e
+	// todas as chamadas soltas dividiam um balde só. Num `WeakMap` a mesma chave levanta
+	// `TypeError: Invalid value used as weak map key` DENTRO do `addEventListener` do site — o
+	// site nem chega a registrar o ouvinte. Foi o que derrubou 13 testes de `postmessage`.
+	//
+	// Normalizar aqui também conserta um defeito que o `Map` escondia: `undefined` e `window` eram
+	// chaves DIFERENTES, então registrar solto e remover por `window.removeEventListener` não
+	// achava o embrulho para traduzir, e o ouvinte ficava registrado para sempre.
+	function alvoDoRegistro(receptor: any): object | AnyFunction | null {
+		if (receptor === null || receptor === undefined) return self;
+		if (typeof receptor === "object" || typeof receptor === "function")
+			return receptor;
+
+		// Primitivo: esta chamada vai levantar "Illegal invocation" na plataforma, que é o certo.
+		// Não há registro a fazer, e insistir no `WeakMap` levantaria o erro ERRADO, antes e no
+		// lugar daquele que o site deveria ver.
+		return null;
+	}
+
 	client.Proxy("EventTarget.prototype.addEventListener", {
 		apply(ctx) {
 			const origlistener = ctx.args[1] as any;
 			const alvo = comoFuncao(origlistener);
 			if (!alvo) return;
 
+			const alvoRegistro = alvoDoRegistro(ctx.this);
+			if (!alvoRegistro) return;
+
 			const tipo = ctx.args[0] as string;
 
-			let porTipo = client.eventcallbacks.get(ctx.this);
+			let porTipo = client.eventcallbacks.get(alvoRegistro);
 			if (!porTipo) {
 				porTipo = new _Map();
-				client.eventcallbacks.set(ctx.this, porTipo);
+				client.eventcallbacks.set(alvoRegistro, porTipo);
 			}
 			let porOuvinte = porTipo.get(tipo);
 			if (!porOuvinte) {
@@ -300,8 +326,13 @@ export default function (client: ScramjetClient, self: Self) {
 			// nada, e a entrada ficaria de pé para sempre.
 			const origlistener = ctx.args[1] as AnyFunction | object;
 
+			// Mesma normalização do registro, pela mesma razão: a remoção precisa cair no balde em
+			// que a adição escreveu, e a chamada solta chega aqui com `this` indefinido também.
+			const alvoRegistro = alvoDoRegistro(ctx.this);
+			if (!alvoRegistro) return;
+
 			const porOuvinte = client.eventcallbacks
-				.get(ctx.this)
+				.get(alvoRegistro)
 				?.get(ctx.args[0] as string);
 			if (!porOuvinte) return;
 
