@@ -972,51 +972,69 @@ export class Frame {
 	// "VSSH-SSO — Portal de Acesso Remoto") e não estava na lista de clientes controlados; a aberta
 	// depois carregou o site em 1,3 s.
 	//
-	// ⚠ **Controlador nulo NÃO quer dizer, sozinho, que se perdeu a corrida.** A primeira versão
-	// deste aviso dizia que um documento sem controlador nunca passa a ter um, e isso está errado:
-	// `clients.claim()` existe exatamente para assumir cliente não controlado, e o nosso service
-	// worker o chama a cada ativação. Durante um restart dele o controlador fica nulo por um
-	// instante e volta sozinho.
+	// ⚠ **`navigator.serviceWorker.controller` é o cliente ERRADO, e foi onde este aviso errou
+	// duas vezes.** Ele é o controlador DESTA página — o shell, que hospeda o controller. O
+	// documento do frame é outro cliente, com controlador próprio, e o que decide se ele vai ser
+	// interceptado é existir registro ATIVO cobrindo o prefixo no instante da navegação: um
+	// documento novo nasce controlado se houver quem o controle, mesmo que o shell não esteja.
 	//
-	// Visto num console real: o aviso saiu logo depois de "service worker activated", e a página
-	// abriu perfeitamente. Um aviso que grita no caso normal ensina a ignorá-lo, e aí ele não
-	// serve para o caso de verdade. Por isso agora se CONFIRMA antes de acusar — se o controlador
-	// aparecer dentro da janela, era a corrida normal de ativação e ninguém precisa saber.
+	// Os dois erros vieram daí. Primeiro o aviso disparava na janela de ativação e dizia que
+	// documento sem controlador nunca passa a ser controlado — `clients.claim()` existe justamente
+	// para isso, e o nosso service worker o chama a cada ativação. Depois, já com confirmação de
+	// 3 s, ele continuou gritando: num shell que ficou sem controlador o `controller` é nulo para
+	// sempre, enquanto os frames abrem normalmente. Visto num console real, nas duas versões, com
+	// a página carregando perfeitamente ao lado do erro.
 	//
-	// Avisar não conserta a corrida — quem tem de esperar o controlador é quem navega o frame —
-	// mas troca uma tela parada e muda por uma linha que diz o que houve e o que fazer.
+	// Um aviso que grita no caso normal ensina a ser ignorado, e aí não serve para o caso de
+	// verdade — que é a aba exibindo a SPA do portal por dentro, calada, com `getStatus()` ainda
+	// dizendo "connected".
+	//
+	// Avisar não conserta a corrida — quem tem de esperar o registro é quem navega o frame — mas
+	// troca uma tela parada e muda por uma linha que diz o que houve e o que fazer.
 	private avisouSemControlador = false;
 
-	// Quanto esperar antes de acusar. Cobre `skipWaiting()` + `clients.claim()` com folga; o que
-	// passar disso não é mais reassunção em curso.
+	// Reconfere depois disso antes de acusar: no primeiro boot o registro pode estar a caminho, e
+	// `skipWaiting()` + `clients.claim()` cabem folgados aqui.
 	private static readonly PRAZO_CONTROLADOR_MS = 3000;
+
+	/** Há service worker ATIVO cobrindo este prefixo? É o que decide se o frame será interceptado. */
+	private async temQuemIntercepte(): Promise<boolean> {
+		try {
+			const reg = await navigator.serviceWorker.getRegistration(this.prefix);
+
+			return !!reg?.active;
+		} catch {
+			// `getRegistration` lança em contexto não seguro, e ali não há o que diagnosticar.
+			return true;
+		}
+	}
 
 	private conferirControlador(url: string) {
 		if (this.avisouSemControlador) return;
 		if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
 
-		const sw = navigator.serviceWorker;
-		if (sw.controller) return;
-
 		// Marca já: entre esta navegação e a confirmação pode haver outras, e o aviso é um só.
 		this.avisouSemControlador = true;
 
-		setTimeout(() => {
-			// Reassumiu — era a janela de ativação, e não há nada a relatar.
-			if (sw.controller) return;
+		void (async () => {
+			if (await this.temQuemIntercepte()) return;
+
+			await new Promise((r) => setTimeout(r, Frame.PRAZO_CONTROLADOR_MS));
+
+			// Apareceu na janela — era o registro a caminho, e não há nada a relatar.
+			if (await this.temQuemIntercepte()) return;
 
 			console.error(
-				"[scramjet] Este documento continua sem service worker controlando, então NADA será " +
+				"[scramjet] Não há service worker ATIVO cobrindo este prefixo, então NADA será " +
 					"reescrito: a navegação sai para o servidor real e a aba exibe o que ele responder " +
-					"(no portal, a própria SPA, com 200). O controlador é fixado quando o documento " +
-					"nasce; só um `clients.claim()` de uma ativação nova o reassume, e não houve " +
-					"nenhuma nos últimos " +
+					"(no portal, a própria SPA, com 200). O documento do frame nasce controlado só se " +
+					"houver registro ativo no instante em que ele nasce, e não houve nos últimos " +
 					Frame.PRAZO_CONTROLADOR_MS / 1000 +
-					"s — aqui é preciso recarregar. Espere " +
-					"`navigator.serviceWorker.controller` existir antes de navegar o frame.",
+					"s. Espere `navigator.serviceWorker.getRegistration(prefixo)` trazer um `.active` " +
+					"antes de navegar o frame.",
 				{ url, prefixo: this.prefix }
 			);
-		}, Frame.PRAZO_CONTROLADOR_MS);
+		})();
 	}
 
 	go(url: string) {
