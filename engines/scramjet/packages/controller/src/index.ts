@@ -961,12 +961,7 @@ export class Frame {
 
 	// vssh fork: um documento SEM service worker controlando nunca vai funcionar, e falhava calado.
 	//
-	// O controlador de um documento é fixado no instante em que ele nasce: quem carrega antes de o
-	// service worker estar ativo fica sem controlador PARA SEMPRE — não existe recuperação, só
-	// recarregar. Isso acontece de verdade quando o portal restaura as abas da sessão anterior e
-	// navega os frames antes de o registro terminar.
-	//
-	// E o modo de falha é o pior possível: sem ninguém para interceptar, o `src` reescrito vira uma
+	// O modo de falha é o pior possível: sem ninguém para interceptar, o `src` reescrito vira uma
 	// requisição de verdade para o próprio servidor do portal, que não tem rota para o prefixo do
 	// proxy e responde o catch-all — **200 OK com a SPA do portal inteira**. A aba do usuário exibe
 	// a tela de login do portal dentro dela e parece estar "carregando para sempre". Nada no
@@ -977,27 +972,55 @@ export class Frame {
 	// "VSSH-SSO — Portal de Acesso Remoto") e não estava na lista de clientes controlados; a aberta
 	// depois carregou o site em 1,3 s.
 	//
+	// ⚠ **Controlador nulo NÃO quer dizer, sozinho, que se perdeu a corrida.** A primeira versão
+	// deste aviso dizia que um documento sem controlador nunca passa a ter um, e isso está errado:
+	// `clients.claim()` existe exatamente para assumir cliente não controlado, e o nosso service
+	// worker o chama a cada ativação. Durante um restart dele o controlador fica nulo por um
+	// instante e volta sozinho.
+	//
+	// Visto num console real: o aviso saiu logo depois de "service worker activated", e a página
+	// abriu perfeitamente. Um aviso que grita no caso normal ensina a ignorá-lo, e aí ele não
+	// serve para o caso de verdade. Por isso agora se CONFIRMA antes de acusar — se o controlador
+	// aparecer dentro da janela, era a corrida normal de ativação e ninguém precisa saber.
+	//
 	// Avisar não conserta a corrida — quem tem de esperar o controlador é quem navega o frame —
 	// mas troca uma tela parada e muda por uma linha que diz o que houve e o que fazer.
 	private avisouSemControlador = false;
 
-	go(url: string) {
-		if (
-			typeof navigator !== "undefined" &&
-			navigator.serviceWorker &&
-			!navigator.serviceWorker.controller &&
-			!this.avisouSemControlador
-		) {
-			this.avisouSemControlador = true;
+	// Quanto esperar antes de acusar. Cobre `skipWaiting()` + `clients.claim()` com folga; o que
+	// passar disso não é mais reassunção em curso.
+	private static readonly PRAZO_CONTROLADOR_MS = 3000;
+
+	private conferirControlador(url: string) {
+		if (this.avisouSemControlador) return;
+		if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
+
+		const sw = navigator.serviceWorker;
+		if (sw.controller) return;
+
+		// Marca já: entre esta navegação e a confirmação pode haver outras, e o aviso é um só.
+		this.avisouSemControlador = true;
+
+		setTimeout(() => {
+			// Reassumiu — era a janela de ativação, e não há nada a relatar.
+			if (sw.controller) return;
+
 			console.error(
-				"[scramjet] Este documento não é controlado por um service worker, então NADA será " +
-					"reescrito: a navegação vai sair para o servidor real e a aba vai exibir o que ele " +
-					"responder (no portal, a própria SPA, com 200). Um documento que nasce sem " +
-					"controlador não passa a ser controlado depois — é preciso recarregá-lo. Espere " +
+				"[scramjet] Este documento continua sem service worker controlando, então NADA será " +
+					"reescrito: a navegação sai para o servidor real e a aba exibe o que ele responder " +
+					"(no portal, a própria SPA, com 200). O controlador é fixado quando o documento " +
+					"nasce; só um `clients.claim()` de uma ativação nova o reassume, e não houve " +
+					"nenhuma nos últimos " +
+					Frame.PRAZO_CONTROLADOR_MS / 1000 +
+					"s — aqui é preciso recarregar. Espere " +
 					"`navigator.serviceWorker.controller` existir antes de navegar o frame.",
 				{ url, prefixo: this.prefix }
 			);
-		}
+		}, Frame.PRAZO_CONTROLADOR_MS);
+	}
+
+	go(url: string) {
+		this.conferirControlador(url);
 
 		const encoded = rewriteUrl(url, this.context, {
 			//@ts-expect-error
