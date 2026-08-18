@@ -78,6 +78,89 @@ export default [
 		`,
 	}),
 	basicTest({
+		// A listener object is only wrapped for filtering if the proxy can hand the platform a
+		// function that delegates to it - a Proxy can't intercept a plain object's invocation. That
+		// delegation has to keep the spec's late binding: `handleEvent` is looked up at dispatch
+		// time, not at registration, so an object may be registered empty and gain the method
+		// later. Reading it once at registration turns those listeners into permanent no-ops.
+		name: "events-handleevent-late-binding",
+		js: `
+			const t = document.createElement("div");
+			let n = 0;
+			const handler = {};
+			t.addEventListener("x", handler);
+			t.dispatchEvent(new Event("x"));
+			assertEqual(n, 0, "an object with no handleEvent yet is simply not called");
+			handler.handleEvent = () => n++;
+			t.dispatchEvent(new Event("x"));
+			assertEqual(n, 1, "handleEvent installed after registration still fires");
+			handler.handleEvent = "not a function";
+			t.dispatchEvent(new Event("x"));
+			assertEqual(n, 1, "and a non-callable handleEvent must not throw");
+		`,
+	}),
+	basicTest({
+		// Inside handleEvent, `this` is the listener object - not the event target, and not the
+		// wrapper the proxy handed the platform. Object listeners exist precisely so the handler
+		// can reach its own instance state; getting `this` wrong breaks every one of them.
+		name: "events-handleevent-this",
+		js: `
+			const t = document.createElement("div");
+			const handler = {
+				marca: "meu",
+				vistos: [],
+				handleEvent(e) { this.vistos.push(this.marca + ":" + e.type); },
+			};
+			t.addEventListener("x", handler);
+			t.dispatchEvent(new Event("x"));
+			assertDeepEqual(handler.vistos, ["meu:x"], "this inside handleEvent is the listener object");
+		`,
+	}),
+	basicTest({
+		// The registry translates the page's listener into the wrapper that was actually handed to
+		// the platform, and removal consumes one registration. A listener registered in BOTH phases
+		// is two registrations and needs two removals - so the bookkeeping cannot collapse them,
+		// even when both share one wrapper. If the second removal finds nothing to translate, the
+		// listener stays attached forever and keeps firing after the page thinks it is gone.
+		name: "events-remove-both-phases",
+		js: `
+			const pai = document.createElement("div");
+			const filho = document.createElement("div");
+			pai.appendChild(filho);
+			document.body.appendChild(pai);
+			let n = 0;
+			const fn = () => n++;
+			pai.addEventListener("x", fn, true);
+			pai.addEventListener("x", fn, false);
+			filho.dispatchEvent(new Event("x", { bubbles: true }));
+			assertEqual(n, 2, "precondition: both phases fired");
+			pai.removeEventListener("x", fn, true);
+			pai.removeEventListener("x", fn, false);
+			filho.dispatchEvent(new Event("x", { bubbles: true }));
+			assertEqual(n, 2, "both phases must actually come off");
+			pai.remove();
+		`,
+	}),
+	basicTest({
+		// Capture and bubble are separate registrations for the same object, exactly as they are
+		// for the same function (see events-capture-and-bubble-are-distinct). Deduping an object
+		// listener must not collapse the two phases into one.
+		name: "events-handleevent-capture-and-bubble",
+		js: `
+			const pai = document.createElement("div");
+			const filho = document.createElement("div");
+			pai.appendChild(filho);
+			document.body.appendChild(pai);
+			let n = 0;
+			const handler = { handleEvent() { n++; } };
+			pai.addEventListener("x", handler, true);
+			pai.addEventListener("x", handler, false);
+			filho.dispatchEvent(new Event("x", { bubbles: true }));
+			assertEqual(n, 2, "the same object in both phases is two listeners");
+			pai.remove();
+		`,
+	}),
+	basicTest({
 		name: "events-propagation",
 		js: `
 			const outer = document.createElement("div");
@@ -151,10 +234,10 @@ export default [
 		`,
 	}),
 
-	// ------------------------------------------------------------------
+	// Estes três descreviam um defeito — registrar o mesmo ouvinte duas vezes fazia o handler
+	// disparar duas vezes — e passaram a valer quando o registro de ouvintes passou a reaproveitar
+	// o embrulho por par (evento, ouvinte). Ver `client/shared/event.ts`.
 	basicTest({
-		// KNOWN FAILURE: a second registration of the same function is not
-		// recognised as a duplicate, so the handler runs twice.
 		name: "events-duplicate-listener-element",
 		js: `
 			const t = document.createElement("div");
@@ -167,8 +250,7 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: same on the global targets, which is where idempotent
-		// init code usually registers.
+		// Nos alvos globais, que é onde código de inicialização idempotente costuma registrar.
 		name: "events-duplicate-listener-global",
 		js: `
 			let w = 0;
@@ -188,7 +270,7 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: also with an options bag, which is the common modern form.
+		// E com um objeto de opções, que é a forma moderna comum.
 		name: "events-duplicate-listener-options",
 		js: `
 			const t = document.createElement("div");

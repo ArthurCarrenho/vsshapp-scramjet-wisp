@@ -1,7 +1,9 @@
 import { iswindow } from "@client/entry";
 import { ScramjetClient } from "@client/index";
+import { AnyFunction } from "@/types";
 import { getOwnPropertyDescriptorHandler } from "@client/helpers";
 import {
+	_Map,
 	Object_defineProperty,
 	Reflect_apply,
 	Reflect_get,
@@ -126,9 +128,21 @@ export default function (client: ScramjetClient, self: Self) {
 		},
 		storage: {
 			_init() {
+				// vssh fork: ⚠ `key` é `null` num evento de `clear()` — é assim que a especificação
+				// diz "a área inteira foi limpa", e não é caso raro: todo fluxo de logout passa por
+				// aí. `null.startsWith` levanta TypeError DENTRO do despacho do evento, e o ouvinte
+				// do site não roda — some o handler inteiro, não só este evento.
+				//
+				// Descartar é o certo, e não só o seguro: o storage é particionado por origem
+				// lógica, então um `clear()` que veio de fora desta partição não significa "a SUA
+				// área foi limpa". Entregar o evento seria afirmar isso.
+				if (this.key === null) return false;
+
 				return this.key.startsWith(client.url.host + "@");
 			},
 			key() {
+				if (this.key === null) return null;
+
 				return this.key.substring(this.key.indexOf("@") + 1);
 			},
 			url() {
@@ -197,42 +211,110 @@ export default function (client: ScramjetClient, self: Self) {
 		});
 	}
 
+	// vssh fork: `addEventListener` aceita DUAS formas de ouvinte — uma função, ou um objeto com
+	// `handleEvent`. Só a primeira era embrulhada, e o embrulho é quem faz TODO o isolamento de
+	// eventos deste arquivo: descartar `storage` de outra origem lógica, tirar o prefixo da
+	// partição da chave, conferir o `targetOrigin` que o remetente de `message` pediu, e
+	// desembrulhar `origin`/`data` do envelope `$scramjet$`.
+	//
+	// Sem embrulho, o site recebia o evento CRU. Medido na bancada (`bench/ouvinte-objeto.mjs`):
+	// um `storage` escrito por OUTRA origem lógica chegava ao ouvinte-objeto com a chave
+	// `"127.0.0.1:5255@yt-player-volume"` — a partição alheia inteira, à vista, junto com o valor.
+	// Para `message` o buraco é pior: some justamente a conferência de origem, que existe porque a
+	// origem REAL de todo mundo aqui é a do proxy e a checagem do navegador não vale.
+	//
+	// Escolher a forma de escrever o ouvinte não pode decidir se o isolamento vale ou não. As duas
+	// formas são igualmente comuns em código de produção, e a diferença entre elas é sintática.
+	//
+	// ⚠ O objeto não pode ser embrulhado num `Proxy`: a armadilha `apply` só dispara em função.
+	// Quem vai para a plataforma é uma função que delega ao objeto — e ela consulta `handleEvent`
+	// na HORA do disparo, não no registro, porque é o que a especificação manda: o site pode
+	// instalar ou trocar o método depois de já ter registrado o ouvinte.
+	function comoFuncao(listener: any): ((...args: any) => any) | null {
+		if (typeof listener === "function") return listener;
+		if (typeof listener !== "object" || listener === null) return null;
+
+		return function (ev: Event) {
+			const handle = (listener as { handleEvent?: unknown }).handleEvent;
+			if (typeof handle !== "function") return;
+
+			// o `this` de `handleEvent` é o próprio objeto ouvinte, não o alvo do evento
+			return Reflect_apply(handle as AnyFunction, listener, [ev]);
+		};
+	}
+
 	client.Proxy("EventTarget.prototype.addEventListener", {
 		apply(ctx) {
-			if (typeof ctx.args[1] !== "function") return;
+			const origlistener = ctx.args[1] as any;
+			const alvo = comoFuncao(origlistener);
+			if (!alvo) return;
 
-			const origlistener = ctx.args[1];
-			const proxylistener = wraplistener(origlistener);
+			const tipo = ctx.args[0] as string;
 
+			let porTipo = client.eventcallbacks.get(ctx.this);
+			if (!porTipo) {
+				porTipo = new _Map();
+				client.eventcallbacks.set(ctx.this, porTipo);
+			}
+			let porOuvinte = porTipo.get(tipo);
+			if (!porOuvinte) {
+				porOuvinte = new _Map();
+				porTipo.set(tipo, porOuvinte);
+			}
+
+			// ⚠ Registrar o mesmo ouvinte duas vezes é operação idempotente na plataforma, e ela
+			// decide isso pela IDENTIDADE do que recebeu. Um embrulho novo a cada chamada faz a
+			// plataforma enxergar dois ouvintes distintos e disparar duas vezes — que é o defeito
+			// que os testes `events-duplicate-listener-*` descrevem. Reaproveitar o embrulho que
+			// já existe para este par (evento, ouvinte) devolve a idempotência: a plataforma
+			// recebe a mesma função e deduplica sozinha.
+			//
+			// ⚠ Reaproveitar o embrulho NÃO é o mesmo que pular o registro. A contagem sobe de
+			// qualquer jeito, porque é dela que o `removeEventListener` vive: o mesmo ouvinte pode
+			// estar registrado na fase de captura E na de borbulha, que são dois registros para a
+			// plataforma e pedem duas remoções. Contando uma vez só, a segunda remoção não acharia
+			// o que traduzir e o ouvinte ficaria preso para sempre.
+			const registro = porOuvinte.get(origlistener);
+			if (registro) {
+				registro.contagem++;
+				ctx.args[1] = registro.proxiedCallback;
+
+				return;
+			}
+
+			const proxylistener = wraplistener(alvo) as EventListener;
 			ctx.args[1] = proxylistener;
-
-			let arr = client.eventcallbacks.get(ctx.this);
-			arr ||= [] as any;
-			arr.push({
-				event: ctx.args[0] as string,
-				originalCallback: origlistener,
-				proxiedCallback: proxylistener,
-			});
-			client.eventcallbacks.set(ctx.this, arr);
+			porOuvinte.set(origlistener, { proxiedCallback: proxylistener, contagem: 1 });
 		},
 	});
 
 	client.Proxy("EventTarget.prototype.removeEventListener", {
 		apply(ctx) {
-			if (typeof ctx.args[1] !== "function") return;
+			// função ou objeto: o que não pode ser ouvinte é o que não é nem um nem outro
+			if (typeof ctx.args[1] !== "function" && typeof ctx.args[1] !== "object")
+				return;
+			if (ctx.args[1] === null) return;
 
-			const arr = client.eventcallbacks.get(ctx.this);
-			if (!arr) return;
+			// ⚠ O ouvinte original é guardado ANTES de `ctx.args[1]` ser trocado: ele é a CHAVE do
+			// mapa, e depois da troca `ctx.args[1]` é o embrulho — apagar por ele não removeria
+			// nada, e a entrada ficaria de pé para sempre.
+			const origlistener = ctx.args[1] as AnyFunction | object;
 
-			const i = arr.findIndex(
-				(e) => e.event === ctx.args[0] && e.originalCallback === ctx.args[1]
-			);
-			if (i === -1) return;
+			const porOuvinte = client.eventcallbacks
+				.get(ctx.this)
+				?.get(ctx.args[0] as string);
+			if (!porOuvinte) return;
 
-			const r = arr.splice(i, 1);
-			client.eventcallbacks.set(ctx.this, arr);
+			const registro = porOuvinte.get(origlistener);
+			if (!registro) return;
 
-			ctx.args[1] = r[0].proxiedCallback;
+			// Traduzir SEMPRE, esquecer só na última. Enquanto houver registro de pé — a outra
+			// fase, tipicamente — o embrulho precisa continuar sendo encontrável, senão a remoção
+			// seguinte chega aqui sem nada para traduzir e passa o ouvinte original adiante: a
+			// plataforma não acha, e o que ficou registrado nunca sai.
+			ctx.args[1] = registro.proxiedCallback;
+			registro.contagem--;
+			if (registro.contagem <= 0) porOuvinte.delete(origlistener);
 		},
 	});
 

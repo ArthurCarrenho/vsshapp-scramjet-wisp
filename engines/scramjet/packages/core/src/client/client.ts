@@ -43,6 +43,7 @@ import {
 	Object_defineProperty,
 	Object_defineProperties,
 	_Map,
+	_WeakMap,
 } from "@/shared/snapshot";
 import { createIndirectEval } from "./shared/eval";
 
@@ -202,16 +203,32 @@ export class ScramjetClient {
 	descriptors: DescriptorStore;
 	wrapfn: (i: any, ...args: any) => any;
 
-	eventcallbacks: Map<
+	/**
+	 * Os ouvintes que este cliente embrulhou, indexados por alvo → tipo de evento → ouvinte
+	 * ORIGINAL (função, ou objeto com `handleEvent` — ver `client/shared/event.ts`). É por esse
+	 * ouvinte original que o `removeEventListener` casa, porque é o que o site tem em mãos.
+	 *
+	 * ⚠ `WeakMap` no primeiro nível, e não `Map`: a chave é o próprio `EventTarget`. Com um mapa
+	 * forte, todo elemento que algum dia registrou um ouvinte ficava vivo enquanto o cliente
+	 * vivesse — uma página que cria e descarta nós em laço nunca devolvia nenhum deles.
+	 *
+	 * ⚠ E indexado, não uma lista. A busca acontece a CADA `addEventListener`, para reaproveitar
+	 * o embrulho e não quebrar a idempotência do registro; varrendo um array isso é quadrático no
+	 * número de ouvintes do mesmo alvo, e `window` e `document` de site grande acumulam centenas.
+	 *
+	 * `contagem` existe porque um mesmo ouvinte pode estar registrado na fase de captura E na de
+	 * borbulha: são dois registros para a plataforma e pedem duas remoções.
+	 */
+	eventcallbacks: WeakMap<
 		any,
-		[
-			{
-				event: string;
-				originalCallback: AnyFunction;
-				proxiedCallback: AnyFunction;
-			},
-		]
-	> = new _Map();
+		Map<
+			string,
+			Map<
+				AnyFunction | object,
+				{ proxiedCallback: EventListener; contagem: number }
+			>
+		>
+	> = new _WeakMap([]);
 
 	meta: URLMeta;
 

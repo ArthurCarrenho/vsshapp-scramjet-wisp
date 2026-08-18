@@ -46,6 +46,29 @@ export default [
 		autoPass: false,
 	}),
 	basicTest({
+		// `addEventListener` takes either a function or an object with `handleEvent`, and the two
+		// forms are interchangeable in the platform. They were not interchangeable here: only the
+		// function form got wrapped, and the wrapper is what unwraps the `$scramjet$` envelope and
+		// reports the *logical* origin. An object listener saw the raw event - the envelope object
+		// as `data`, and the proxy's own origin as `origin`.
+		//
+		// The assertion is on `data` and `origin`, not on delivery: the unwrapped listener does get
+		// called, it just gets told the wrong thing. Asserting only that the message arrived would
+		// pass with the bug present.
+		name: "postmessage-handleevent-object-unwrapped",
+		js: `
+            addEventListener("message", {
+                handleEvent(event) {
+                    assertEqual(event.data, "obj", "an object listener must get the unwrapped data");
+                    assertEqual(event.origin, location.origin, "and the logical origin, not the proxy's");
+                    pass();
+                }
+            });
+            postMessage("obj");
+        `,
+		autoPass: false,
+	}),
+	basicTest({
 		name: "postmessage-event-meta-sanity",
 		js: `
             addEventListener("message", (event) => {
