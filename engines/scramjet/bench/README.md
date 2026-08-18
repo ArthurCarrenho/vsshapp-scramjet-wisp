@@ -95,6 +95,17 @@ motor.
 de "meu teste testa": com o wasm anterior, `rewriter-falha.mjs` dá 1/4 e diz `Already rewriting` na
 linha certa. Um teste que nunca foi visto falhando não vale nada.
 
+**Três camadas, três medições: navegador limpo → motor local → ambiente real.** Um erro de site
+relatado de dentro do ambiente pode nascer em qualquer uma delas, e a ordem barata é de fora para
+dentro. `sampi-glide.mjs` fez isso em três rodadas com um carrossel que quebrava: num Chromium
+limpo, nada; com os mesmos anúncios bloqueados por `page.route`, nada; pelo scramjet local, nada —
+e o `mount()` do carrossel resolvia a raiz normalmente. Isso não conserta o defeito, mas ELIMINA o
+site e o motor numa tarde, e sobra uma pergunta pequena em vez de uma grande.
+
+⚠ Quando o motor local não reproduz, a diferença que sobra é a camada do portal — extensões,
+userscripts, cosmético do adblock e o fluxo de restaurar aba. É onde procurar em seguida, não onde
+concluir: "não reproduzi nas outras duas" é evidência de onde olhar, não prova de quem fez.
+
 ## Armadilhas que fizeram o teste medir a coisa errada
 
 - **Viewport pequeno serve outra interface.** Com o padrão do headless o YouTube nem renderiza o
