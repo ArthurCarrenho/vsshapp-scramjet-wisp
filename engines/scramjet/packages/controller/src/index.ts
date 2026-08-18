@@ -543,6 +543,27 @@ export class Controller {
 		);
 		this.setupMessagePort();
 
+		// vssh fork: **avisar o Service Worker quando esta aba morre de verdade.** O array `tabs`
+		// de lá só perdia entrada quando um controller do mesmo id reconectava, então aba fechada
+		// ficava registrada para sempre — segurando a MessagePort de um documento que não existe
+		// mais, e mantendo o prefixo dela roteável para uma porta que ninguém atende.
+		//
+		// ⚠ `persisted` separa os dois motivos do `pagehide`, e a diferença é tudo: `false` é a aba
+		// indo embora, `true` é o bfcache — e o bfcache VOLTA. Despedir-se no bfcache deixaria uma
+		// aba viva sem rota nenhuma ao ser restaurada, que é justamente o travamento que este aviso
+		// existe para evitar.
+		addEventListener("pagehide", (e) => {
+			if (e.persisted) return;
+
+			try {
+				this.serviceWorkerController.postMessage({
+					$controller$bye: { id: this.id },
+				});
+			} catch {
+				// a aba está fechando: não há a quem reportar, e insistir não muda nada
+			}
+		});
+
 		navigator.serviceWorker.addEventListener("message", (e) => {
 			if (
 				e.data?.$controller$setCookie &&

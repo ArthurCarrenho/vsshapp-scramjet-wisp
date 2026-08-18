@@ -112,6 +112,28 @@ export class RpcHelper<
 		}
 	}
 
+	// vssh fork: **herda o que ficou em voo, quando o canal foi TROCADO e não perdido.** Rejeitar é
+	// a resposta certa para "o outro lado sumiu"; é a errada para "o outro lado reconectou", que é
+	// o que acontece a cada `$controller$swrevive` — ou seja, ~100 ms depois de todo Service Worker
+	// ativar, bem no meio do carregamento da página.
+	//
+	// A resposta de uma chamada feita na porta velha sai pela porta NOVA: quem responde usa
+	// `this.port`, que já foi trocada, e o `$token` continua sendo o da chamada original. Ela chega,
+	// portanto — só que no helper novo, que não conhece aquele token e a descarta em `if (!cb)`.
+	// Adotar o mapa faz a resposta encontrar quem a espera.
+	//
+	// ⚠ O contador vem junto, e é isso que impede o pior caso: cada helper novo começa do zero, e
+	// dois tokens iguais vivos ao mesmo tempo fazem uma resposta resolver a promessa ERRADA — uma
+	// requisição recebendo o corpo de outra, sem erro nenhum. Herdar o contador garante que todo
+	// token novo é maior que qualquer token adotado.
+	adotarPendentes(anterior: RpcHelper<any, any>) {
+		for (const [token, cb] of anterior.promiseCallbacks) {
+			this.promiseCallbacks.set(token, cb);
+		}
+		anterior.promiseCallbacks.clear();
+		if (anterior.counter > this.counter) this.counter = anterior.counter;
+	}
+
 	call<Method extends keyof Remote>(
 		method: Method,
 		args: Remote[Method][0],

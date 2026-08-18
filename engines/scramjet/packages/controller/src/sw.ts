@@ -155,8 +155,17 @@ function isTransportNetworkError(e: unknown): boolean {
 // fechar uma aba de vídeo enche o console de "Service Worker error" — e um console cheio de erro
 // normal é tão ruim quanto um console que esconde erro de verdade. Era o defeito que o
 // classificador acabou de consertar, chegando pela outra ponta.
+
+// A aba avisou que estava fechando e nós rejeitamos o que estava em voo. É a MESMA condição de
+// ciclo de vida da de baixo, chegando pelo outro lado: lá o frame já tinha morrido quando a
+// requisição chegou ao controller, aqui a requisição já estava no controller quando a aba morreu.
+// Um beacon de `pagehide` cai ora num caso, ora no outro, dependendo de quem correu mais.
+const ABA_FECHADA = "A aba que atendia esta requisição foi fechada.";
+
 function isFrameGoneError(e: unknown): boolean {
 	const msg = e instanceof Error ? e.message : String(e ?? "");
+	if (msg.includes(ABA_FECHADA)) return true;
+
 	return /No frame found for request|Port not found/i.test(msg);
 }
 
@@ -302,11 +311,62 @@ addEventListener("message", (e) => {
 	if (typeof e.data.$controller$init != "object") return;
 	const init = e.data.$controller$init;
 
+	// vssh fork: **a referência antiga saía do array levando as chamadas em voo com ela.** Todo
+	// `route()` que esperava resposta guardou `{resolve, reject}` no `RpcHelper` DAQUELA referência,
+	// e o array acabou de esquecê-la. Quem está pendurado nessa promessa é o
+	// `event.respondWith(route(event))` do fetch handler, e uma promessa que nunca assenta ali é a
+	// aba girando para sempre — sem erro, sem página, sem nada no console.
+	//
+	// ⚠ Isto NÃO é o caso de "o outro lado sumiu", e a diferença decidiu o conserto. O controller
+	// reconecta de rotina: o SW manda `$controller$swrevive` ~100 ms depois de ativar, sempre, e o
+	// controller troca a porta — o que cai bem no meio do carregamento da página, com o script do
+	// wasm e o inject em voo. Rejeitar ali derruba a página inteira.
+	//
+	// Medido, e foi o que me fez desfazer a primeira versão: rejeitando, a suíte completa passou a
+	// acusar 383 `WASM not found in global scope!` onde antes havia ZERO — o script do wasm é
+	// buscado por este mesmo caminho.
+	//
+	// A resposta dessas chamadas CHEGA: quem responde usa a porta corrente, e o `$token` continua
+	// sendo o da chamada original. Ela só chegava no helper novo, que não conhecia aquele token e a
+	// descartava. Adotar o mapa (e o contador junto — ver `adotarPendentes`) faz cada resposta
+	// encontrar quem a espera, em vez de matar quem esperava.
 	const existing = tabs.findIndex((t) => t.id === init.id);
-	if (existing !== -1) {
-		tabs.splice(existing, 1);
-	}
-	tabs.push(new ControllerReference(init.prefix, init.id, e.ports[0]));
+	const anterior = existing !== -1 ? tabs.splice(existing, 1)[0] : null;
+
+	const nova = new ControllerReference(init.prefix, init.id, e.ports[0]);
+	if (anterior) nova.rpc.adotarPendentes(anterior.rpc);
+	tabs.push(nova);
+});
+
+// vssh fork: **a aba se despede, e a entrada dela sai do array.** Sem isto `tabs` só perdia
+// entrada quando um controller do MESMO id reconectava — aba fechada nunca saía. Cada entrada
+// órfã segura uma `MessagePort` e um `RpcHelper` de um documento que não existe mais, dentro de
+// um worker que sobrevive a todas as abas que abriu; numa sessão longa isso só cresce.
+//
+// E não é só memória: enquanto a entrada está de pé, `shouldRoute` responde `true` para o prefixo
+// dela e `route` chama numa porta que ninguém atende.
+//
+// ⚠ Aqui SE REJEITA, e no bloco acima não — é a mesma distinção, lida ao contrário. Lá a porta foi
+// trocada e a resposta ainda vem pela nova; aqui a aba acabou, e não há porta nova nem resposta
+// nenhuma a esperar. Adotar o que está em voo não teria para quem entregar.
+//
+// É MELHOR ESFORÇO, e de propósito: só o `pagehide` sem bfcache avisa (ver o controller). Aba que
+// morre por crash ou kill não manda nada, e a entrada dela continua vazando. A alternativa —
+// varrer `clients` e podar quem não responde — troca um vazamento por um risco pior: se uma aba
+// congelada no bfcache não aparecer na varredura, ela é podada viva e volta sem rota, que é
+// exatamente o travamento que se está tentando matar.
+addEventListener("message", (e) => {
+	if (!e.data) return;
+	if (typeof e.data != "object") return;
+	if (!e.data.$controller$bye) return;
+	if (typeof e.data.$controller$bye != "object") return;
+
+	const id = e.data.$controller$bye.id;
+	const indice = tabs.findIndex((t) => t.id === id);
+	if (indice === -1) return;
+
+	const morta = tabs.splice(indice, 1)[0];
+	morta.rpc.rejectPending(ABA_FECHADA);
 });
 
 export function shouldRoute(event: FetchEvent): boolean {
