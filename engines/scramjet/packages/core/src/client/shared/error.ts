@@ -1,6 +1,9 @@
 import { unrewriteUrl } from "@rewriters/url";
 import { ScramjetClient } from "@client/index";
-import { Object_defineProperty } from "@/shared/snapshot";
+import {
+	Object_defineProperty,
+	String_startsWith,
+} from "@/shared/snapshot";
 
 export const enabled = (client: ScramjetClient) =>
 	client.flagEnabled("cleanErrors");
@@ -45,11 +48,33 @@ export default function (client: ScramjetClient, self: Self) {
 				continue;
 			}
 
-			if (arquivo) {
-				try {
+			// Só o que está SOB O PROXY, e o teste vem ANTES da chamada.
+			//
+			// ⚠ Não é otimização: uma URL fora do prefixo já voltaria inalterada de `unrewriteUrl`
+			// — o `replaceAll` seria um no-op —, mas a chamada tem EFEITO COLATERAL. Ela faz
+			// `dbg.error("unrewriteurl: unexpected url")` para o que não reconhece, e `dbg` monta o
+			// rótulo dele lançando um Error e lendo o `.stack`. Esse `.stack` volta para CÁ, este
+			// closure roda de novo, e cada frame de arquivo externo gera outro erro. Um `<a href>`
+			// não reescrito numa página vira uma cascata no console, e a cascata é o que aparece:
+			// o rastro do primeiro erro é sempre `error.ts` e `Object.fmt`, apontando para o
+			// logger em vez de para o site.
+			//
+			// A pilha de uma página tem quase só arquivo do site e de extensão — nenhum deles é do
+			// proxy —, então o caminho comum é justamente o que pagava a conta.
+			//
+			// É o mesmo corte que o `ScramjetEngine.js` do vssh-sso já faz desde 3cd2710: o
+			// chamador só manda desreescrever o que está sob o escopo do proxy. Aquele conserto
+			// não alcançou este chamador.
+			//
+			// ⚠ O teste fica DENTRO do try, junto da chamada. Ele toca `client.context.prefix`, e
+			// este closure é o `prepareStackTrace`: uma exceção aqui não falha só a desreescrita —
+			// ela quebra a leitura de `.stack` de todo Error da página, inclusive os do site.
+			// Todos os outros passos deste laço já são guardados pela mesma razão.
+			try {
+				if (arquivo && String_startsWith(arquivo, client.context.prefix.href)) {
 					texto = texto.replaceAll(arquivo, unrewriteUrl(arquivo, client.context));
-				} catch {}
-			}
+				}
+			} catch {}
 
 			linhas.push("    at " + texto);
 		}

@@ -251,7 +251,22 @@ export function unrewriteUrl(url: string | URL, context: ScramjetContext) {
 		);
 	} else if (url == "") {
 		return url;
+	} else if (tryCanParseURL(url)) {
+		// Um esquema que não é http/https, mas é uma URL válida: `tel:`, `sms:`, `intent:`,
+		// `ftp:`, `whatsapp:` — o que um `<a href>` de página real carrega o tempo todo.
+		//
+		// ⚠ Isto NÃO é "inesperado", e chamá-lo assim deixa o par assimétrico consigo mesmo:
+		// `rewriteUrl`, algumas dezenas de linhas acima, deixa passar exatamente estes de
+		// PROPÓSITO — "custom protocol. best thing to do is pass it through so it can open an app
+		// etc". O que a reescrita decide não tocar não pode ser erro na desreescrita.
+		//
+		// O retorno já era este; o que sai é só o `dbg.error`. E ele não era barato: `dbg` monta o
+		// rótulo lançando um Error e lendo o `.stack`, que passa pelo sanitizador de pilha — o
+		// mesmo caminho descrito em `client/shared/error.ts`.
+		return url;
 	} else {
+		// Aqui sim: uma string que não é URL nenhuma chegou onde se esperava um endereço. Isso é
+		// defeito de quem chamou, e é o que este aviso sempre quis dizer.
 		dbg.error("unrewriteurl: unexpected url", url);
 		return url;
 	}
