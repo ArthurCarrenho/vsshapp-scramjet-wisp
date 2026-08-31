@@ -73,6 +73,11 @@ function lookupDaBancada(hostname, opcoes) {
 aplicarPolitica(wisp, { lookup: lookupDaBancada, aoFalhar: () => {}, aoRecuar: () => {} });
 
 // ─── Os assets do motor, do vendor ───────────────────────────────────────────────────────────
+// Tudo o que o portal serve em nome do app mora sob este prefixo — e é nesta granularidade que
+// ele recusa: quando o caminho de `/proxy/app/<id>/` está fechado, está fechado para a raiz e para
+// todos os bundles de uma vez. Por isso `statusDosAssets` casa aqui, e não rota a rota.
+const PREFIXO_DO_APP = "/s/proxy/app/scramjet-wisp/";
+
 const ROTAS_DO_MOTOR = [
 	{ prefixo: "/s/proxy/app/scramjet-wisp/scram/",      dir: "scramjet" },
 	{ prefixo: "/s/proxy/app/scramjet-wisp/controller/", dir: "controller" },
@@ -171,8 +176,17 @@ ${scripts}
 </body></html>`;
 }
 
-/** Sobe o portal de mentira. Devolve `{ base, porta, fechar }`. */
-export async function subirPortal({ porta = 0, portaSites }) {
+/**
+ * Sobe o portal de mentira. Devolve `{ base, porta, fechar }`.
+ *
+ * `statusDosAssets` faz o portal RECUSAR os assets do motor com aquele código, sem corpo — o
+ * caminho `/…/proxy/app/scramjet-wisp/…` inteiro, que é a granularidade real do defeito: quem
+ * recusa é o portal, e ele não distingue um bundle de outro. Serve para reproduzir o incidente do
+ * 403, em que o portal dizia `ready: true` e recusava tudo o que vinha depois. O dublê de
+ * `ensureRunning` da página segue dizendo `ready: true` de propósito — foi assim em produção, e é
+ * o que faz a sonda medir o caso real em vez de um app parado.
+ */
+export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null }) {
 	const srv = createServer((req, res) => {
 		const caminho = decodeURIComponent(req.url.split("?")[0]);
 
@@ -183,6 +197,22 @@ export async function subirPortal({ porta = 0, portaSites }) {
 		if (caminho === "/s/proxy/vssh-desktop/bancada-api.js") {
 			res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-store" });
 			return res.end(readFileSync(path.join(AQUI, "bancada-api.js"), "utf8"));
+		}
+
+		if (statusDosAssets && caminho.startsWith(PREFIXO_DO_APP)) {
+			// Corpo vazio, como o portal de verdade faz com asset (ver `_ASSET_RE`/`_sendProxyError`
+			// em src/proxy.ts): mandar HTML aqui daria ao cliente uma pista que ele não tem em
+			// produção, e a sonda mediria uma facilidade inventada pela bancada.
+			return void res.writeHead(statusDosAssets, { "Cache-Control": "no-store" }).end();
+		}
+
+		// A raiz do app É o healthcheck, e o cliente a consulta antes de registrar o service worker
+		// (ver `_conferirBackend` no ScramjetEngine). Sem esta linha ela caía no 404 do fim — que
+		// conta como "servindo", então nada quebrava, mas a bancada deixava de exercitar o mesmo
+		// caminho que a produção percorre.
+		if (caminho === PREFIXO_DO_APP) {
+			res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+			return res.end("scramjet-wisp ok");
 		}
 
 		const doMotor = ROTAS_DO_MOTOR.find((r) => caminho.startsWith(r.prefixo));

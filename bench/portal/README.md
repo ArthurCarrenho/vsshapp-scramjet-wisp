@@ -59,6 +59,7 @@ node nada-volta.mjs         # a aba gira, ou alguém acorda?
 node cookies-dominio.mjs    # a sessão sobrevive à ida e à volta pelo portal?
 node adblock-corrente.mjs   # o bloqueio fecha a corrente inteira?
 node deeplink.mjs           # o que acontece com cada esquema e cada forma de abrir?
+node motor-recusado.mjs     # quando o portal recusa, o cliente diz o código ou adivinha?
 ```
 
 Cada script termina com `=== veredito ===` e um `process.exitCode`, no mesmo vocabulário da bancada
@@ -74,6 +75,7 @@ irmã: **controle** é o mesmo cenário sem o gatilho, **direto** é sem o proxy
 | `cookies-dominio.mjs` | a sessão atravessa domínio→subdomínio, sem vazar host-only nem rebaixar HttpOnly? | contexto novo na volta, jar vazio |
 | `adblock-corrente.mjs` | o pedido nem sai, o recurso falha de verdade, e o erro que não é nosso continua aparecendo? | uma extensão com um filtro de uma linha |
 | `deeplink.mjs` | o que cada esquema e cada forma de abrir produzem? | uma página com os cinco casos |
+| `motor-recusado.mjs` | a recusa do portal chega ao console com o número e o endereço? | o portal respondendo 403 em `/proxy/app/scramjet-wisp/` |
 
 ## O que ela ACHOU
 
@@ -91,7 +93,17 @@ Três defeitos, e nenhum deles aparecia na leitura do código:
   têm a mesma assinatura, porque `about:blank` nunca é controlado por ninguém, e o rótulo errado
   mandava quem fosse ler o log caçar um defeito de service worker que não estava lá.
 
-E uma quarta que era da própria bancada, e vale registrar porque é o modo de falha mais perigoso
+E um que **não** foi ela que achou — veio de uma sessão real, e está aqui porque agora ela o
+reproduz e o guarda:
+
+- **O portal recusava os assets do motor com `403`, e nenhuma mensagem nossa dizia o número.** O
+  `onerror` de um `<script>` não expõe status; a rejeição de `register()`/`update()` de um service
+  worker cujo `importScripts` falhou é sempre a mesma frase genérica. Sobravam quatro linhas no
+  console, uma delas acusando um backend que estava de pé (*"backend fora?"*), e o `403` aparecia só
+  na linha que o navegador imprime sozinho — sem dizer de quem era. `motor-recusado.mjs` mede as
+  duas coisas que faltavam: o status e o endereço na mensagem, e ninguém acusado por adivinhação.
+
+E uma que era da própria bancada, e vale registrar porque é o modo de falha mais perigoso
 que ela tem: a primeira versão da captura de console fazia `String(objeto)`, e o diagnóstico do
 motor viaja como objeto. A sonda apagava, em silêncio, exatamente a informação que ela existe para
 ler.
