@@ -1,12 +1,13 @@
-// Backend do vssh-app "scramjet-wisp" — type: "engine" (ver SKILL.md), sem janela/frontend
-// próprio. Serve dois papéis pro motor Scramjet consumido por ScramjetEngine.js (custom_xprahtml5):
-//   1. servidor wisp (WebSocket) — o transporte que o BareCompatibleClient/LibcurlClient do lado
-//      cliente usa pra abrir conexões TCP reais através deste processo;
-//   2. estático dos bundles JS do Scramjet/scramjet-controller/libcurl-transport — servidos de
-//      `backend/vendor/<pacote>/dist/`, nunca copiados/commitados em custom_xprahtml5/ (ver plano).
+// Backend do vssh-app "scramjet-wisp", `type: engine`, sem janela nem frontend próprio. Ele serve
+// dois papéis ao motor Scramjet que o `ScramjetEngine.js` do shell (`vssh-client/js/browser/`)
+// consome:
+//   1. o servidor wisp (WebSocket), o transporte pelo qual o LibcurlClient do lado cliente abre
+//      conexões TCP reais através deste processo;
+//   2. o estático dos bundles do Scramjet, do scramjet-controller e do libcurl-transport, servidos
+//      de `backend/vendor/<pacote>/dist/`, que o shell nunca copia para dentro dele.
 //
-// Roda como qualquer outro vssh-app: bind 127.0.0.1:$VSSH_APP_PORT, iniciado sob demanda por
-// AppLauncher.ensureRunning('scramjet-wisp') (não por AppLauncher.open() — não tem janela).
+// Roda como qualquer outro vssh-app: escuta no socket unix de $VSSH_APP_SOCKET pelo runtime
+// `vssh`, e o portal o sobe sob demanda (é `kind: service`, sem janela para abrir).
 
 import { createServer } from 'node:http';
 import { createReadStream, existsSync } from 'node:fs';
@@ -18,35 +19,21 @@ import { server as wisp, logging } from '@mercuryworkshop/wisp-js/server';
 import { aplicarPolitica } from './rede.js';
 import { conferirVersoes, resumirVersoes, conferirMotor, resumirMotor } from './versoes.js';
 
-const require = createRequire(import.meta.url);
+// O runtime de backend que o portal instala em `/opt/vssh/sdk/node` e que o `vssh-app-run` expõe
+// pelo `NODE_PATH`. Este backend é ESM, e a resolução de ES modules do Node ignora o `NODE_PATH`,
+// então o pacote entra pelo `createRequire`. Um servidor sem o runtime deixa este `require` lançar
+// no topo do módulo, nomeando o pacote: o motor não tem como escutar sem ele, e morrer aqui diz o
+// motivo, enquanto morrer no `listen` diria só que o endereço não abriu.
+const { servidor } = createRequire(import.meta.url)('vssh');
 const RAIZ = path.dirname(fileURLToPath(import.meta.url));
 
-// Log estruturado em $VSSH_APP_DATA_DIR (~/.vssh-apps/<id>/data/app.log), do
-// colabhd/vssh-app-toolkit — instalado por npm, como as outras dependências deste backend, e não
-// mais copiado para dentro do repo. NÃO é redundante com o stdout: o portal manda stdout/stderr para
-// ~/.vssh-apps/<id>/run.log, que é rotacionado a cada start e era truncado a cada relaunch do
-// vssh-app-supervisor. Num incidente real, o app falhou 5 vezes seguidas e o operador encontrou
-// run.log E run.log.1 os dois VAZIOS — a evidência apagada pelo próprio mecanismo que deveria
-// guardá-la. Este arquivo fica fora desse caminho e sobrevive a reinício.
-// Se a lib não estiver instalada, degrada para console em vez de derrubar o motor por causa do
-// diagnóstico.
-let log;
-try {
-  const { createAppLog } = require('vssh-app-toolkit/log');
-  log = createAppLog({ appId: 'scramjet-wisp', stdout: false });
-} catch {
-  log = (event, detail) => console.error(`[scramjet-wisp] ${event}`, JSON.stringify(detail || {}));
-}
-
-// Onde escutar, do mesmo toolkit. Este NÃO degrada como o log acima: um motor sem log estruturado
-// ainda serve navegação, mas um que não sabe onde escutar não sobe — e falhar aqui, nomeando o
-// módulo ausente, é melhor que falhar depois sem dizer por quê.
-//
-// Continua por `require` (o do createRequire acima) e não por `import`: as libs do toolkit são
-// CommonJS e este backend é ESM. Havia um `package.json` com "type": "commonjs" plantado dentro do
-// vendor só para devolver aquela subárvore ao CommonJS; instalado por npm, o pacote traz o próprio
-// e o problema deixa de existir.
-const { escutar } = require('vssh-app-toolkit/listen');
+// Log estruturado em $VSSH_APP_DATA_DIR (~/.vssh-apps/<id>/data/app.log), NDJSON, uma linha por
+// evento. Ele existe ao lado do stdout por causa do `run.log`: o portal manda stdout e stderr para
+// `~/.vssh-apps/<id>/run.log`, e o lifecycle rotaciona esse arquivo a cada start, então um app que
+// reinicia em laço apaga a própria evidência. Este arquivo fica fora desse caminho e sobrevive a
+// reinício. `stdout: false` porque o boot já imprime o resumo humano lá embaixo, e repetir cada
+// evento em JSON no `run.log` só encompridaria o que quem opera lê primeiro.
+const log = servidor.criarLog({ stdout: false });
 
 // WARN (não NONE nem DEBUG): loga falhas reais de stream/conexão sem inundar o log com uma linha
 // por abertura/fechamento de stream em uso normal.
@@ -78,9 +65,9 @@ aplicarPolitica(wisp, {
 
 const TOKEN = process.env.VSSH_APP_TOKEN || null;
 
-// A conferência do endereço saiu daqui: desde a v3 do toolkit são DUAS variáveis possíveis
-// (VSSH_APP_SOCKET e VSSH_APP_PORT), e exigir a porta recusaria um motor perfeitamente configurado
-// em socket. Quem confere é o `escutar()`, lá embaixo, e ele nomeia as duas quando não vem nenhuma.
+// Nenhuma conferência de endereço aqui: quem lê `VSSH_APP_SOCKET` é o `servidor.escutar()`, lá
+// embaixo, e a mensagem dele distingue um ambiente sem endereço de um `vssh-app-run` antigo que só
+// exporta `VSSH_APP_PORT`.
 
 // dist/ de cada pacote do motor, montado por caminho.
 //
@@ -291,8 +278,9 @@ try {
   log('motor-falhou', { message: err.message });
 }
 
-escutar(server).then(({ transporte, endereco }) => {
-  console.log(`[scramjet-wisp] listening on ${endereco} (${transporte})`);
+// O runtime anuncia sozinho `[scramjet-wisp] versão <v> escutando em <onde>`; o que vem abaixo é o
+// que só este app sabe dizer.
+servidor.escutar(server).then(({ transporte, endereco }) => {
   for (const linha of resumirVersoes(VERSOES)) console.log(`[scramjet-wisp]   ${linha}`);
   for (const linha of resumirMotor(MOTOR)) console.log(`[scramjet-wisp]   ${linha}`);
   log('startup', {
@@ -345,7 +333,7 @@ escutar(server).then(({ transporte, endereco }) => {
   // Outra instância já atende: é o contrato do lifecycle (o `vssh-app-run` sai 0 no mesmo caso), e
   // vale dobrado aqui, que é um `kind: service` relançado pelo supervisor com backoff. Sair 1 nesse
   // caso queimaria uma das cinco tentativas por um estado que está CERTO.
-  if (err.code === 'VSSH_APP_JA_ESCUTANDO') {
+  if (err.code === servidor.JA_ESCUTANDO) {
     log('already-listening', { message: err.message });
     process.exit(0);
   }

@@ -52,10 +52,11 @@
 // precedência e o `else if` pula a blacklist inteira — ligar uma desligaria esta proteção sem
 // nenhum aviso.
 //
-// **(3) Entrada: não há o que fazer, e isso fica escrito.** O `escutar()` do toolkit v4 só faz
-// `server.listen(caminho)` sobre socket unix — não existe superfície IPv6 de entrada para desligar.
-// Está aqui porque "conferi e não havia nada" é informação; da próxima vez ninguém precisa
-// reconferir.
+// **(3) Entrada: não há o que fazer, e isso fica escrito.** No servidor, o `servidor.escutar()`
+// do runtime `vssh` só faz `server.listen(caminho)` sobre socket unix; o `--tcp host:porta` que
+// ele aceita é da bancada, e binda o endereço que a pessoa digitou. Sem superfície IPv6 de
+// entrada, não há o que desligar. Está aqui porque "conferi e não havia nada" é informação, e da
+// próxima vez ninguém precisa reconferir.
 
 import dns from 'node:dns/promises';
 
