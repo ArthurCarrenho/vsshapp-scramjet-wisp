@@ -13,10 +13,10 @@ name: Motor
 #     compilado por outro compilador, e viraria um ocultador de não-determinismo;
 #   - **conferir o contrato com quem consome**: os 7 arquivos que `backend/server.js` serve.
 #
-# ⚠ **Este workflow não tem gatilho próprio de push, e isso é de propósito.** Ele é chamado pelo
-# `publish.yml`, que é o CI único: detecta o que mudou, constrói, atualiza `backend/vendor/` e
-# publica, sem ida e volta humana no meio. Ter um `on: push` aqui faria os builds rodarem duas vezes
-# por commit — uma pelo gatilho próprio, outra pela chamada — e as duas escreveriam o mesmo cache.
+# ⚠ Este workflow não tem gatilho próprio de push, de propósito. Quem o chama é o `entrega.yml`,
+# o CI único: ele detecta o que mudou, constrói, atualiza `backend/vendor/` e publica, sem ida e
+# volta humana no meio. Um `on: push` aqui faria os builds rodarem duas vezes por commit, uma pelo
+# gatilho próprio e outra pela chamada, e as duas escreveriam o mesmo cache.
 #
 # `workflow_dispatch` fica, para reconstruir à mão sem publicar nada.
 
@@ -179,10 +179,10 @@ jobs:
       - name: Montar os pacotes, e conferir o contrato
         run: bash ../../scripts/montar-motor.sh scramjet
 
-      # Quem aplica isto em `backend/vendor/` e commita é o job `vendor` do `publish.yml`, no mesmo
-      # run. Havia aqui um passo que só AVISAVA ("baixe o artefato e commite"), e ele era exatamente
-      # a fricção que o CI único eliminou: o gate do smoke reprovava o push, uma pessoa baixava o
-      # zip à mão, commitava, e só então publicava.
+      # Quem aplica isto em `backend/vendor/` e commita é o job `vendor` do `entrega.yml`, no mesmo
+      # run. Um passo que só avisasse ("baixe o artefato e commite") devolveria a fricção que o CI
+      # único tirou: o gate do smoke reprovando o push, e uma pessoa baixando o zip à mão para
+      # commitar e só então publicar.
       - uses: actions/upload-artifact@v6
         with:
           # ⚠ caminho a partir da RAIZ do workspace: `upload-artifact` ignora o

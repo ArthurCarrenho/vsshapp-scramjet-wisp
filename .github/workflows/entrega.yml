@@ -14,16 +14,15 @@ name: Entrega
 # smoke reprova. O que mudou é que agora quase nunca há o que reprovar, porque o job `vendor` já
 # remontou antes de o smoke rodar.
 #
-# ─── A versão pulou para 4.1, e não é enfeite ───────────────────────────────────────────────
+# ─── A versão publicada é `5.0.<run>` ────────────────────────────────────────────────────────
 #
-# O sufixo é `github.run_number`, que é POR ARQUIVO de workflow: um arquivo novo começa em 1. Com
-# `4.0.<run>` isso publicaria `4.0.1` contra os `4.0.40` já no repositório — a versão andando para
-# trás. Subir a minor resolve, e é honesto: a forma de publicar mudou de verdade (o motor viaja no
-# tarball, e quem o monta é este arquivo).
+# A major acompanha o SDK que o app passou a usar: o runtime `vssh` do servidor e o shell 5. O
+# sufixo é `github.run_number`, que é POR ARQUIVO de workflow, então ele continua a contagem deste
+# arquivo, e o número nunca anda para trás.
 #
-# Seguro porque o Worker não compara números: ele guarda `latest` como o ÚLTIMO publicado, e o
-# `vssh-app-install` pega `cands[0]`, que é esse campo. As 4.0.x ficam no `history`, então
-# `vssh-app-install scramjet-wisp@4.0.40` continua servindo de rollback.
+# O Worker não compara números: ele guarda `latest` como o ÚLTIMO publicado, e o
+# `vssh-app-install` pega `cands[0]`, que é esse campo. As 4.x ficam no `history`, então
+# `vssh-app-install scramjet-wisp@4.1.<n>` continua servindo de rollback num servidor com shell 4.
 #
 # Secret necessário (Settings → Secrets and variables → Actions):
 #   - VSSH_REPO_PUBLISH_TOKEN: token de publicação do Worker, escopado `app:scramjet-wisp`.
@@ -159,11 +158,10 @@ jobs:
 
   # ── 4. Publicar ─────────────────────────────────────────────────────────────────────────────
   #
-  # As três etapas do `colabhd/vssh-app-toolkit/.github/workflows/_publish-app-reusable.yml@v4`,
-  # inlineadas — não por gosto, mas porque aquele workflow faz `actions/checkout` limpo em runner
-  # separado e não tem input para injetar o vendor deste run. `tools_ref: v4` continua valendo: a
-  # lógica de verdade (schema, gate de libs, empacotamento) segue vindo pinada do toolkit; o que
-  # está aqui é só a orquestração.
+  # As três etapas do `colabhd/vssh-sdk/.github/workflows/_publish-app-reusable.yml@main`,
+  # inlineadas, porque aquele workflow faz `actions/checkout` limpo em runner separado e não tem
+  # input para injetar o vendor deste run. A lógica (schema, empacotamento, o POST no Worker)
+  # continua vindo do `vssh-sdk`; o que está aqui é só a orquestração.
   publish:
     name: Publicar no repositório
     needs: smoke
@@ -175,19 +173,19 @@ jobs:
         with:
           path: app
 
-      - name: Checkout das ferramentas
+      # `main`, e não uma tag: o `api/vssh-app.schema.json` é gerado a partir do portal que está
+      # no ar, e a ponta de `main` responde "o portal de hoje aceita este manifesto?". `api` junto
+      # de `scripts` porque sem o schema o `vssh-app-publish` degrada para as checagens mínimas em
+      # vez de recusar a publicação.
+      - name: Checkout do vssh-sdk
         uses: actions/checkout@v5
         with:
-          repository: colabhd/vssh-app-toolkit
-          ref: v4
-          # `schema` e `package.json` junto de `scripts`: sem o primeiro o `vssh-app-publish`
-          # degrada para as checagens mínimas em vez de recusar a publicação, e sem o segundo ele
-          # pula a conferência de idade das libs vendorizadas.
+          repository: colabhd/vssh-sdk
+          ref: main
           sparse-checkout: |
             scripts
-            schema
-            package.json
-          path: _tools
+            api
+          path: _sdk
 
       # O motor deste run, por cima do checkout. O commit do job `vendor` já pôs isto em `main`,
       # mas o checkout acima é do SHA que disparou o run — que é anterior àquele commit. Baixar o
@@ -229,4 +227,4 @@ jobs:
           done
           echo "os 7 arquivos do contrato estão no pacote."
 
-          bash _tools/scripts/vssh-app-publish "app/." --version "4.1.${{ github.run_number }}"
+          bash _sdk/scripts/vssh-app-publish "app/." --version "5.0.${{ github.run_number }}"

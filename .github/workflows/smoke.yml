@@ -4,22 +4,13 @@ name: Smoke
 # teste nenhum: um bump de dependência que renomeasse um bundle só aparecia em produção, como
 # navegação vazando para o upstream porque o ScramjetEngine.js não conseguiu carregar o motor.
 #
-# Chamado como gate pelo publish.yml (workflow_call) — nunca publicar um pacote cujo `npm ci` não
-# resolve ou cujas rotas de asset sumiram — e roda sozinho em PR.
+# O `entrega.yml` o chama como gate (workflow_call) antes de publicar: um pacote cujo `npm ci` não
+# resolve ou cujas rotas de asset sumiram não sai daqui. Em PR ele roda pelo mesmo caminho.
 #
-# O `schedule` semanal SAIU, e a história dele vale a nota. Ele nasceu porque as 4 dependências
-# vinham de `releases/download/latest/...`, e a tag `latest` é MUTÁVEL — os bytes já foram
-# republicados sob o mesmo nome uma vez, quebrando o `integrity` do lockfile (commit 06d49be). Um
-# cron que reinstalasse toda semana era o jeito de descobrir isso aqui em vez de no servidor.
-#
-# A razão morreu em duas etapas. Primeiro as URLs passaram a apontar para tags que não se movem, e o
-# cron ficou "por um motivo menor e ainda real: uma release pode ser apagada à mão". Depois o motor
-# saiu do npm: **`backend/package.json` não referencia release nenhuma**, então não há asset que
-# possa sumir debaixo dele. Sobrava vigiar a tag `v4` do toolkit e o npm público — e para isso o
-# próximo push serve, porque nada aqui muda sem push.
-#
-# O horário semanal não se perdeu: foi para o `upstream.yml`, onde a pergunta ("o upstream mexeu?")
-# de fato acontece sem ninguém tocar neste repositório.
+# Não há `schedule`. O `backend/package.json` só referencia o npm público, e o runtime `vssh` que
+# o backend importa vem do servidor, pelo `NODE_PATH` do `vssh-app-run`, e no CI pelo
+# `preparar-sdk` do `vssh-sdk`. Nada aqui muda sem push, e o push já roda isto. A pergunta que um
+# cron faria ("o upstream mexeu?") mora no `upstream.yml`.
 
 on:
   workflow_call:
@@ -168,9 +159,9 @@ jobs:
     name: Sobe e serve o contrato
     runs-on: ubuntu-latest
     env:
-      # Socket unix, e não porta: desde a v4 do toolkit o `escutar()` só binda socket. Este smoke
-      # exportava VSSH_APP_PORT, então subia um backend que morre no boot com
-      # VSSH_APP_SERVIDOR_ANTIGO — o smoke media o transporte que o app não fala mais.
+      # Socket unix, e não porta: no servidor o `servidor.escutar()` do runtime só binda o socket de
+      # `VSSH_APP_SOCKET`, e um `VSSH_APP_PORT` sozinho é recusado como servidor antigo. O smoke
+      # sobe o app pelo mesmo transporte que o `vssh-app-run` usa.
       SOCK: '/tmp/scramjet-smoke.sock'
       TOKEN: 'smoke-token-nao-secreto'
     steps:
@@ -194,6 +185,13 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: backend/package-lock.json
+
+      # O runtime `vssh` que o `backend/server.js` importa. No servidor ele mora em
+      # `/opt/vssh/sdk/node` e chega pelo `NODE_PATH` que o `vssh-app-run` exporta; aqui a ação do
+      # `vssh-sdk` faz o checkout esparso de `runtime`, `api` e `scripts` em `_sdk/` e grava
+      # `NODE_PATH`, `PYTHONPATH` e `VSSH_SDK` no `GITHUB_ENV`, então todo passo abaixo os herda:
+      # o `npm test` e cada `node backend/server.js` que este job sobe, inclusive os de árvore torta.
+      - uses: colabhd/vssh-sdk/.github/actions/preparar-sdk@main
 
       # Manifesto: o vssh-app-publish valida contra o JSON Schema, mas nenhuma das duas pontas
       # confere se o entrypoint EXISTE. Custa uma linha e roda em PR, antes do merge.
