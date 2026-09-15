@@ -1,13 +1,13 @@
 {
   "id": "scramjet-wisp",
   "name": "Motor Scramjet (wisp)",
-  "version": "4.1.0",
+  "version": "5.0.0",
   "type": "engine",
   "kind": "service",
   "category": "Engine",
   "description": "Motor de reescrita web (Scramjet): serve o cliente do Scramjet e o endpoint wisp que o navegador embutido do ambiente usa para alcançar a web. Sem janela própria.",
   "provides": ["web-proxy/v1"],
-  "minShellVersion": "4.1.0",
+  "minShellVersion": "5.0.0",
   "backend": {
     "runtime": "node",
     "transport": "socket",
