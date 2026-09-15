@@ -84,7 +84,7 @@ test('árvore alinhada não produz nenhuma divergência', () => {
   const versoes = {
     '@mercuryworkshop/scramjet': '2.0.67-alpha.10',
     '@mercuryworkshop/wisp-js': '0.4.1',
-    'vssh-app-toolkit': '4.0.0',
+    'ws': '8.21.3',
   };
   const r = conferirVersoes({
     raiz: RAIZ,
@@ -96,7 +96,7 @@ test('árvore alinhada não produz nenhuma divergência', () => {
   assert.deepEqual(resumirVersoes(r), [
     '@mercuryworkshop/scramjet 2.0.67-alpha.10',
     '@mercuryworkshop/wisp-js 0.4.1',
-    'vssh-app-toolkit 4.0.0',
+    'ws 8.21.3',
   ]);
 });
 
@@ -106,9 +106,9 @@ test('pacote não instalado conta como divergente, e é nomeado', () => {
   const r = conferirVersoes({
     raiz: RAIZ,
     lerJson: arvore({
-      manifesto: { '@mercuryworkshop/scramjet': 'x', 'vssh-app-toolkit': 'y' },
-      lock:      { '@mercuryworkshop/scramjet': '2.0.67-alpha.10', 'vssh-app-toolkit': '4.0.0' },
-      disco:     { 'vssh-app-toolkit': '4.0.0' },
+      manifesto: { '@mercuryworkshop/scramjet': 'x', 'ws': 'y' },
+      lock:      { '@mercuryworkshop/scramjet': '2.0.67-alpha.10', 'ws': '8.21.3' },
+      disco:     { 'ws': '8.21.3' },
     }),
   });
 
