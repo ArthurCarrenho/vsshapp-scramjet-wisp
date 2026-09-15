@@ -194,12 +194,12 @@ async function tryServeStatic(req, res) {
   try {
     const st = await stat(filePath);
     if (!st.isFile()) throw new Error('not a file');
-    // Sem cache: importScripts() (usado por custom_xprahtml5/sw.js pra carregar
-    // controller.sw.js) só revalida o BYTE do script PRINCIPAL do SW por padrão
-    // (updateViaCache: "imports") — scripts importados como este ficam sujeitos ao
-    // cache HTTP normal. Com max-age, um SW recém-instalado (até depois de
-    // unregister()+reload) continua executando uma cópia velha destes arquivos,
-    // indefinidamente, até o cache expirar — nada nunca é "revertido" de verdade.
+    // Sem cache. O `importScripts()` do `vssh-client/scram-sw.js`, que carrega o
+    // `controller.sw.js`, só revalida o script principal do service worker por padrão
+    // (`updateViaCache: "imports"`); os scripts importados ficam sujeitos ao cache HTTP
+    // normal. Com `max-age`, um service worker recém-instalado (mesmo depois de
+    // `unregister()` e reload) continuaria executando uma cópia velha destes arquivos até o
+    // cache expirar, e nenhuma reversão chegaria ao navegador.
     res.writeHead(200, {
       'Content-Type':  MIME[path.extname(filePath)] || 'application/octet-stream',
       'Cache-Control': 'no-store',

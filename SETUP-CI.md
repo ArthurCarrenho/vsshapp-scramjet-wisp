@@ -1,118 +1,81 @@
-# Operação do CI de publicação
+# Operação do CI
 
-O split para repo próprio já aconteceu. Este documento cobre como a publicação funciona hoje, o que
-é preciso configurar uma única vez, e o histórico de uma armadilha que já quebrou a esteira — para
-não ser reintroduzida.
+Um push em `main` publica o app. Este documento diz o que a esteira faz, o que se configura uma
+vez, e como conferir que uma publicação chegou.
 
-O workflow vive em [`.github/workflows/publish.yml`](.github/workflows/publish.yml) e delega ao
-reusable do `colabhd/vssh-app-toolkit`. O gate de qualidade é
-[`.github/workflows/smoke.yml`](.github/workflows/smoke.yml), que roda antes e em todo PR.
+## O que roda
 
-## Como funciona
+O CI único é [`.github/workflows/entrega.yml`](.github/workflows/entrega.yml), disparado por push em
+`main`, por pull request e à mão. Quatro jobs, em sequência:
 
-`push` em `main` → job `smoke` (sobe o backend e confere healthcheck, os 7 assets do contrato,
-traversal e gate de token) → job `publish` (empacota e publica no Worker D1/R2) → instalável no
-servidor com `sudo vssh-app-install scramjet-wisp --force`.
+1. `motor` ([`motor.yml`](.github/workflows/motor.yml)): constrói o que mudou em `engines/`
+   (o fork do Scramjet e o do libcurl-transport). Um push que não toca em `engines/` não paga
+   esse build.
+2. `vendor`: aplica o resultado em `backend/vendor/`, confere que cada `BUILD.json` aponta para a
+   árvore atual do fork e, só em push, commita a remontagem com o `GITHUB_TOKEN`, que não dispara
+   outro run.
+3. `smoke` ([`smoke.yml`](.github/workflows/smoke.yml)): o gate. O job `tarball` monta o pacote do
+   mesmo jeito que a publicação monta e confere o que entra e o que fica de fora; o job `smoke`
+   instala pelo `installCommand` do manifesto, roda a bancada do backend, sobe o servidor no
+   socket unix e exercita healthcheck, os sete assets do contrato, traversal, o portão de token do
+   upgrade e a degradação por pacote ausente.
+4. `publish`: só em push para `main`. Faz o checkout esparso de `scripts` e `api` do
+   [`colabhd/vssh-sdk`](https://github.com/colabhd/vssh-sdk) e publica no Worker pelo
+   `vssh-app-publish` de lá, com a versão `5.0.<número do run>`.
 
-## O que já quebrou aqui (não reintroduza)
+O backend importa o runtime `vssh` do servidor (`/opt/vssh/sdk/node`, no `NODE_PATH` que o
+`vssh-app-run` exporta), e por isso não o leva no pacote. No CI quem o fornece é a ação
+`colabhd/vssh-sdk/.github/actions/preparar-sdk@main`, chamada no começo do job `smoke`.
 
-A versão anterior deste workflow **inlineava** os passos e dava checkout de `colabhd/vssh-sso`
-(sparse `scripts/`) usando um PAT, para rodar `_tools/scripts/vssh-app-publish`. O racional
-registrado era: *"o vssh-sso é privado e de outra conta; o GitHub não deixa um repo pessoal chamar
-um reusable workflow privado cross-owner"*.
+[`upstream.yml`](.github/workflows/upstream.yml) é separado: toda segunda ele compara cada
+subárvore de `engines/` com o upstream dela e mantém uma issue aberta quando o upstream andou.
 
-Duas coisas invalidaram isso:
+## Configuração, uma vez
 
-1. O `vssh-app-publish` **foi movido** do `vssh-sso` para o `colabhd/vssh-app-toolkit` (commit
-   `1acc1ef`). O checkout continuou funcionando, mas o arquivo não estava mais lá — **todo push em
-   `main` passou a falhar**, e o app ficou sem poder publicar por semanas.
-2. O toolkit é **público**. A limitação cross-owner nunca se aplicou a ele, então o `uses:` resolve
-   no `github.token` do próprio repo e **nenhum PAT é necessário**.
-
-Se algum dia a publicação voltar a falhar com "No such file or directory", suspeite primeiro de que
-o script mudou de casa outra vez.
-
-### Sobre as refs (`@main` e `tools_ref: main`)
-
-As duas apontam para `main` de propósito: **só em `main`** o reusable faz sparse-checkout de
-`schema/` junto de `scripts/`, e é isso que faz o `vssh-app-publish` validar o `vssh-app.json`
-contra o JSON Schema inteiro. A tag `v1` está congelada num commit **anterior** à existência de
-`schema/` — o script de lá nem tem o código de validação, então `@v1` degrada em silêncio para as
-checagens mínimas (`id`/`runtime`/`entrypoint`).
-
-Se `main` quebrar, o conserto é trocar as duas refs por `v1`: volta a publicar, validando menos.
-
-## Configuração (uma vez)
-
-### 1. Token de publicação escopado (`app:scramjet-wisp`)
-
-Com o **token mestre** do Worker (secret `PUBLISH_TOKEN` do repo-worker):
+Um token de publicação escopado em `app:scramjet-wisp`, emitido com o token mestre do Worker:
 
 ```bash
-curl -fsS -X POST "https://vssh-repo.colabh.org/v1/tokens" \
-  -H "Authorization: Bearer $VSSH_MASTER_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"scope":"app:scramjet-wisp","label":"CI scramjet-wisp (ArthurCarrenho)"}'
-# → retorna { "token": "vsshp_..." } UMA ÚNICA VEZ. Guarde.
+curl -fsS -X POST "https://vssh-repo.colabh.org/v1/tokens"   -H "Authorization: Bearer $VSSH_MASTER_TOKEN"   -H "Content-Type: application/json"   -d '{"scope":"app:scramjet-wisp","label":"CI scramjet-wisp (ArthurCarrenho)"}'
+# devolve { "token": "vsshp_..." } uma vez só
 ```
 
-O `scramjet-wisp` é publicado como `kind:app` com `type:"engine"` no manifesto — por isso o escopo é
-`app:<id>`, não um kind novo.
-
-### 2. Registrar no repo
+O escopo é `app:<id>` porque o `scramjet-wisp` é publicado como `kind:app`; o `type: engine` fica
+no manifesto. Depois, no repositório:
 
 ```bash
-gh secret set VSSH_REPO_PUBLISH_TOKEN -R ArthurCarrenho/vsshapp-scramjet-wisp   # o vsshp_... acima
-# opcional (o default já é https://vssh-repo.colabh.org):
+gh secret set VSSH_REPO_PUBLISH_TOKEN -R ArthurCarrenho/vsshapp-scramjet-wisp
+# opcional; o padrão já é https://vssh-repo.colabh.org
 gh variable set VSSH_REPO_API -R ArthurCarrenho/vsshapp-scramjet-wisp -b "https://vssh-repo.colabh.org"
 ```
 
-**`VSSH_REPO_PUBLISH_TOKEN` é o único secret necessário.** O antigo `VSSH_TOOLS_TOKEN` (PAT com
-`Contents: Read` no `colabhd/vssh-sso`) não é mais referenciado por nada:
+`VSSH_REPO_PUBLISH_TOKEN` é o único secret. O `vssh-sdk` é público, então o checkout dele sai no
+`github.token` do próprio run.
+
+## Publicar e conferir
+
+`git push` para `main` dispara tudo. Para exercitar a esteira sem publicar, rode o workflow à mão
+num branch:
 
 ```bash
-gh secret delete VSSH_TOOLS_TOKEN -R ArthurCarrenho/vsshapp-scramjet-wisp
+gh workflow run Entrega --ref <seu-branch>
 ```
 
-Apagar o secret **não revoga** o credential — revogue também em GitHub → Settings → Developer
-settings → Fine-grained tokens.
-
-## Publicar e verificar
-
-`git push` para `main` dispara. Para exercitar sem tocar em `main`, use o `workflow_dispatch`
-apontando para o branch do PR:
-
-```bash
-gh workflow run "Publish scramjet-wisp → vssh-repo" --ref <seu-branch>
-```
-
-Nos logs do publish, confirme a linha `✅ ... publicado` **e a ausência** de
-`aviso: schema não encontrado; validando só o mínimo` — essa ausência é a prova de que
-`tools_ref: main` pegou e a validação completa rodou.
+Nesse caso `motor`, `vendor` e `smoke` rodam, e `publish` fica de fora, porque ele só roda em push
+para `main`. Para conferir uma publicação:
 
 ```bash
 curl -fsS https://vssh-repo.colabh.org/v1/apps/scramjet-wisp/manifest.json | jq .latest.version
 ```
 
-Depois, no servidor: `sudo vssh-app-install scramjet-wisp --force` (ou pela aba admin
-"Repositório"). O `installCommand` roda `npm ci --omit=dev`, que baixa os bundles dos forks
-(`ArthurCarrenho/vssh-scramjet` + `vssh-libcurl-transport`, releases públicas) — sem auth.
+No servidor, `sudo vssh-app-install scramjet-wisp --force` (ou a aba "Repositório" do admin). O
+`installCommand` roda `npm ci --omit=dev` no `backend/`, e a única dependência é o `wisp-js`, do
+npm público; o motor viaja pronto em `backend/vendor/`.
 
-## Sobre a `version` do manifesto
+## A `version` do manifesto
 
-O campo `version` em `vssh-app.json` é **sempre sobrescrito** pelo CI com `1.0.<github.run_number>`.
-Ele não pode ser removido — o `vssh-app-publish` recusa manifesto sem `version` válida — e continua
-valendo para instalação manual a partir de um clone. Mas não adianta bumpá-lo à mão esperando que o
-número apareça no repositório de artefatos: quem manda ali é o número da execução do workflow.
-
-## Dependências AGPL e a tag `latest`
-
-As 4 dependências pesadas vêm de URLs `releases/download/**latest**/<pkg>-<ver>.tgz`. A tag
-`latest` é **mutável**: já aconteceu de os bytes serem republicados sob o mesmo nome de arquivo,
-invalidando o `integrity` do `package-lock.json` e fazendo `npm ci` falhar com `EINTEGRITY` (é o
-incidente descrito na mensagem do commit `06d49be`). A única defesa hoje é o `<ver>` no nome do
-arquivo, que depende de disciplina de sempre bumpar a versão ao republicar.
-
-Mitigação em vigor: o `smoke.yml` roda também num `schedule` semanal, então esse drift vira build
-vermelho aqui em vez de ser descoberto na próxima instalação num servidor de usuário. A correção
-definitiva mora nos repos dos forks — publicar releases com tag imutável por versão.
+O CI sobrescreve o campo `version` de `vssh-app.json` com `5.0.<número do run>` ao publicar. O
+valor que está no arquivo vale para uma instalação manual a partir de um clone, e o
+`vssh-app-publish` recusa manifesto sem `version` válida, então ele fica. O `run_number` é por
+arquivo de workflow, e por isso a contagem só anda para a frente enquanto a publicação morar no
+`entrega.yml`; o Worker não compara números, ele guarda como `latest` o último publicado, e as
+versões anteriores continuam no `history` para `vssh-app-install scramjet-wisp@<versão>`.

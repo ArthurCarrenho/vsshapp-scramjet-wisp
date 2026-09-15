@@ -65,10 +65,11 @@ O bundle carrega e atribui, em `client/javascript/copyright.js`, as licenças de
 **brotli** (MIT), **nghttp2** (MIT). Esse arquivo é embutido no bundle final e não deve ser
 removido.
 
-### `@mercuryworkshop/wisp-js` e `vssh-app-toolkit`
+### `@mercuryworkshop/wisp-js`
 
-Dependências instaladas pelo gerenciador de pacotes, não vendorizadas. Mantêm as próprias licenças
-(AGPL-3.0 e a do toolkit, respectivamente) e não são redistribuídas por este repositório.
+Dependência instalada pelo npm no servidor, não vendorizada. Mantém a própria licença (AGPL-3.0) e
+não é redistribuída por este repositório. O runtime `vssh` que o backend importa é instalado pelo
+portal VSSH em cada servidor (MIT, em `colabhd/vssh-sdk`), e também não viaja neste pacote.
 
 ---
 
