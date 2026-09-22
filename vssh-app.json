@@ -5,7 +5,7 @@
   "type": "engine",
   "kind": "service",
   "category": "Engine",
-  "description": "Motor de reescrita web (Scramjet): serve o cliente do Scramjet e o endpoint wisp que o navegador embutido do ambiente usa para alcançar a web. Sem janela própria.",
+  "description": "Leva o navegador do ambiente à web a partir do servidor, reescrevendo as páginas. Roda em segundo plano, sem janela.",
   "provides": ["web-proxy/v1"],
   "minShellVersion": "5.0.0",
   "backend": {
