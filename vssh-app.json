@@ -13,6 +13,7 @@
     "transport": "socket",
     "entrypoint": "backend/server.js",
     "installCommand": "cd backend || exit 1; S=node_modules/.lock-stamp; H=$(sha256sum package-lock.json 2>/dev/null | cut -d' ' -f1); { [ \"${VSSH_APP_REBUILD:-}\" != 1 ] && [ -n \"$H\" ] && [ \"$(cat \"$S\" 2>/dev/null)\" = \"$H\" ]; } || { npm ci --omit=dev && printf %s \"$H\" > \"$S\"; }",
-    "healthcheckPath": "/"
+    "healthcheckPath": "/",
+    "aoFechar": "ocioso:15m"
   }
 }
