@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { server as wisp, logging } from '@mercuryworkshop/wisp-js/server';
 import { aplicarPolitica, nivelDoPedido } from './rede.js';
 import { criarSocketTcp } from './tcp.js';
-import { conferirVersoes, resumirVersoes, conferirMotor, resumirMotor } from './versoes.js';
+import { conferirVersoes, resumirVersoes, conferirMotor, resumirMotor, hashDoMotor } from './versoes.js';
 
 // O runtime de backend que o portal instala em `/opt/vssh/sdk/node` e que o `vssh-app-run` expõe
 // pelo `NODE_PATH`. Este backend é ESM, e a resolução de ES modules do Node ignora o `NODE_PATH`,
@@ -131,6 +131,14 @@ for (const spec of ROUTE_SPECS) {
 
 const MISSING_ESSENTIAL = MISSING.filter(m => m.essential);
 
+// A versão do motor que vai nas URLs do cliente (`/v/<versao>/scram/...`). Um arquivo servido por
+// uma URL com a versão atual sai `immutable`, e o navegador não o pede de novo a cada navegação: o
+// `controller.inject.js` e o `scramjet.js` que o controller injeta em todo documento reescrito,
+// pelo túnel e pelo portal. Uma URL com outra versão recebe o arquivo atual com `no-store`, nunca
+// um 404: o cliente que guardou a versão antiga continua funcionando até reler `/versao`.
+const VERSAO = hashDoMotor(STATIC_ROUTES.map(r => r.root));
+const PREFIXO_VERSIONADO = /^\/v\/([0-9a-f]{16})(\/.*)$/;
+
 const MIME = {
   '.js':   'application/javascript',
   '.mjs':  'application/javascript',
@@ -140,7 +148,14 @@ const MIME = {
 };
 
 async function tryServeStatic(req, res) {
-  const route = STATIC_ROUTES.find(r => req.url.startsWith(r.prefix));
+  let url = req.url;
+  let versaoPedida = null;
+  const versionada = PREFIXO_VERSIONADO.exec(url);
+  if (versionada) {
+    versaoPedida = versionada[1];
+    url = versionada[2];
+  }
+  const route = STATIC_ROUTES.find(r => url.startsWith(r.prefix));
 
   if (!route) {
     // Prefixo DECLARADO cujo pacote não resolveu. Sem este ramo a requisição cairia no catch-all
@@ -149,7 +164,7 @@ async function tryServeStatic(req, res) {
     // corpo não é JS válido, então o cliente conclui que carregou o motor e segue com ele ausente.
     // 503 (não 404) porque o arquivo não está "faltando": o servidor é que está degradado, e é
     // essa distinção que diz ao operador para rodar o installCommand em vez de caçar um typo.
-    const missing = MISSING.find(m => req.url.startsWith(m.prefix));
+    const missing = MISSING.find(m => url.startsWith(m.prefix));
     if (missing) {
       res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify({
@@ -173,7 +188,7 @@ async function tryServeStatic(req, res) {
   // 400 como o traversal logo abaixo.
   let relPath;
   try {
-    relPath = decodeURIComponent(req.url.slice(route.prefix.length).split('?')[0]);
+    relPath = decodeURIComponent(url.slice(route.prefix.length).split('?')[0]);
   } catch {
     res.writeHead(400).end();
     return true;
@@ -189,15 +204,16 @@ async function tryServeStatic(req, res) {
   try {
     const st = await stat(filePath);
     if (!st.isFile()) throw new Error('not a file');
-    // Sem cache. O `importScripts()` do `vssh-client/scram-sw.js`, que carrega o
-    // `controller.sw.js`, só revalida o script principal do service worker por padrão
-    // (`updateViaCache: "imports"`); os scripts importados ficam sujeitos ao cache HTTP
-    // normal. Com `max-age`, um service worker recém-instalado (mesmo depois de
-    // `unregister()` e reload) continuaria executando uma cópia velha destes arquivos até o
-    // cache expirar, e nenhuma reversão chegaria ao navegador.
+    // A URL sem versão sai `no-store`. O `importScripts()` do `scram-sw.js`, que carrega o
+    // `controller.sw.js`, só revalida o script principal do service worker (`updateViaCache:
+    // "imports"`), e um importado com `max-age` seguiria velho depois de uma troca de motor. Na
+    // URL versionada a troca muda a própria URL, e o cache não tem o que envelhecer. `private`,
+    // porque a rota passa pela sessão do portal e nenhum cache compartilhado precisa guardá-la.
     res.writeHead(200, {
       'Content-Type':  MIME[path.extname(filePath)] || 'application/octet-stream',
-      'Cache-Control': 'no-store',
+      'Cache-Control': versaoPedida && versaoPedida === VERSAO
+        ? 'private, max-age=31536000, immutable'
+        : 'no-store',
     });
     createReadStream(filePath).pipe(res);
   } catch {
@@ -206,7 +222,20 @@ async function tryServeStatic(req, res) {
   return true;
 }
 
+// O que o cliente pergunta antes de montar as URLs: a versão atual e o `BUILD.json` de cada pacote.
+function responderVersao(res) {
+  res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify({
+    versao: VERSAO,
+    pacotes: Object.fromEntries(MOTOR.pacotes.map(p => [p.dir, { versao: p.versao, origem: p.origem, fork: p.fork, fonte: p.fonte }])),
+  }));
+}
+
 const server = createServer((req, res) => {
+  if (req.url.split('?')[0] === '/versao') {
+    responderVersao(res);
+    return;
+  }
   tryServeStatic(req, res).then(served => {
     if (served) return;
 
@@ -306,6 +335,7 @@ servidor.escutar(server).then(({ transporte, endereco }) => {
     versoes: Object.fromEntries(VERSOES.pacotes.map(p => [p.nome, p.instalado])),
     versoesDivergentes: VERSOES.divergentes.map(p => ({ pacote: p.nome, instalado: p.instalado, lockfile: p.declarado })),
     motor: Object.fromEntries(MOTOR.pacotes.map(p => [p.dir, p.versao])),
+    motorVersao: VERSAO,
     motorFonte: Object.fromEntries(MOTOR.pacotes.map(p => [p.dir, p.fonte])),
   });
 

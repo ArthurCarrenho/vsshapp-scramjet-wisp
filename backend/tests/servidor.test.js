@@ -26,3 +26,37 @@ test('o traversal codificado continua recusado com 400', { skip: pulo }, async (
   const r = await fetch(srv.url + '/scram/%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd');
   assert.equal(r.status, 400);
 });
+
+test('/versao diz a versão do motor e o BUILD.json de cada pacote, sem cache', { skip: pulo }, async () => {
+  const r = await fetch(srv.url + '/versao');
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('cache-control'), 'no-store');
+  const corpo = await r.json();
+  assert.match(corpo.versao, /^[0-9a-f]{16}$/);
+  for (const pacote of ['scramjet', 'controller', 'utils', 'libcurl-transport']) {
+    assert.ok(corpo.pacotes[pacote]?.fonte, `${pacote} sem fonte: ${JSON.stringify(corpo.pacotes)}`);
+  }
+});
+
+test('a URL com a versão atual sai imutável, e com outra versão sai o arquivo atual sem cache', { skip: pulo }, async () => {
+  const { versao } = await (await fetch(srv.url + '/versao')).json();
+  const semVersao = await fetch(srv.url + '/controller/controller.inject.js');
+  const atual = await fetch(`${srv.url}/v/${versao}/controller/controller.inject.js`);
+  const velha = await fetch(srv.url + '/v/0000000000000000/controller/controller.inject.js');
+
+  assert.equal(semVersao.headers.get('cache-control'), 'no-store');
+  assert.equal(atual.headers.get('cache-control'), 'private, max-age=31536000, immutable');
+  assert.equal(velha.status, 200);
+  assert.equal(velha.headers.get('cache-control'), 'no-store');
+
+  const bytes = await semVersao.arrayBuffer();
+  assert.ok(bytes.byteLength > 0);
+  assert.deepEqual(Buffer.from(await atual.arrayBuffer()), Buffer.from(bytes));
+  assert.deepEqual(Buffer.from(await velha.arrayBuffer()), Buffer.from(bytes));
+});
+
+test('o traversal continua recusado dentro da URL versionada', { skip: pulo }, async () => {
+  const { versao } = await (await fetch(srv.url + '/versao')).json();
+  const r = await fetch(`${srv.url}/v/${versao}/scram/%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd`);
+  assert.equal(r.status, 400);
+});
