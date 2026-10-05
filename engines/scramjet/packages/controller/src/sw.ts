@@ -8,50 +8,61 @@ function makeId(): string {
 	return Math.random().toString(36).substring(2, 10);
 }
 
-// vssh fork: friendly HTML error page rendered when route() throws (network/libcurl
-// failure, or an internal error like "No frame found for request"). Upstream returned
-// plain text ("Internal Service Worker Error: ...", status 500) with no way to customize
-// it. Self-contained HTML (inline CSS — the SW has no access to the page's DOM/CSSOM),
-// theme-aware, with libcurl error codes mapped to human-readable Portuguese messages.
-function renderErrorPage(error: Error): string {
-	const message = error?.message || "Erro desconhecido";
+// vssh fork: a página de erro de navegação é um documento marcado. O shell do VSSH lê o
+// `<script id="vssh-erro-de-navegacao" type="application/json">` e desenha a página de erro dele,
+// no tema do ambiente, com a ação de cada causa. O resto do documento é para quem o abrir sem esse
+// shell: português, fundo escuro e o detalhe técnico num `<details>`.
+//
+// A causa sai do código do libcurl (CURLE_*), que o transporte põe na mensagem ("error code N").
+// Um erro sem código, que não é de rede, é do próprio motor.
+const CAUSA_DO_CODIGO: Record<number, string> = {
+	5: "dns", 6: "dns",
+	7: "recusa",
+	28: "tempo",
+	35: "tls", 51: "tls", 53: "tls", 54: "tls", 58: "tls", 59: "tls", 60: "tls", 64: "tls",
+	66: "tls", 77: "tls", 80: "tls", 82: "tls", 83: "tls", 90: "tls", 91: "tls",
+};
+
+const TEXTO_DA_CAUSA: Record<string, (host: string) => { titulo: string; frase: string }> = {
+	dns: (h) => ({ titulo: `Nenhum servidor responde por ${h}`, frase: "O nome não foi encontrado. Confira o endereço." }),
+	recusa: (h) => ({ titulo: `${h} recusou a conexão`, frase: "O servidor pode estar fora do ar, ou a porta pode estar errada." }),
+	tempo: (h) => ({ titulo: `${h} não respondeu a tempo`, frase: "O servidor demorou demais para responder." }),
+	tls: (h) => ({ titulo: `Certificado inválido em ${h}`, frase: "O certificado do site não pôde ser validado." }),
+	rede: (h) => ({ titulo: `A conexão com ${h} caiu`, frase: "A conexão foi interrompida antes de a página chegar." }),
+	motor: (h) => ({ titulo: `O motor de navegação não abriu ${h}`, frase: "O motor falhou ao processar o pedido." }),
+};
+
+// A URL real da navegação, tirada do caminho reescrito: `<prefixo do controller><id do frame>/
+// <url codificada>`, com o codec padrão (`encodeURIComponent`). Um caminho em outro formato fica
+// sem URL, e a página sai sem o host no título.
+function urlRealDe(rawUrl: string, prefixo: string): string {
+	try {
+		const caminho = new URL(rawUrl).pathname;
+		if (!caminho.startsWith(prefixo)) return "";
+		const resto = caminho.slice(prefixo.length);
+		const corte = resto.indexOf("/");
+		if (corte === -1) return "";
+		const real = new URL(decodeURIComponent(resto.slice(corte + 1)));
+		return real.protocol === "http:" || real.protocol === "https:" ? real.href : "";
+	} catch {
+		return "";
+	}
+}
+
+function renderErrorPage(error: Error, rawUrl: string, prefixo: string, deRede: boolean): string {
+	const message = error?.message || String(error ?? "");
 	const codeMatch = /error code (\d+)/i.exec(message);
-	const code = codeMatch ? parseInt(codeMatch[1], 10) : null;
+	const codigo = codeMatch ? parseInt(codeMatch[1], 10) : null;
+	const causa = (codigo !== null && CAUSA_DO_CODIGO[codigo]) || (deRede ? "rede" : "motor");
 
-	// libcurl error codes (CURLE_*) that surface most often through the wisp transport.
-	const messages: Record<number, { title: string; detail: string }> = {
-		6: {
-			title: "Não foi possível resolver o endereço",
-			detail: "O nome do servidor não pôde ser encontrado (DNS). Verifique se o endereço está correto.",
-		},
-		7: {
-			title: "Não foi possível conectar ao servidor",
-			detail: "A conexão foi recusada. O servidor pode estar fora do ar ou a porta pode estar errada.",
-		},
-		28: {
-			title: "Tempo esgotado",
-			detail: "O servidor demorou demais para responder.",
-		},
-		52: {
-			title: "O servidor não respondeu nada",
-			detail: "A conexão foi aberta mas fechada sem resposta. O serviço pode ter caído no meio da requisição.",
-		},
-		56: {
-			title: "Falha ao receber dados",
-			detail: "A conexão foi interrompida durante o recebimento da resposta.",
-		},
-		60: {
-			title: "Certificado de segurança inválido",
-			detail: "O certificado TLS deste site não pôde ser validado (por exemplo, um certificado autoassinado). É possível permitir certificados inválidos nas configurações do navegador, se você confia neste destino.",
-		},
-	};
+	const url = urlRealDe(rawUrl, prefixo);
+	let host = "";
+	try { host = url ? new URL(url).host : ""; } catch { /* sem host */ }
+	const { titulo, frase } = TEXTO_DA_CAUSA[causa](host || "o site");
 
-	const friendly = code !== null ? messages[code] : undefined;
-	const title = friendly?.title ?? "Não foi possível carregar a página";
-	const detail =
-		friendly?.detail ??
-		"Ocorreu um erro ao processar a requisição através do motor de navegação.";
-
+	const dado = { vsshErroDeNavegacao: 1, causa, url, host, codigo, detalhe: message };
+	// `<` vira `\u003c` dentro do JSON: um `</script>` no detalhe fecharia o bloco.
+	const json = JSON.stringify(dado).replace(/</g, "\\u003c");
 	const esc = (s: string) =>
 		s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -60,44 +71,25 @@ function renderErrorPage(error: Error): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)}</title>
+<meta name="color-scheme" content="dark">
+<title>${esc(titulo)}</title>
+<script id="vssh-erro-de-navegacao" type="application/json">${json}</script>
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; min-height: 100vh;
-    display: flex; align-items: center; justify-content: center;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: #f5f5f7; color: #1d1d1f; padding: 24px;
-  }
-  .card {
-    max-width: 480px; width: 100%; text-align: center;
-    background: #fff; border-radius: 16px; padding: 40px 32px;
-    box-shadow: 0 2px 24px rgba(0,0,0,.08);
-  }
-  .icon { font-size: 48px; line-height: 1; margin-bottom: 16px; }
-  h1 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
-  p { font-size: 15px; line-height: 1.5; margin: 0 0 8px; color: #515154; }
-  .code {
-    margin-top: 20px; font-size: 12px; color: #86868b;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    word-break: break-word;
-  }
-  @media (prefers-color-scheme: dark) {
-    body { background: #1d1d1f; color: #f5f5f7; }
-    .card { background: #2c2c2e; box-shadow: 0 2px 24px rgba(0,0,0,.4); }
-    p { color: #a1a1a6; }
-    .code { color: #6e6e73; }
-  }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #1e1e1e; color: #e6e6e6; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 24px; box-sizing: border-box; }
+  main { max-width: 480px; text-align: center; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+  p { margin: 0 0 16px; color: #a6a6a6; }
+  details { color: #8a8a8a; font-size: 12px; }
+  code { font-family: ui-monospace, Menlo, monospace; word-break: break-word; }
 </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon">⚠️</div>
-    <h1>${esc(title)}</h1>
-    <p>${esc(detail)}</p>
-    <div class="code">${esc(message)}</div>
-  </div>
+  <main>
+    <h1>${esc(titulo)}</h1>
+    <p>${esc(frase)}</p>
+    <details><summary>Detalhe técnico</summary><code>${esc(message)}</code></details>
+  </main>
 </body>
 </html>`;
 }
@@ -431,8 +423,11 @@ export async function route(event: FetchEvent): Promise<Response> {
 		}
 		// Navegação principal: mantém a página de erro legível (renderErrorPage) pra o usuário ver
 		// que o site falhou. Loga só se for um erro INESPERADO (bug do motor), não falha de rede.
-		if (!isTransportNetworkError(e)) console.error("Service Worker error:", e);
-		return new Response(renderErrorPage(e as Error), {
+		const deRede = isTransportNetworkError(e);
+		if (!deRede) console.error("Service Worker error:", e);
+		const prefixo =
+			tabs.find((t) => new URL(event.request.url).pathname.startsWith(t.prefix))?.prefix || "";
+		return new Response(renderErrorPage(e as Error, event.request.url, prefixo, deRede), {
 			status: 500,
 			headers: { "Content-Type": "text/html; charset=utf-8" },
 		});
