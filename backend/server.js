@@ -182,7 +182,16 @@ async function tryServeStatic(req, res) {
     return false;
   }
 
-  const relPath  = decodeURIComponent(req.url.slice(route.prefix.length).split('?')[0]);
+  // Um escape malformado (`%E0%A4%A`) faz o `decodeURIComponent` lançar. A página proxiada roda na
+  // origem do portal e alcança estas rotas com `fetch`, então o caminho é dado de fora e responde
+  // 400 como o traversal logo abaixo.
+  let relPath;
+  try {
+    relPath = decodeURIComponent(req.url.slice(route.prefix.length).split('?')[0]);
+  } catch {
+    res.writeHead(400).end();
+    return true;
+  }
   const filePath = path.join(route.root, relPath);
 
   // Nunca servir fora do dist/ do pacote (path traversal via "..").
@@ -233,6 +242,12 @@ const server = createServer((req, res) => {
 
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('scramjet-wisp ok');
+  }).catch((err) => {
+    // Sem este `.catch`, qualquer exceção no atendimento vira `unhandledRejection` e o Node encerra
+    // o processo inteiro, com todas as conexões wisp de todas as abas junto.
+    log('pedido-falhou', { url: req.url.split('?')[0], message: err?.message });
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
   });
 });
 

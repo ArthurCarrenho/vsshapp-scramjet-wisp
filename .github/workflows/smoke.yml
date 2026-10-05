@@ -523,6 +523,15 @@ jobs:
           echo "path-as-is=$a  percent-encoded=$b"
           [ "$a" = "400" ] && [ "$b" = "400" ] || { echo "traversal não foi recusado com 400"; exit 1; }
 
+      # Um escape malformado faz o decodeURIComponent lançar. O caminho chega de fora (a página
+      # proxiada alcança estas rotas com fetch), então ele responde 400 e o processo continua de pé.
+      - name: Escape malformado recusado, e o processo segue vivo
+        run: |
+          c=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" "http://app/scram/%E0%A4%A")
+          r=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" "http://app/")
+          echo "malformado=$c  raiz-depois=$r"
+          [ "$c" = "400" ] && [ "$r" = "200" ] || { echo "o escape malformado não foi recusado com o processo de pé"; exit 1; }
+
       # Prova duas coisas de uma vez: que o gate de token do upgrade funciona nas três negativas, e
       # que o wisp.routeRequest de fato sobe (o 101 só acontece se as wisp.options não explodiram no
       # import). Com node:http cru — nada de dependência nova só para o teste.
