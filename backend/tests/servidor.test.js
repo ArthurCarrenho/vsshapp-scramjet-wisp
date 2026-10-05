@@ -4,7 +4,10 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert';
-import { subirServidor, runtimeAusente } from './subir-servidor.js';
+import { cpSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { subirServidor, runtimeAusente, BACKEND } from './subir-servidor.js';
 
 const pulo = runtimeAusente() || false;
 let srv;
@@ -59,4 +62,27 @@ test('o traversal continua recusado dentro da URL versionada', { skip: pulo }, a
   const { versao } = await (await fetch(srv.url + '/versao')).json();
   const r = await fetch(`${srv.url}/v/${versao}/scram/%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd`);
   assert.equal(r.status, 400);
+});
+
+test('sem um pacote essencial, /versao responde 503 nomeando o pacote, como a raiz', { skip: pulo }, async () => {
+  const copia = mkdtempSync(path.join(tmpdir(), 'scramjet-wisp-sem-pacote-'));
+  let degradado;
+  try {
+    for (const nome of readdirSync(BACKEND)) {
+      if (nome === 'vendor' || nome === 'tests' || nome === 'node_modules') continue;
+      cpSync(path.join(BACKEND, nome), path.join(copia, nome), { recursive: true });
+    }
+    symlinkSync(path.join(BACKEND, 'node_modules'), path.join(copia, 'node_modules'));
+    for (const pacote of ['controller', 'libcurl-transport', 'utils']) {
+      cpSync(path.join(BACKEND, 'vendor', pacote), path.join(copia, 'vendor', pacote), { recursive: true });
+    }
+    degradado = await subirServidor({ raiz: copia });
+    const versao = await fetch(degradado.url + '/versao');
+    assert.equal(versao.status, 503);
+    assert.match((await versao.json()).error, /@mercuryworkshop\/scramjet\b/);
+    assert.equal((await fetch(degradado.url + '/')).status, 503);
+  } finally {
+    await degradado?.encerrar();
+    rmSync(copia, { recursive: true, force: true });
+  }
 });

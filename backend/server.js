@@ -223,9 +223,15 @@ async function tryServeStatic(req, res) {
 }
 
 // O que o cliente pergunta antes de montar as URLs: a versão atual e o `BUILD.json` de cada pacote.
+// É também a sonda do cliente antes de registrar o service worker, então um motor sem pacote
+// essencial responde 503 aqui, como na raiz: um 200 diria que o motor serve.
 function responderVersao(res) {
-  res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.writeHead(MISSING_ESSENTIAL.length ? 503 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify({
+    ...(MISSING_ESSENTIAL.length ? {
+      status: 'degraded',
+      error: `pacotes essenciais do motor não resolvidos: ${MISSING_ESSENTIAL.map(m => m.pkg).join(', ')}`,
+    } : {}),
     versao: VERSAO,
     pacotes: Object.fromEntries(MOTOR.pacotes.map(p => [p.dir, { versao: p.versao, origem: p.origem, fork: p.fork, fonte: p.fonte }])),
   }));
