@@ -1,18 +1,18 @@
-// Primeira bancada deste repo. Ela existe por um motivo concreto: **as opções do wisp-js já
-// derrubaram este serviço.** `stream_limit_total` ativa um caminho que itera `connection.streams`
-// como iterável, e ele é um objeto plano — o processo crashava na PRIMEIRA conexão, sempre, em
-// produção. Uma opção que "parece certa" e não é só aparece quando alguém liga.
-//
-// O que se mede aqui é a política de saída (`backend/rede.js`): que ela força IPv4, que recusa
-// destino IPv6 literal, e que NÃO regride o caso de uso principal do motor — rede privada e
-// loopback, que é servidor de dev do usuário.
+// A política de rede (`backend/rede.js`): por onde o motor resolve um nome e o que ele alcança. As
+// opções do wisp-js mudam o comportamento de um jeito que só aparece quando alguém liga (o
+// `stream_limit_per_host` derruba o processo na primeira conexão), então cada afirmação daqui roda
+// contra o filtro real do pacote ou contra o `/proc` da máquina.
 //
 // Sem rede: o `dns.lookup` é injetado. Roda em CI como gate do publish.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { packet, server as wisp } from '@mercuryworkshop/wisp-js/server';
-import { aplicarPolitica, criarResolvedorIPv4, LITERAL_IPV6 } from '../rede.js';
+import net from 'node:net';
+import {
+  aplicarPolitica, criarResolvedorIPv4, LITERAL_IPV6, classificarEndereco, decidirDestino, donoDaPorta,
+  lerSocketsEmEscuta, nivelDoPedido, socketsEmEscuta,
+} from '../rede.js';
 
 // ⚠ Import por CAMINHO DE ARQUIVO, de propósito. `is_stream_allowed` não é reexportado pelo
 // entrypoint público, e o `exports` do pacote bloqueia subpath — mas é ele que decide se uma
@@ -25,6 +25,7 @@ import { aplicarPolitica, criarResolvedorIPv4, LITERAL_IPV6 } from '../rede.js';
 import { is_stream_allowed } from '../node_modules/@mercuryworkshop/wisp-js/src/server/filter.mjs';
 
 const TCP = packet.stream_types.TCP;
+const UDP = packet.stream_types.UDP;
 const BLOQUEADO = packet.close_reasons.HostBlocked;
 const PERMITIDO = 0;
 
@@ -151,12 +152,6 @@ test('a política recusa literal IPv6 e não mexe em nome de host', () => {
   }
 });
 
-test('rede privada e loopback seguem liberadas — o caso de uso principal não regride', () => {
-  const o = aplicarPolitica(opcoesLimpas());
-  assert.equal(o.allow_private_ips, true);
-  assert.equal(o.allow_loopback_ips, true);
-});
-
 test('a regex exportada é a mesma que a política instala', () => {
   const o = aplicarPolitica(opcoesLimpas());
   assert.deepEqual(o.hostname_blacklist, [LITERAL_IPV6]);
@@ -179,7 +174,7 @@ test('o filtro do wisp bloqueia IPv6 literal, e bloqueia ANTES de olhar IP diret
   assert.deepEqual(pedidos, [], 'nenhum deles chegou a pedir DNS: foram barrados antes');
 });
 
-test('o filtro do wisp deixa passar o que o motor existe para alcançar', async () => {
+test('o filtro do wisp passa loopback e rede privada adiante, e a régua decide no socket', async () => {
   const pedidos = [];
   aplicarPolitica(wisp, {
     lookup: async (hostname) => { pedidos.push(hostname); return { address: '192.168.1.10' }; },
@@ -188,9 +183,121 @@ test('o filtro do wisp deixa passar o que o motor existe para alcançar', async 
   for (const h of ['docs.astro.build', 'localhost']) {
     assert.equal(await is_stream_allowed(null, TCP, h, 443), PERMITIDO, `devia permitir ${h}`);
   }
-  // IP privado literal: passa sem DNS, e é o servidor de dev do usuário.
+  // O filtro só sabe dizer "toda a rede privada" ou "todo o loopback"; a régua precisa da porta, do
+  // dono e do nível, e roda no socket (tests/tcp.test.js).
   assert.equal(await is_stream_allowed(null, TCP, '192.168.1.10', 3000), PERMITIDO);
   assert.equal(await is_stream_allowed(null, TCP, '127.0.0.1', 3000), PERMITIDO);
 
   assert.deepEqual(pedidos, ['docs.astro.build', 'localhost'], 'só os nomes passaram pelo resolvedor');
+});
+
+test('o filtro do wisp recusa UDP: o transporte do navegador só abre TCP', async () => {
+  aplicarPolitica(wisp, { lookup: async () => ({ address: '93.184.216.34' }) });
+  assert.equal(await is_stream_allowed(null, UDP, 'dns.exemplo', 53), BLOQUEADO);
+});
+
+// ─── A régua de destinos ─────────────────────────────────────────────────────────────────
+
+test('a classe de cada endereço, com os mapeados em IPv6 lidos pelo IPv4 que carregam', () => {
+  const casos = {
+    publica: ['93.184.216.34', '8.8.8.8', '2606:4700::6812:1192', '172.32.0.1', '100.128.0.1'],
+    privada: ['10.0.0.5', '172.16.3.4', '192.168.1.10', '100.64.0.1', 'fd12::1', '::ffff:10.0.0.5'],
+    loopback: ['127.0.0.1', '127.0.0.2', '::1', '::ffff:127.0.0.1'],
+    nunca: [
+      '169.254.169.254', '::ffff:169.254.169.254', '0.0.0.0', '0.1.2.3', '100.100.100.200',
+      'fd00:ec2::254', 'fe80::1', '::', '224.0.0.1', '255.255.255.255', 'nao-e-ip', '',
+    ],
+  };
+  for (const [classe, enderecos] of Object.entries(casos)) {
+    for (const ip of enderecos) assert.equal(classificarEndereco(ip), classe, ip);
+  }
+});
+
+test('o nível de rede vem do cabeçalho do portal, e o que não é 0 a 3 vira 0', () => {
+  assert.equal(nivelDoPedido({ 'x-vssh-rede-nivel': '2' }), 2);
+  assert.equal(nivelDoPedido({ 'x-vssh-rede-nivel': '3' }), 3);
+  for (const valor of [undefined, '', '7', '-1', '1.5', 'abc', '2, 3']) {
+    assert.equal(nivelDoPedido({ 'x-vssh-rede-nivel': valor }), 0, String(valor));
+  }
+  assert.equal(nivelDoPedido(undefined), 0);
+});
+
+/** Linhas no formato de /proc/net/tcp e /proc/net/tcp6, com o cabeçalho que o kernel escreve. */
+function proc(linhas) {
+  const cab = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode';
+  return [cab, ...linhas.map(([local, st, uid], i) =>
+    `  ${i}: ${local} 00000000:0000 ${st} 00000000:00000000 00:00000000 00000000  ${uid}        0 ${1000 + i} 1 0000000000000000 100 0 0 10 0`)].join('\n');
+}
+
+test('os sockets em escuta saem do /proc com endereço, porta e dono, e só os em LISTEN', () => {
+  const v4 = proc([
+    ['0100007F:1F72', '0A', 1000],  // 127.0.0.1:8050
+    ['00000000:0BB8', '0A', 1001],  // 0.0.0.0:3000
+    ['0100007F:1F73', '01', 1000],  // conexão estabelecida, não é escuta
+  ]);
+  const v6 = proc([
+    ['00000000000000000000000001000000:1F72', '0A', 1002], // ::1:8050
+    ['00000000000000000000000000000000:0BB8', '0A', 1003], // :::3000
+    ['0000000000000000FFFF00000100007F:22B8', '0A', 1004], // ::ffff:127.0.0.1:8888
+  ]);
+  assert.deepEqual(socketsEmEscuta([v4, v6]), [
+    { endereco: '127.0.0.1', porta: 8050, uid: 1000 },
+    { endereco: '0.0.0.0', porta: 3000, uid: 1001 },
+    { endereco: '::1', porta: 8050, uid: 1002 },
+    { endereco: '::', porta: 3000, uid: 1003 },
+    { endereco: '127.0.0.1', porta: 8888, uid: 1004 },
+  ]);
+});
+
+test('o dono de uma porta do loopback é quem o kernel escolhe, pelo bind mais específico', () => {
+  const sockets = [
+    { endereco: '::', porta: 8050, uid: 1 },        // A, wildcard IPv6
+    { endereco: '0.0.0.0', porta: 8050, uid: 2 },   // B, wildcard IPv4
+    { endereco: '127.0.0.2', porta: 9000, uid: 3 }, // outro endereço do loopback
+    { endereco: '::', porta: 9100, uid: 4 },
+  ];
+  // Uma conexão a 127.0.0.1 vai para B: o wildcard IPv4 ganha do IPv6, mesmo com A escutando.
+  assert.equal(donoDaPorta('127.0.0.1', 8050, sockets), 2);
+  // Uma conexão a ::1 não chega ao 0.0.0.0, e vai para A.
+  assert.equal(donoDaPorta('::1', 8050, sockets), 1);
+  // 127.0.0.2 não recebe a conexão a 127.0.0.1.
+  assert.equal(donoDaPorta('127.0.0.1', 9000, sockets), null);
+  assert.equal(donoDaPorta('127.0.0.2', 9000, sockets), 3);
+  // O `::` dual-stack recebe IPv4 quando nada mais escuta na porta.
+  assert.equal(donoDaPorta('127.0.0.1', 9100, sockets), 4);
+  assert.equal(donoDaPorta('127.0.0.1', 1234, sockets), null);
+});
+
+test('a régua: pública sempre, metadata nunca, privada pelo nível, loopback só a porta da conta', () => {
+  const sockets = () => [
+    { endereco: '127.0.0.1', porta: 8050, uid: 1000 },
+    { endereco: '0.0.0.0', porta: 6379, uid: 1001 },
+  ];
+  const decidir = (ip, porta, nivel) => decidirDestino({ ip, porta, nivel, uid: 1000, sockets });
+
+  assert.equal(decidir('93.184.216.34', 443, 0).permitido, true);
+  for (const nivel of [0, 1, 2, 3]) {
+    assert.deepEqual(decidir('169.254.169.254', 80, nivel), { permitido: false, classe: 'nunca', motivo: 'endereco_proibido' });
+  }
+  assert.deepEqual(decidir('10.0.0.5', 5432, 0), { permitido: false, classe: 'privada', motivo: 'rede_privada' });
+  assert.equal(decidir('10.0.0.5', 5432, 1).permitido, false);
+  assert.equal(decidir('10.0.0.5', 5432, 2).permitido, true);
+  assert.equal(decidir('fd12::1', 80, 3).permitido, true);
+
+  // O dev server da própria conta abre em qualquer nível; o Redis do vizinho, em nenhum.
+  assert.equal(decidir('127.0.0.1', 8050, 0).permitido, true);
+  assert.deepEqual(decidir('127.0.0.1', 6379, 3), { permitido: false, classe: 'loopback', motivo: 'loopback_de_outra_conta' });
+  assert.deepEqual(decidir('127.0.0.1', 22, 3), { permitido: false, classe: 'loopback', motivo: 'loopback_sem_escuta' });
+});
+
+test('o dono lido do /proc desta máquina é esta conta, para um listener deste processo', async () => {
+  const servidor = net.createServer().listen(0, '127.0.0.1');
+  await new Promise((ok) => servidor.once('listening', ok));
+  try {
+    const { port } = servidor.address();
+    assert.equal(donoDaPorta('127.0.0.1', port, lerSocketsEmEscuta()), process.getuid());
+    assert.equal(decidirDestino({ ip: '127.0.0.1', porta: port, nivel: 0 }).permitido, true);
+  } finally {
+    servidor.close();
+  }
 });
