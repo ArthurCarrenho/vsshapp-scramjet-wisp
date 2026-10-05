@@ -471,7 +471,8 @@ mod tests {
 	/// estão medidos na contraprova, para os literais esperados não serem invenção minha.
 	#[test]
 	fn alvo_de_membro_em_desestruturacao_recebe_o_mesmo_tratamento() {
-		const LE: &str = "obj[$prop(($wrap(location)))]";
+		// O espaço antes do `$prop` vem do PR #187: o wrapper nunca gruda no que vem antes.
+		const LE: &str = "obj[ $prop(($wrap(location)))]";
 		const ESCREVE: &str = "window.$sj_location";
 
 		// Contraprova: fora da desestruturação, sempre funcionou.
@@ -591,6 +592,33 @@ mod tests {
 			reescrever_modulo("const top = 1; export { top }"),
 			"const top = 1; export { top }"
 		);
+	}
+
+	/// O que sai do rewriter tem de continuar sendo JavaScript, e quem confere é o mesmo parser.
+	fn saida_e_js_valido(js: &str) -> bool {
+		let alloc = Allocator::default();
+		let parsed = oxc::parser::Parser::new(&alloc, js, oxc::span::SourceType::cjs()).parse();
+		parsed.errors.is_empty() && !parsed.panicked
+	}
+
+	/// O ponto de inserção do `$wrapPostMessage` é o começo de uma expressão qualquer, e em código
+	/// minificado ela pode vir colada numa palavra-chave (`typeof(x).postMessage`). Sem separador, o
+	/// nome do wrapper gruda nela e a saída vira um identificador só (`typeof$wrapPostMessage`), que
+	/// lança `ReferenceError` na página. O conserto é o PR #187 do upstream.
+	#[test]
+	fn wrapper_inserido_depois_de_palavra_chave_nao_gruda_nela() {
+		for js in [
+			"if (\"function\" != typeof(this.target = i).postMessage) {}",
+			"void(x).postMessage(1, '*')",
+			"function f(x){ return(x).postMessage(1, '*') }",
+		] {
+			let saida = reescrever(js, true);
+			assert!(saida.contains("$wrapPostMessage("), "`{js}` perdeu o wrapper; saiu `{saida}`");
+			assert!(saida_e_js_valido(&saida), "`{js}` saiu inválido: `{saida}`");
+			for colado in ["typeof$", "void$", "return$"] {
+				assert!(!saida.contains(colado), "`{js}` saiu com `{colado}`: `{saida}`");
+			}
+		}
 	}
 
 	#[test]
