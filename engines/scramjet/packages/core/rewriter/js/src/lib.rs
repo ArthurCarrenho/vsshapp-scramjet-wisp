@@ -532,6 +532,67 @@ mod tests {
 		assert!(saida.contains("$sj_location"), "saiu `{saida}`");
 	}
 
+	/// Reescreve como módulo (`<script type=module>`), com `destructure_rewrites` ligado como em
+	/// produção.
+	fn reescrever_modulo(js: &str) -> String {
+		let alloc = Allocator::default();
+		let rewriter = Rewriter::new();
+		let mut f = flags(true);
+		f.destructure_rewrites = true;
+
+		let out = rewriter
+			.rewrite(&alloc, js, config(), f, &UrlOk)
+			.expect("módulo válido tem que reescrever");
+
+		String::from_utf8(out.js.to_vec()).expect("saída é utf-8")
+	}
+
+	/// O corpo de uma declaração exportada é código comum e passa pelo visitor como qualquer outro.
+	/// Dentro do quadro do motor, `top` sem `$wrap` é a janela do shell, na origem do portal: um
+	/// `export function` que o lesse alcançaria o ambiente. Cada caso traz o marcador que a mesma
+	/// forma produz fora do `export`, e a contraprova abaixo o mede.
+	#[test]
+	fn corpo_de_declaracao_exportada_passa_pelo_visitor() {
+		// Contraprova: sem o `export`, as mesmas formas sempre foram reescritas.
+		assert!(reescrever_modulo("const x = location.href").contains("$wrap(location)"));
+		assert!(reescrever_modulo("function f(){ return top }").contains("$wrap(top)"));
+		assert!(reescrever_modulo("function g(){ return import('a.js') }").contains("$import("));
+
+		for (js, esperados) in [
+			("export const x = location.href", &["$wrap(location)"][..]),
+			("export function f(){ return top }", &["$wrap(top)"][..]),
+			(
+				"export class C { m() { top.location = 'https://evil.example/' } }",
+				&["$wrap(top)", "$sj_location"][..],
+			),
+			(
+				"export function g(){ return import('https://cdn.example/x.js') }",
+				&["$import("][..],
+			),
+			("export let [y = parent] = []", &["$wrap(parent)"][..]),
+		] {
+			let saida = reescrever_modulo(js);
+			for esperado in esperados {
+				assert!(
+					saida.contains(esperado),
+					"`{js}` devia conter `{esperado}`; saiu `{saida}`"
+				);
+			}
+			assert!(
+				saida.starts_with("export "),
+				"o `export` tem que sobreviver; saiu `{saida}`"
+			);
+		}
+
+		// `export default` e `export { h }` já eram reescritos, e os especificadores são nomes de
+		// binding: `export { top }` exporta um local chamado `top`, e não pode virar `$wrap`.
+		assert!(reescrever_modulo("export default top").contains("$wrap(top)"));
+		assert_eq!(
+			reescrever_modulo("const top = 1; export { top }"),
+			"const top = 1; export { top }"
+		);
+	}
+
 	#[test]
 	fn only_invalid_source_is_the_sources_fault() {
 		assert!(RewriterError::InvalidSource(String::new()).is_source_fault());
