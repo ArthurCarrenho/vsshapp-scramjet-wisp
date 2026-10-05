@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const BACKEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const BACKEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /** O motivo do pulo, ou `null` quando o runtime `vssh` resolve pelo `NODE_PATH`. */
 export function runtimeAusente() {
@@ -27,12 +27,14 @@ export function runtimeAusente() {
 }
 
 /**
- * @param {{ env?: Record<string,string> }} [opcoes]
+ * `raiz` troca a árvore do backend: a bancada do motor degradado sobe uma cópia sem um pacote.
+ *
+ * @param {{ env?: Record<string,string>, raiz?: string }} [opcoes]
  * @returns {Promise<{ url: string, host: string, porta: number, pid: number, dados: string, saida: () => string, vivo: () => boolean, encerrar: () => Promise<void> }>}
  */
-export async function subirServidor({ env = {} } = {}) {
+export async function subirServidor({ env = {}, raiz = BACKEND } = {}) {
   const dados = mkdtempSync(path.join(tmpdir(), 'scramjet-wisp-bancada-'));
-  const filho = spawn(process.execPath, [path.join(BACKEND, 'server.js'), '--tcp', '127.0.0.1:0'], {
+  const filho = spawn(process.execPath, [path.join(raiz, 'server.js'), '--tcp', '127.0.0.1:0'], {
     env: { ...process.env, VSSH_APP_DATA_DIR: dados, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
