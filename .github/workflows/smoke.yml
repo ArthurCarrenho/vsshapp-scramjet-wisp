@@ -501,6 +501,17 @@ jobs:
           done
           exit $fail
 
+      # O cliente lê a versão aqui e monta as URLs dos bundles com ela. Na URL com a versão atual o
+      # arquivo sai imutável; sem versão, continua no-store (o passo anterior confere).
+      - name: /versao responde, e a URL versionada sai imutável
+        run: |
+          v=$(curl -sS --unix-socket "$SOCK" "http://app/versao" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(JSON.parse(d).versao||""))')
+          echo "versao=$v"
+          echo "$v" | grep -qE '^[0-9a-f]{16}$' || { echo "/versao não deu uma versão"; exit 1; }
+          cc=$(curl -sS -D - -o /dev/null --unix-socket "$SOCK" "http://app/v/$v/scram/scramjet.js" | tr -d '\r' | grep -i '^cache-control:')
+          echo "$cc"
+          echo "$cc" | grep -qi 'immutable' || { echo "a URL versionada não saiu imutável"; exit 1; }
+
       - name: WASM sai com o content-type certo
         run: |
           ct=$(curl -sS -o /dev/null -w '%{content_type}' --unix-socket "$SOCK" "http://app/scram/scramjet.wasm")

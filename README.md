@@ -44,6 +44,10 @@ Com o servidor rodando, você pode validar os endpoints:
 # essencial, e o corpo JSON diz qual.
 curl -i http://127.0.0.1:48123/
 
+# A versão do motor (os primeiros 16 hex do sha256 do que é servido) e o BUILD.json de cada pacote.
+# Numa URL com a versão atual, `/v/<versao>/scram/scramjet.js`, o arquivo sai imutável.
+curl -s http://127.0.0.1:48123/versao
+
 # Os 7 assets que o cliente realmente carrega. Todos devem dar 200 com tamanho > 0.
 for p in scram/scramjet.js scram/scramjet.wasm \
          controller/controller.api.js controller/controller.inject.js \

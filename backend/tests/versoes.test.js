@@ -9,10 +9,12 @@
 // Sem disco: `lerJson` é injetado, então a bancada monta árvores impossíveis (pacote ausente,
 // lockfile faltando) sem tocar em node_modules.
 
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import assert from 'node:assert';
 import path from 'node:path';
-import { conferirVersoes, resumirVersoes } from '../versoes.js';
+import { conferirVersoes, resumirVersoes, hashDoMotor } from '../versoes.js';
 
 const RAIZ = '/app/backend';
 
@@ -231,5 +233,42 @@ test('o motor versionado neste repo está completo e alinhado', () => {
   for (const p of r.pacotes) {
     assert.ok(p.versao, `${p.dir} sem versão no BUILD.json`);
     assert.ok(p.fonte, `${p.dir} sem fonte no BUILD.json`);
+  }
+});
+
+// ─── A versão das URLs ─────────────────────────────────────────────────────────────────
+
+test('o hash do motor muda com um byte servido, e não com a ordem em que os pacotes chegam', () => {
+  const raiz = mkdtempSync(path.join(tmpdir(), 'hash-do-motor-'));
+  try {
+    const dist = (pacote) => path.join(raiz, 'vendor', pacote, 'dist');
+    for (const [pacote, arquivos] of Object.entries({
+      scramjet: { 'scramjet.js': 'a', 'scramjet.wasm': 'b' },
+      controller: { 'controller.sw.js': 'c', 'sub/x.js': 'd' },
+    })) {
+      for (const [nome, conteudo] of Object.entries(arquivos)) {
+        mkdirSync(path.dirname(path.join(dist(pacote), nome)), { recursive: true });
+        writeFileSync(path.join(dist(pacote), nome), conteudo);
+      }
+    }
+    const raizes = [dist('scramjet'), dist('controller')];
+    const antes = hashDoMotor(raizes);
+    assert.match(antes, /^[0-9a-f]{16}$/);
+    assert.equal(hashDoMotor([...raizes].reverse()), antes);
+
+    writeFileSync(path.join(dist('controller'), 'sub/x.js'), 'e');
+    assert.notEqual(hashDoMotor(raizes), antes);
+
+    // O mesmo arquivo noutro pacote é outro arquivo.
+    writeFileSync(path.join(dist('controller'), 'sub/x.js'), 'd');
+    assert.equal(hashDoMotor(raizes), antes);
+    rmSync(path.join(dist('controller'), 'sub/x.js'));
+    mkdirSync(path.join(dist('scramjet'), 'sub'), { recursive: true });
+    writeFileSync(path.join(dist('scramjet'), 'sub/x.js'), 'd');
+    assert.notEqual(hashDoMotor(raizes), antes);
+
+    assert.equal(hashDoMotor([path.join(raiz, 'nao-existe')]), null);
+  } finally {
+    rmSync(raiz, { recursive: true, force: true });
   }
 });

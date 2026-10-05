@@ -18,7 +18,8 @@
 // node_modules.
 
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 /** Lê um JSON, devolvendo `null` se não der — nunca lança. */
 function lerJsonDoDisco(caminho) {
@@ -138,4 +139,35 @@ export function resumirVersoes(relatorio) {
     if (p.estado === 'divergente') return `${p.nome} ${p.instalado} != ${p.declarado} DO LOCKFILE`;
     return `${p.nome} ${p.instalado}`;
   });
+}
+
+/**
+ * A versão do motor que o cliente usa nas URLs (`/v/<versao>/...`): os primeiros 16 hex do sha256
+ * de todo arquivo servido, com o caminho relativo de cada um, em ordem. Muda quando qualquer byte
+ * servido muda, e só então; o `BUILD.json` diz de que commit o motor veio, e este hash diz se o
+ * que está no disco é o mesmo de antes.
+ *
+ * @param {string[]} raizes os `dist/` servidos
+ * @returns {string|null} `null` quando não há arquivo nenhum
+ */
+export function hashDoMotor(raizes) {
+  const hash = createHash('sha256');
+  let arquivos = 0;
+  for (const raiz of [...raizes].sort()) {
+    let entradas;
+    try { entradas = readdirSync(raiz, { recursive: true, withFileTypes: true }); } catch { continue; }
+    const caminhos = entradas
+      .filter((e) => e.isFile())
+      .map((e) => path.join(e.parentPath ?? e.path, e.name))
+      .sort();
+    for (const caminho of caminhos) {
+      // `<pacote>/dist/<arquivo>`: o nome do pacote entra, e dois pacotes com o mesmo arquivo não colidem.
+      hash.update(path.relative(path.resolve(raiz, '..', '..'), caminho));
+      hash.update('\0');
+      hash.update(readFileSync(caminho));
+      hash.update('\0');
+      arquivos++;
+    }
+  }
+  return arquivos ? hash.digest('hex').slice(0, 16) : null;
 }
