@@ -16,7 +16,8 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { server as wisp, logging } from '@mercuryworkshop/wisp-js/server';
-import { aplicarPolitica } from './rede.js';
+import { aplicarPolitica, nivelDoPedido } from './rede.js';
+import { criarSocketTcp } from './tcp.js';
 import { conferirVersoes, resumirVersoes, conferirMotor, resumirMotor } from './versoes.js';
 
 // O runtime de backend que o portal instala em `/opt/vssh/sdk/node` e que o `vssh-app-run` expõe
@@ -39,29 +40,14 @@ const log = servidor.criarLog({ stdout: false });
 // por abertura/fechamento de stream em uso normal.
 logging.set_level(logging.WARN);
 
-// Política de rede — IPv4 na saída, rede privada/loopback liberadas. Mora em `rede.js`, com
-// bancada própria: são as opções que já derrubaram este serviço uma vez (ver o parágrafo do
-// `stream_limit_total` logo abaixo), e não dá para provar nenhuma delas sem tirá-las daqui.
-//
-// A linha que estava aqui era `wisp.options.dns_result_order = 'ipv4first'`, com um comentário
-// afirmando que aquilo evitava travar em host sem rota IPv6. **Era ordem, não família** — e
-// deixava passar host só-AAAA e destino IPv6 literal. O `rede.js` explica os dois caminhos.
+// A política de rede (família de resolução, teto de streams e o que o motor alcança) mora em
+// `rede.js`, com bancada própria; a régua de destinos roda no socket de cada stream (`tcp.js`).
 aplicarPolitica(wisp, {
   aoFalhar: (hostname, erro) => log('dns_falhou', { hostname, erro: erro?.code || String(erro) }),
-  // Host só-AAAA. Não é erro — mas é a única situação em que uma conexão sai por IPv6, e saber
-  // disso é o que separa "a rota IPv6 deste servidor está quebrada" de "o site está fora".
+  // Host só-AAAA: a única situação em que uma conexão sai por IPv6. A linha no log separa "a rota
+  // IPv6 deste servidor está quebrada" de "o site está fora".
   aoRecuar: (hostname, endereco) => log('dns_recuou_ipv6', { hostname, endereco }),
 });
-
-// NÃO configurar wisp.options.stream_limit_total/stream_limit_per_host — tentativa real, revertida.
-// Qualquer valor diferente de -1 (o default, "desabilitado") ativa is_stream_allowed()
-// (node_modules/@mercuryworkshop/wisp-js/src/server/filter.mjs), que faz `for (let stream of
-// connection.streams)` tratando connection.streams como iterável — mas connection.mjs guarda os
-// streams num objeto plano (`this.streams[stream_id] = stream`), não um Map/Set. Resultado:
-// `TypeError: connection.streams is not iterable`, crashando o processo inteiro na PRIMEIRA
-// conexão — não é "arriscado sob carga pesada", quebra sempre. Confirmado em produção. O teto de
-// concorrência do lado navegador (ScramjetEngine.js, opção `connections` do LibcurlClient) continua
-// de pé e não usa esse caminho de código.
 
 const TOKEN = process.env.VSSH_APP_TOKEN || null;
 
@@ -264,7 +250,17 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
   if (req.url.split('?')[0].endsWith('/wisp/')) {
-    wisp.routeRequest(req, socket, head);
+    // O nível de rede vale para a conexão inteira: uma conexão wisp é uma página do shell, e o
+    // portal escreve o cabeçalho a partir do servidor dela (ver `rede.js`).
+    const nivel = nivelDoPedido(req.headers);
+    wisp.routeRequest(req, socket, head, {
+      TCPSocket: criarSocketTcp({
+        nivel,
+        resolver: wisp.options.dns_method,
+        aoRecusar: ({ hostname, porta, ip, classe, motivo }) =>
+          log('destino-recusado', { hostname, porta, ip, classe, motivo, nivel }),
+      }),
+    });
   } else {
     log('upgrade-rejected', { reason: 'path', url: req.url.split('?')[0] });
     socket.destroy();

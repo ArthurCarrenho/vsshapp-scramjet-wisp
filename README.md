@@ -5,6 +5,8 @@ Um aplicativo VSSH-SSO (do tipo `engine`) que fornece um servidor Wisp e serve o
 ## 🚀 Funcionalidades
 
 - Servidor Wisp: o pacote `@mercuryworkshop/wisp-js/server` fornece o transporte de rede. O `LibcurlClient` no frontend usa esse servidor para abrir conexões TCP e lidar com o tráfego.
+- Régua de rede: a internet pública abre sempre. Link-local e o metadata das nuvens não abrem nunca. No loopback abrem só as portas da própria conta, e a rede privada do servidor abre com o nível de rede 2 ou mais, que o portal manda no cabeçalho `X-Vssh-Rede-Nivel`. A decisão vale sobre o endereço resolvido, e as regras estão em `backend/rede.js`.
+- Freio: cada stream pausa a origem quando a página para de ler, uma conexão wisp abre até 128 streams, e um socket sem tráfego por 10 minutos fecha (`backend/tcp.js`).
 - Assets estáticos isolados: os bundles do *Scramjet*, do *scramjet-controller* e do *libcurl-transport* são construídos de `engines/` e servidos de `backend/vendor/`. O código AGPL fica neste backend, fora da esteira de build do shell.
 - Execução sem janela: com `"type": "engine"` no manifesto, o app roda invisível no servidor. Ele não cria janela, não aparece no Launchpad nem no menu iniciar, e não carrega o SDK web (`_sdk/vssh.js`); o contrato dele com o portal é só HTTP e WebSocket. O backend importa o runtime `vssh` que o portal instala em cada servidor.
 - Degradação diagnosticável: se um pacote do motor faltar, o processo continua de pé. O endereço abre mesmo assim e `/` responde `503` com JSON nomeando o pacote. Morrer antes do `listen()` faria o portal medir `HTTP 000`, derrubar o túnel SSH e entregar um `502` sem nenhuma pista.

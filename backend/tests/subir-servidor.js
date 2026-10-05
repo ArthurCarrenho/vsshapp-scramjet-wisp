@@ -28,7 +28,7 @@ export function runtimeAusente() {
 
 /**
  * @param {{ env?: Record<string,string> }} [opcoes]
- * @returns {Promise<{ url: string, host: string, porta: number, saida: () => string, vivo: () => boolean, encerrar: () => Promise<void> }>}
+ * @returns {Promise<{ url: string, host: string, porta: number, pid: number, dados: string, saida: () => string, vivo: () => boolean, encerrar: () => Promise<void> }>}
  */
 export async function subirServidor({ env = {} } = {}) {
   const dados = mkdtempSync(path.join(tmpdir(), 'scramjet-wisp-bancada-'));
@@ -56,6 +56,8 @@ export async function subirServidor({ env = {} } = {}) {
     url: `http://${endereco.host}:${endereco.porta}`,
     host: endereco.host,
     porta: endereco.porta,
+    pid: filho.pid,
+    dados,
     saida: () => saida,
     vivo: () => !saiu,
     async encerrar() {
