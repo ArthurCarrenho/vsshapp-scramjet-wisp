@@ -79,6 +79,10 @@
         f.onPopupBloqueado((u) => retornos.push(['onPopupBloqueado', u]));
       }
       f.onDownload((info) => retornos.push(['onDownload', info && info.url]));
+      // A URL que a página mudou, e o que a mudou (`mudanca.tipo`: push, replace, hash...).
+      if (typeof f.onNavigate === 'function') {
+        f.onNavigate((u, mudanca) => retornos.push(['onNavigate', u, mudanca ? mudanca.tipo : null]));
+      }
       f.onContextMenu((ctx) => retornos.push(['onContextMenu', ctx && ctx.linkUrl]));
       f.__retornos = retornos;
 
@@ -123,7 +127,7 @@
     },
 
     /** O que atravessou a fronteira do frame para o shell, na ordem. */
-    retornos: (id) => (frames.get(id).__retornos || []).map((r) => [r[0], r[1]]),
+    retornos: (id) => (frames.get(id).__retornos || []).map((r) => r.slice(0, 3)),
 
     /**
      * O centro de um elemento da aba, em coordenadas da página de cima: é onde a sonda clica com

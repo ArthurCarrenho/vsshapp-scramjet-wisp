@@ -3,8 +3,11 @@ import { Tap } from "@/Tap";
 import { String, _URL } from "@/shared/snapshot";
 
 export default function (client: ScramjetClient, _self: Self) {
-	client.Proxy(
-		["History.prototype.pushState", "History.prototype.replaceState"],
+	// vssh fork: o `navigate` diz se a mudança foi `pushState` ou `replaceState`. Quem acompanha a
+	// URL (o UrlWatcherPlugin) decide por isso se a pilha do navegador ganha uma entrada ou troca a
+	// corrente: um mapa que reescreve a URL a cada arrasto, por `replaceState`, não empilha nada.
+	const vigiar = (nome: string, historico: "push" | "replace") => client.Proxy(
+		`History.prototype.${nome}`,
 		{
 			apply(ctx) {
 				const relevantclient = client.box.histories.get(ctx.this);
@@ -24,6 +27,7 @@ export default function (client: ScramjetClient, _self: Self) {
 					relevantclient.hooks.lifecycle.navigate,
 					{
 						type: "history",
+						historico,
 					},
 					{
 						url: relevantclient.url.href,
@@ -32,4 +36,6 @@ export default function (client: ScramjetClient, _self: Self) {
 			},
 		}
 	);
+	vigiar("pushState", "push");
+	vigiar("replaceState", "replace");
 }

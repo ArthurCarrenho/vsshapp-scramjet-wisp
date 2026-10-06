@@ -265,6 +265,7 @@ export async function subirSites({ porta = 0 } = {}) {
 			return html(res, pagina("spa", `
 				<script>
 				  window.__navegarSemTrocarDocumento = (n) => history.pushState({}, '', '/spa/' + n);
+				  window.__substituirSemTrocarDocumento = (n) => history.replaceState({}, '', '/spa/r' + n);
 				</script>`));
 		}
 
