@@ -18,7 +18,8 @@ export type LibcurlClientOptions = {
   transport?: string;
   connections?: Array<number>;
   // vssh fork: skip TLS peer/host verification (self-signed certs on internal/dev
-  // servers). Applies to HTTP(S) requests via HTTPSession; not to WebSocket connections.
+  // servers) for every host. Applies to HTTP(S) requests via HTTPSession; not to WebSocket
+  // connections. For a single host, see setInsecureHosts().
   insecure?: boolean;
 };
 export default class LibcurlClient implements ProxyTransport {
@@ -28,6 +29,11 @@ export default class LibcurlClient implements ProxyTransport {
   transport?: string;
   connections?: Array<number>;
   insecure?: boolean;
+  // vssh fork: the hosts (URL.host, with the port when it is not the default) whose
+  // certificate the person accepted on the TLS error page. libcurl reads `insecure` per
+  // request, and curl only reuses a connection whose TLS settings match, so a connection
+  // opened without verification never carries a request to another host.
+  insecureHosts: Set<string> = new Set();
 
   constructor(options: LibcurlClientOptions) {
     this.wisp = options.wisp ?? options.websocket;
@@ -84,6 +90,13 @@ export default class LibcurlClient implements ProxyTransport {
   ready = false;
   async meta() { }
 
+  // vssh fork: replaces the set of hosts requested without TLS verification. The shell
+  // detects this method by name, and an older transport without it keeps verifying every
+  // host that the global `insecure` flag does not cover.
+  setInsecureHosts(hosts: Iterable<string>) {
+    this.insecureHosts = new Set(Array.from(hosts, (h) => String(h).toLowerCase()));
+  }
+
   async request(
     remote: URL,
     method: string,
@@ -101,6 +114,7 @@ export default class LibcurlClient implements ProxyTransport {
       body,
       redirect: "manual",
       signal: signal,
+      insecure: this.insecure || this.insecureHosts.has(remote.host.toLowerCase()),
     });
 
     return {
