@@ -172,3 +172,29 @@ test('um socket sem tráfego por mais que o prazo de inatividade fecha', async (
     mudo.close();
   }
 });
+
+test('cada stream diz o desfecho uma vez: conectou, recusado pela régua, ou falhou na resolução ou na conexão', async () => {
+  const fechada = net.createServer().listen(0, '127.0.0.1');
+  await new Promise((ok) => fechada.once('listening', ok));
+  const portaFechada = fechada.address().port;
+  await new Promise((ok) => fechada.close(ok));
+
+  const desfechos = [];
+  const Socket = criarSocketTcp({
+    resolver: async (host) => { if (host === 'nao-resolve.invalid') throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }); return '127.0.0.1'; },
+    decidir: ({ porta }) => (porta === 1 ? { permitido: false, classe: 'teste', motivo: 'de_proposito' } : { permitido: true }),
+    aoDesfecho: (d) => desfechos.push(d),
+  });
+  const abrir = async (host, porta) => {
+    const s = new Socket(host, porta);
+    try { await s.connect(); return s; } catch { return null; }
+  };
+
+  const aberta = await abrir('localhost', eco.address().port);
+  assert.ok(aberta, 'a conexão ao eco não abriu');
+  await aberta.close();
+  assert.equal(await abrir('localhost', 1), null);
+  assert.equal(await abrir('nao-resolve.invalid', 80), null);
+  assert.equal(await abrir('localhost', portaFechada), null);
+  assert.deepEqual(desfechos, ['conectou', 'recusado', 'falhou', 'falhou']);
+});

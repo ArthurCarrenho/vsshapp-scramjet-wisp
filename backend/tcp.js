@@ -35,6 +35,8 @@ export class DestinoRecusado extends Error {
  * @param {Function} opcoes.resolver       `hostname => Promise<ip>` (o `dns_method` da política)
  * @param {Function} [opcoes.decidir]      a régua (`decidirDestino`); injetável na bancada
  * @param {Function} [opcoes.aoRecusar]    `({ hostname, porta, ip, classe, motivo }) => void`
+ * @param {Function} [opcoes.aoDesfecho]   `(desfecho) => void`, uma vez por stream: `conectou`, `recusado`
+ *                                         (a régua) ou `falhou` (a resolução ou a conexão)
  * @param {number}   [opcoes.limiteDaFila] pedaços na fila antes de pausar a origem
  * @param {number}   [opcoes.ociosoMs]     prazo de inatividade do socket
  * @param {Function} [opcoes.conectar]     `net.connect` (injetável)
@@ -44,10 +46,12 @@ export function criarSocketTcp({
   resolver,
   decidir = decidirDestino,
   aoRecusar,
+  aoDesfecho,
   limiteDaFila = 16,
   ociosoMs = 10 * 60_000,
   conectar = (destino) => net.connect(destino),
 } = {}) {
+  const desfecho = (d) => { try { aoDesfecho?.(d); } catch { /* medir não muda a conexão */ } };
   return class SocketTcpDoMotor {
     constructor(hostname, port) {
       this.hostname = hostname;
@@ -61,12 +65,19 @@ export function criarSocketTcp({
     }
 
     async connect() {
-      const ip = net.isIP(this.hostname) ? this.hostname : await resolver(this.hostname);
+      let ip;
+      try {
+        ip = net.isIP(this.hostname) ? this.hostname : await resolver(this.hostname);
+      } catch (erro) {
+        desfecho('falhou');
+        throw erro;
+      }
       const decisao = decidir({ ip, porta: this.port, nivel });
       if (!decisao.permitido) {
         try {
           aoRecusar?.({ hostname: this.hostname, porta: this.port, ip, classe: decisao.classe, motivo: decisao.motivo });
         } catch { /* diagnóstico não muda a decisão */ }
+        desfecho('recusado');
         throw new DestinoRecusado(this.hostname, this.port, decisao.motivo);
       }
 
@@ -75,10 +86,13 @@ export function criarSocketTcp({
         this.socket = socket;
         socket.setNoDelay(true);
         socket.setTimeout(ociosoMs, () => socket.destroy());
-        socket.on('connect', () => { this.connected = true; resolve(); });
+        socket.on('connect', () => { this.connected = true; desfecho('conectou'); resolve(); });
         socket.on('data', (pedaco) => this._receber(pedaco));
         socket.on('close', () => {
-          if (!this.connected) reject(new Error(`a conexão a ${this.hostname}:${this.port} não abriu`));
+          if (!this.connected) {
+            desfecho('falhou');
+            reject(new Error(`a conexão a ${this.hostname}:${this.port} não abriu`));
+          }
           this._encerrar();
         });
         // O `close` vem logo depois, e é ele que encerra; sem ouvinte, o `error` derrubaria o processo.

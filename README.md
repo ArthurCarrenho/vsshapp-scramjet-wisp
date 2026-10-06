@@ -67,6 +67,12 @@ O log estruturado do app fica em `$VSSH_APP_DATA_DIR/app.log` (no servidor,
 é rotacionado a cada start pelo portal, então não sobrevive a um app que reinicia em laço — que é
 justamente quando você precisa lê-lo.
 
+O motor declara `recursos.metricas`, e o portal mostra as contas dele no `/metrics` como
+`vssh_app_events_total{app="scramjet-wisp", event=…}`: `conexoes_wisp` por nível de rede,
+`streams` pelo desfecho (`conectou`, `recusado` pela régua, `falhou` na resolução ou na conexão),
+`dns_falhas` pelo código do erro e `upgrades_recusados` pelo motivo (`token` ou `caminho`). A
+bancada é `backend/tests/metricas.test.js`, com um portal de mentira recebendo o envio.
+
 > Testes de ponta a ponta (navegação real num site, reescrita de código) só fazem sentido contra um servidor VSSH real, onde o navegador embutido do ambiente pede o motor ao portal.
 
 ## ⚖️ Licenciamento e Arquitetura
