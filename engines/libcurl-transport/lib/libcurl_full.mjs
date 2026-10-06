@@ -681,6 +681,11 @@ Several C libraries are used, and their licenses are listed below:
   }
 
   remove_request_now(request_ptr) {
+    // vssh fork: o close_now já limpou cada pedido que a sessão tinha. Uma remoção agendada antes do
+    // fechamento e disparada depois dele limparia o mesmo pedido outra vez, na memória do wasm.
+    if (!this.session_ptr && this.requests_closed && this.requests_closed.has(request_ptr)) {
+      return;
+    }
     if (this.session_ptr) {
       _session_remove_request(this.session_ptr, request_ptr);
     }
@@ -694,7 +699,12 @@ Several C libraries are used, and their licenses are listed below:
 
   //remove the request on the next iteration of the loop
   remove_request(request_ptr) {
-    this.assert_ready();
+    // vssh fork: o fim de um pedido pode chegar depois do fechamento da sessão (o abort de um pedido
+    // em voo quando o transporte é recriado). O close_now já o limpou, e o assert_ready lançaria
+    // "session has been removed" de dentro do listener do AbortSignal, sem ninguém para pegar.
+    if (!this.session_ptr) {
+      return;
+    }
     setTimeout(() => {
       this.remove_request_now(request_ptr);
     }, 1)
@@ -729,7 +739,10 @@ Several C libraries are used, and their licenses are listed below:
   }
 
   close_now() {
-    for (let request_ptr of this.requests_list) {
+    // vssh fork: a cópia da lista, porque remove_request_now tira o pedido dela, e percorrer a lista
+    // enquanto ela encolhe pulava um pedido a cada dois. O conjunto guarda quem foi limpo aqui.
+    this.requests_closed = new Set(this.requests_list);
+    for (let request_ptr of [...this.requests_list]) {
       this.remove_request_now(request_ptr);
     }
     _session_cleanup(this.session_ptr);
