@@ -14,13 +14,15 @@
 // ─── O que conta como conserto ───────────────────────────────────────────────────────────────
 //
 // Não é "a página carregou": ela não pode carregar, porque o outro lado não responde. É que o
-// silêncio acaba. Quatro coisas, e todas têm de acontecer:
+// silêncio acaba. Cinco coisas, e todas têm de acontecer:
 //
 //   1. o log nomeia QUAL elo não respondeu (sem isso, "sem log, sem nada" continua valendo);
 //   2. a bandeja mostra a condição em curso, para a pessoa não achar que travou;
 //   3. `getStatus()` para de dizer `connected` — era ele que fazia as Configurações concordarem
 //      com o motor enquanto a aba girava na frente da pessoa;
-//   4. esgotadas as tentativas, a aba mostra uma saída em vez de um giro eterno.
+//   4. esgotadas as tentativas, a aba recebe a falha marcada (`causa: 'motor'`, o documento que o
+//      shell desenha com "Iniciar e tentar novamente") em vez de um giro eterno;
+//   5. desistir solta a aba: a bandeja limpa a atividade e `getStatus()` sai de `recuperando`.
 //
 // ─── A coluna de controle ────────────────────────────────────────────────────────────────────
 //
@@ -58,7 +60,12 @@ async function rodada(caminho, esperaMs) {
 			// página de falha, `getStatus()` já voltou ao normal. Ler só no fim perderia o meio.
 			atividades: window.__bancada.atividades(),
 			log: window.__bancada.log().map((l) => l[1]).filter((t) => t.includes("[scramjet]")),
-			corpo: (() => { try { return document.querySelector("iframe").contentDocument.body.textContent.slice(0, 160); } catch (e) { return "opaco"; } })(),
+			causa: (() => {
+				try {
+					const el = document.querySelector("iframe").contentDocument.getElementById("vssh-erro-de-navegacao");
+					return el ? JSON.parse(el.textContent).causa : null;
+				} catch (e) { return "opaco"; }
+			})(),
 		};
 	}, [`http://site.teste:${sites.porta}${caminho}`, esperaMs]);
 	await ctx.close();
@@ -70,7 +77,8 @@ const marcas = (r) => ({
 	logDeDesistir: r.log.some((t) => t.includes("se esgotou")),
 	bandeja:       r.atividades.some((a) => a[0] === "set" && a[1] === "motor-navegacao"),
 	statusMudou:   r.depois === "recuperando" || r.log.some((t) => t.includes("nada voltou")),
-	temSaida:      /Tentar novamente/.test(r.corpo || ""),
+	temSaida:      r.causa === "motor",
+	soltou:        r.atividades.filter((a) => a[1] === "motor-navegacao").at(-1)?.[0] === "clear" && r.depois !== "recuperando",
 });
 
 console.log("→ controle: um alvo que responde");
@@ -93,12 +101,13 @@ await sites.fechar();
 console.log("\n=== veredito ===");
 const falhas = [];
 if (bom.marca !== "inicio") falhas.push("o alvo de controle não carregou — a rodada inteira não vale");
-for (const [k, v] of Object.entries(mBom)) if (v) falhas.push(`o alvo NORMAL disparou "${k}" — o gatilho não é o que se pensa`);
+for (const [k, v] of Object.entries(mBom)) if (v && k !== "soltou") falhas.push(`o alvo NORMAL disparou "${k}" — o gatilho não é o que se pensa`);
 for (const k of ["logDoVigia", "bandeja", "statusMudou"]) {
 	if (!mRuim[k]) falhas.push(`o alvo pendurado NÃO produziu "${k}" — o silêncio continua`);
 }
 if (!mRuim.logDeDesistir) falhas.push('o vigia não registrou que desistiu — desistir calado é o defeito com outro nome');
 if (!mRuim.temSaida) falhas.push("a aba vazia ficou sem saída visível — é o giro eterno");
+if (!mRuim.soltou) falhas.push("depois de desistir, a bandeja ou o estado seguiram presos em recuperando");
 
 if (falhas.length) { for (const f of falhas) console.log(`  ✗ ${f}`); process.exitCode = 1; }
 else console.log("  ✓ o silêncio acabou: log com diagnóstico, rastro na bandeja, estado honesto e uma saída na tela");
