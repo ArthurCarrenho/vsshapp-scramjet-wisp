@@ -335,14 +335,7 @@ export class Controller {
 					if (!this.wasmPayload) {
 						const resp = await fetch(this.config.wasmPath);
 						const buf = await resp.arrayBuffer();
-						const b64 = btoa(
-							new Uint8Array(buf)
-								.reduce(
-									(data, byte) => (data.push(String.fromCharCode(byte)), data),
-									[] as any
-								)
-								.join("")
-						);
+						const b64 = bytesParaBase64(new Uint8Array(buf));
 
 						this.wasmPayload = `self.WASM = '${b64}';`;
 					}
@@ -753,16 +746,21 @@ export class Controller {
 	}
 }
 
+// vssh fork: base64 de bytes pelo nativo do navegador (`Uint8Array.prototype.toBase64`) e, sem
+// ele, por `btoa` em blocos de 32 KiB. Um `reduce` com um `push` por byte custa dezenas de
+// milissegundos no wasm de 584 KB, na thread do shell.
+function bytesParaBase64(bytes: Uint8Array): string {
+	const nativo = (bytes as any).toBase64;
+	if (typeof nativo === "function") return nativo.call(bytes);
+	let binario = "";
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		binario += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000) as unknown as number[]);
+	}
+	return btoa(binario);
+}
+
 function base64Encode(text: string) {
-	return btoa(
-		new TextEncoder()
-			.encode(text)
-			.reduce(
-				(data, byte) => (data.push(String.fromCharCode(byte)), data),
-				[] as any
-			)
-			.join("")
-	);
+	return bytesParaBase64(new TextEncoder().encode(text));
 }
 
 function yieldGetInjectScripts(
@@ -779,16 +777,17 @@ function yieldGetInjectScripts(
 		htmlcontext,
 		script
 	) => {
+		// vssh fork: a mesma conta de `bytesParaBase64`, escrita aqui dentro porque esta função
+		// viaja serializada (`yieldGetInjectScripts.toString()`) e não enxerga o módulo.
 		function base64Encode(text: string) {
-			return btoa(
-				new TextEncoder()
-					.encode(text)
-					.reduce(
-						(data, byte) => (data.push(String.fromCharCode(byte)), data),
-						[] as any
-					)
-					.join("")
-			);
+			const bytes = new TextEncoder().encode(text);
+			const nativo = (bytes as any).toBase64;
+			if (typeof nativo === "function") return nativo.call(bytes);
+			let binario = "";
+			for (let i = 0; i < bytes.length; i += 0x8000) {
+				binario += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000) as unknown as number[]);
+			}
+			return btoa(binario);
 		}
 		return [
 			script(config.scramjetPath),
@@ -851,7 +850,7 @@ export class Frame {
 					(()=>{
 						const { ScramjetClient, CookieJar, setWasm } = $scramjet;
 
-						setWasm(Uint8Array.from(atob(self.WASM), (c) => c.charCodeAt(0)));
+						setWasm(Uint8Array.fromBase64 ? Uint8Array.fromBase64(self.WASM) : Uint8Array.from(atob(self.WASM), (c) => c.charCodeAt(0)));
 						delete self.WASM;
 
 						const sjconfig = ${JSON.stringify(this.controller.scramjetConfig)};

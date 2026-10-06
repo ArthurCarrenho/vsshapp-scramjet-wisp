@@ -61,6 +61,7 @@ node adblock-corrente.mjs   # o bloqueio fecha a corrente inteira?
 node deeplink.mjs           # o que acontece com cada esquema e cada forma de abrir?
 node motor-recusado.mjs     # quando o portal recusa, o cliente diz o código ou adivinha?
 node cache-de-paginas.mjs   # o que o cache de páginas guarda, e o que fica fora dele?
+node tarefas-longas.mjs     # quanto uma navegação pesada segura a thread do shell?
 ```
 
 Cada script termina com `=== veredito ===` e um `process.exitCode`, no mesmo vocabulário da bancada
@@ -78,6 +79,7 @@ irmã: **controle** é o mesmo cenário sem o gatilho, **direto** é sem o proxy
 | `deeplink.mjs` | o que cada esquema e cada forma de abrir produzem? | uma página com os cinco casos |
 | `motor-recusado.mjs` | a recusa do portal chega ao console com o número e o endereço? | o portal respondendo 403 em `/proxy/app/scramjet-wisp/` |
 | `cache-de-paginas.mjs` | o download, a mídia e a resposta grande ficam fora do cache, e chegam inteiros à página? | cinco corpos com `max-age`, um sem `Content-Length` |
+| `tarefas-longas.mjs` | quantas long tasks, e de quanto, a thread do shell vê numa navegação pesada? | `/pesada/`: oito scripts de ~250 KB, trinta imagens e um iframe, num documento novo a cada volta |
 
 ## O que ela ACHOU
 

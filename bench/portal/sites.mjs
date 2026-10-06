@@ -158,6 +158,24 @@ export async function subirSites({ porta = 0 } = {}) {
 		}
 		if (u.pathname === "/cache/") return html(res, pagina("cache", "<p>pedidos de dentro desta página</p>"));
 
+		// Uma página pesada para a thread do shell: oito scripts de ~250 KB (o tamanho de um bundle
+		// de framework, que o rewriter percorre inteiro), trinta imagens e um iframe da mesma origem,
+		// que é um segundo documento reescrito. `?n=` muda o número desta página, para cada
+		// navegação ser um documento novo e não um que o cache de páginas guardou.
+		if (u.pathname === "/pesada/") {
+			const n = u.searchParams.get("n") || "0";
+			const scripts = Array.from({ length: 8 }, (_, i) => `<script src="/pesada/s${i}.js?n=${n}"></script>`).join("");
+			const imagens = Array.from({ length: 30 }, (_, i) => `<img src="/pixel.gif?i=${i}&n=${n}" width="1" height="1">`).join("");
+			return html(res, pagina("pesada", `${scripts}${imagens}<iframe src="/pesada/quadro?n=${n}"></iframe>`));
+		}
+		if (u.pathname === "/pesada/quadro") return html(res, pagina("quadro", "<script>window.__q = 1;</script>"));
+		if (/^\/pesada\/s\d\.js$/.test(u.pathname)) {
+			const linhas = [];
+			for (let i = 0; i < 2500; i++) linhas.push(`function f${i}(a, b) { const o = { x: a + ${i}, y: [b, "${"t".repeat(40)}"] }; return o.x > b ? o.y : location.href; }`);
+			res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-store" });
+			return res.end(linhas.join("\n") + "\nwindow.__s = (window.__s || 0) + 1;");
+		}
+
 		if (u.pathname === "/anuncios") {
 			return html(res, pagina("anuncios", `
 				<img id="anuncio" src="http://anuncios.teste:${P}/pixel.gif"

@@ -196,7 +196,14 @@ export function load(init: Init) {
 	if (!("WASM" in self)) {
 		throw new Error("WASM not found in global scope!");
 	}
-	const wasm = Uint8Array.from(atob(self.WASM), (c) => c.charCodeAt(0));
+	// vssh fork: o wasm chega em base64 a cada documento reescrito; o decodificador nativo
+	// (`Uint8Array.fromBase64`) evita um callback por caractere, e o `atob` fica para o navegador
+	// que não o tem.
+	const fromBase64 = (Uint8Array as any).fromBase64;
+	const wasm: Uint8Array =
+		typeof fromBase64 === "function"
+			? fromBase64.call(Uint8Array, self.WASM)
+			: Uint8Array.from(atob(self.WASM), (c) => c.charCodeAt(0));
 	delete (self as any).WASM;
 	setWasm(wasm);
 
