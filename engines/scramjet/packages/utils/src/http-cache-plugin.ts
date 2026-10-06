@@ -185,6 +185,18 @@ function responseIsStorable(
 	return true;
 }
 
+// vssh fork: o que não vai ao cache mesmo sendo guardável pelo HTTP. Um download (`attachment`)
+// vai ser pedido de novo pelo diálogo de salvar; a mídia é pedida em pedaços e relida pelo próprio
+// player; e uma resposta acima do teto ocuparia a cota da origem inteira, que o Chrome despeja de
+// uma vez quando o disco aperta (o `localStorage` junto). O tamanho declarado decide aqui; o que
+// chega sem `Content-Length` é medido enquanto o cache lê (`guardar`).
+function foraDoCache(headers: Headers, tetoBytes: number): boolean {
+	if (/attachment/i.test(headers.get("content-disposition") ?? "")) return true;
+	if (/^(video|audio)\//i.test(headers.get("content-type") ?? "")) return true;
+	const declarado = Number(headers.get("content-length"));
+	return Number.isFinite(declarado) && declarado > tetoBytes;
+}
+
 /** Build a synthetic cache-key Request keyed by the *underlying* URL. */
 function buildCacheKeyRequest(
 	parsedUrl: string,
@@ -230,47 +242,6 @@ function strippedHeadersFromStored(stored: Response): Headers {
 }
 
 /**
- * Turn an upstream BareResponse into a BareResponse that:
- *   - has the same headers/status/statusText
- *   - has its body replaced with a buffered ArrayBuffer (so the pipeline can
- *     read it again after we've consumed the original stream for the cache)
- * Returns the buffered bytes too so the caller can hand them off elsewhere.
- */
-async function rebuildBareResponseWithBuffer(
-	bare: BareResponse
-): Promise<{ replacement: BareResponse; bodyBuffer: ArrayBuffer | null }> {
-	const status = bare.status;
-	const isNullBody = NULL_BODY_STATUSES.has(status);
-
-	const headers = nativeHeadersFromRaw(bare.rawHeaders);
-
-	if (isNullBody) {
-		return {
-			replacement: BareResponse.fromNativeResponse(
-				new Response(null, {
-					status,
-					statusText: bare.statusText,
-					headers,
-				})
-			),
-			bodyBuffer: null,
-		};
-	}
-
-	const buf = await bare.arrayBuffer();
-	return {
-		replacement: BareResponse.fromNativeResponse(
-			new Response(buf, {
-				status,
-				statusText: bare.statusText,
-				headers,
-			})
-		),
-		bodyBuffer: buf,
-	};
-}
-
-/**
  * Build a `Response` to put in the Cache API. Tags it with our internal
  * STORED_AT_HEADER so freshness can be computed on later lookups.
  */
@@ -292,7 +263,16 @@ function buildStorableResponse(
 export interface HttpCachePluginOptions {
 	/** Name of the underlying Cache API entry. Defaults to CACHE_NAME. */
 	cacheName?: string;
+	/** vssh fork: o maior corpo guardado, em bytes. O padrão é 8 MiB. */
+	maxEntryBytes?: number;
+	/** vssh fork: quantas entradas o cache guarda. Passado disso, saem as guardadas há mais tempo. */
+	maxEntries?: number;
 }
+
+const TETO_POR_ENTRADA = 8 * 1024 * 1024;
+const TETO_DE_ENTRADAS = 400;
+// A poda olha a lista de chaves, que custa uma ida ao CacheStorage inteiro; uma a cada N gravações.
+const PODA_A_CADA = 25;
 
 /**
  * RFC-9111-ish HTTP cache for ScramjetFetchHandler.
@@ -303,8 +283,11 @@ export interface HttpCachePluginOptions {
  */
 export class HttpCachePlugin extends ManagedPlugin {
 	readonly cacheName: string;
+	readonly maxEntryBytes: number;
+	readonly maxEntries: number;
 
 	private cachePromise: Promise<Cache> | null = null;
+	private gravacoesDesdeAPoda = PODA_A_CADA;
 	// Marks requests whose `earlyResponse` we sourced from the cache, so the
 	// preresponse hook below knows not to re-store them. WeakMap keys are
 	// the request objects so entries clean themselves up automatically.
@@ -313,6 +296,70 @@ export class HttpCachePlugin extends ManagedPlugin {
 	constructor(options: HttpCachePluginOptions = {}) {
 		super("scramjet-http-cache", []);
 		this.cacheName = options.cacheName ?? CACHE_NAME;
+		this.maxEntryBytes = options.maxEntryBytes ?? TETO_POR_ENTRADA;
+		this.maxEntries = options.maxEntries ?? TETO_DE_ENTRADAS;
+	}
+
+	/**
+	 * vssh fork: lê a cópia do corpo que é do cache e a guarda, se couber no teto. Corre por fora da
+	 * resposta: a página lê a outra cópia do `tee()` enquanto isto lê esta, e a resposta não espera
+	 * o cache. Passou do teto, a leitura é cancelada e nada é guardado.
+	 */
+	private async guardar(
+		chave: Request,
+		corpo: ReadableStream<Uint8Array> | null,
+		status: number,
+		statusText: string,
+		rawHeaders: ReadonlyArray<readonly [string, string]>
+	): Promise<void> {
+		let bytes: ArrayBuffer | null = null;
+		if (corpo) {
+			const leitor = corpo.getReader();
+			const pedacos: Uint8Array[] = [];
+			let total = 0;
+			for (;;) {
+				const { done, value } = await leitor.read();
+				if (done) break;
+				total += value.byteLength;
+				if (total > this.maxEntryBytes) {
+					leitor.cancel().catch(() => {});
+					return;
+				}
+				pedacos.push(value);
+			}
+			const junto = new Uint8Array(total);
+			let pos = 0;
+			for (const p of pedacos) {
+				junto.set(p, pos);
+				pos += p.byteLength;
+			}
+			bytes = junto.buffer;
+		}
+		const cache = await this.openCache();
+		await cache.put(chave, buildStorableResponse(bytes, status, statusText, rawHeaders));
+		if (++this.gravacoesDesdeAPoda >= PODA_A_CADA) {
+			this.gravacoesDesdeAPoda = 0;
+			await this.podar(cache);
+		}
+	}
+
+	/**
+	 * vssh fork: o teto de entradas, e a cota da origem. O CacheStorage devolve as chaves na ordem
+	 * em que foram gravadas, e uma regravação vai para o fim; saem as do começo. Com a origem acima
+	 * de metade da cota (`navigator.storage.estimate()`), sai a metade mais antiga do cache.
+	 */
+	private async podar(cache: Cache): Promise<void> {
+		const chaves = await cache.keys();
+		let excesso = chaves.length - this.maxEntries;
+		try {
+			const estimativa = await navigator.storage?.estimate?.();
+			if (estimativa?.quota && (estimativa.usage ?? 0) > estimativa.quota / 2) {
+				excesso = Math.max(excesso, Math.ceil(chaves.length / 2));
+			}
+		} catch {
+			// sem estimativa, vale só o teto de entradas
+		}
+		for (let i = 0; i < excesso; i++) await cache.delete(chaves[i]);
 	}
 
 	/** Lazy-open the underlying Cache. Memoized for the plugin's lifetime. */
@@ -424,36 +471,48 @@ export class HttpCachePlugin extends ManagedPlugin {
 			if ((req.cache as string) === "no-store") return;
 			if (!isCacheableMethod(req.method)) return;
 
-			const headers = nativeHeadersFromRaw(props.response.rawHeaders);
-			if (!responseIsStorable(props.response.status, headers, req.method))
-				return;
-
-			// Drain the stream once and rebuild the BareResponse around the
-			// buffered copy so the rest of doHandleFetch can still read it.
-			const { replacement, bodyBuffer } = await rebuildBareResponseWithBuffer(
-				props.response
-			);
-			props.response = replacement;
+			const original = props.response;
+			const headers = nativeHeadersFromRaw(original.rawHeaders);
+			if (!responseIsStorable(original.status, headers, req.method)) return;
+			if (foraDoCache(headers, this.maxEntryBytes)) return;
 
 			const cacheKey = buildCacheKeyRequest(
 				ctx.parsed.url.href,
 				req.initialHeaders
 			);
-			const toStore = buildStorableResponse(
-				bodyBuffer,
-				props.response.status,
-				props.response.statusText,
-				props.response.rawHeaders
-			);
 
-			try {
-				const cache = await this.openCache();
-				await cache.put(cacheKey, toStore);
-			} catch (err) {
+			// vssh fork: o corpo se divide em duas cópias (`tee()`), uma para a página e outra para o
+			// cache, e a resposta segue sem esperar o cache ler. Ler o corpo inteiro para a memória
+			// antes de devolvê-lo fazia de um arquivo grande um ArrayBuffer do mesmo tamanho na thread
+			// da página.
+			let paraOCache: ReadableStream<Uint8Array> | null = null;
+			if (!NULL_BODY_STATUSES.has(original.status) && original.body) {
+				const [paraAPagina, copia] = original.body.tee();
+				paraOCache = copia;
+				const replacement = BareResponse.fromNativeResponse(
+					new Response(paraAPagina, {
+						status: original.status,
+						statusText: original.statusText,
+						headers,
+					})
+				);
+				replacement.url = original.url;
+				replacement.redirected = original.redirected;
+				replacement.rawHeaders = original.rawHeaders;
+				props.response = replacement;
+			}
+
+			this.guardar(
+				cacheKey,
+				paraOCache,
+				original.status,
+				original.statusText,
+				original.rawHeaders
+			).catch((err) => {
 				// Cache.put can fail on opaque or oddly-headered responses;
 				// don't let a cache write failure break the actual fetch.
 				console.warn("[scramjet-http-cache] cache.put failed:", err);
-			}
+			});
 		});
 	}
 

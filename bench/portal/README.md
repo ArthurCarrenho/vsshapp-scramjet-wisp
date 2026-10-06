@@ -60,6 +60,7 @@ node cookies-dominio.mjs    # a sessão sobrevive à ida e à volta pelo portal?
 node adblock-corrente.mjs   # o bloqueio fecha a corrente inteira?
 node deeplink.mjs           # o que acontece com cada esquema e cada forma de abrir?
 node motor-recusado.mjs     # quando o portal recusa, o cliente diz o código ou adivinha?
+node cache-de-paginas.mjs   # o que o cache de páginas guarda, e o que fica fora dele?
 ```
 
 Cada script termina com `=== veredito ===` e um `process.exitCode`, no mesmo vocabulário da bancada
@@ -76,6 +77,7 @@ irmã: **controle** é o mesmo cenário sem o gatilho, **direto** é sem o proxy
 | `adblock-corrente.mjs` | o pedido nem sai, o recurso falha de verdade, e o erro que não é nosso continua aparecendo? | uma extensão com um filtro de uma linha |
 | `deeplink.mjs` | o que cada esquema e cada forma de abrir produzem? | uma página com os cinco casos |
 | `motor-recusado.mjs` | a recusa do portal chega ao console com o número e o endereço? | o portal respondendo 403 em `/proxy/app/scramjet-wisp/` |
+| `cache-de-paginas.mjs` | o download, a mídia e a resposta grande ficam fora do cache, e chegam inteiros à página? | cinco corpos com `max-age`, um sem `Content-Length` |
 
 ## O que ela ACHOU
 

@@ -118,6 +118,46 @@ export async function subirSites({ porta = 0 } = {}) {
 		// Aceita a conexão e nunca responde: o gatilho do giro eterno.
 		if (u.pathname === "/lento") return; // nem writeHead — o socket fica aberto
 
+		// O cache de páginas: corpos guardáveis pelo HTTP (`max-age`) que não cabem nele. O tamanho
+		// vem da query (`?mb=`), e o corpo é gerado em pedaços, sem morar inteiro na memória daqui.
+		const CACHEAVEL = "public, max-age=3600";
+		const corpoDe = (mb, extra) => {
+			const total = Math.max(1, Number(u.searchParams.get("mb") || mb)) * 1024 * 1024;
+			res.writeHead(200, { "Cache-Control": CACHEAVEL, ...extra });
+			const pedaco = Buffer.alloc(64 * 1024, 120);
+			let enviado = 0;
+			const escrever = () => {
+				while (enviado < total) {
+					const n = Math.min(pedaco.length, total - enviado);
+					enviado += n;
+					if (!res.write(n === pedaco.length ? pedaco : pedaco.subarray(0, n))) return res.once("drain", escrever);
+				}
+				res.end();
+			};
+			escrever();
+		};
+		if (u.pathname === "/cache/pequeno.js") {
+			res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": CACHEAVEL });
+			return res.end("window.__pequeno = 1;");
+		}
+		if (u.pathname === "/cache/grande.bin") {
+			const mb = Number(u.searchParams.get("mb") || 32);
+			return corpoDe(mb, { "Content-Type": "application/octet-stream", "Content-Length": String(mb * 1024 * 1024) });
+		}
+		if (u.pathname === "/cache/anexo.zip") {
+			const mb = Number(u.searchParams.get("mb") || 2);
+			return corpoDe(mb, {
+				"Content-Type": "application/zip", "Content-Length": String(mb * 1024 * 1024),
+				"Content-Disposition": 'attachment; filename="anexo.zip"',
+			});
+		}
+		// Sem `Content-Length`: o tamanho só se sabe lendo.
+		if (u.pathname === "/cache/sem-tamanho.bin") return corpoDe(16, { "Content-Type": "application/octet-stream" });
+		if (u.pathname === "/cache/video.mp4") {
+			return corpoDe(1, { "Content-Type": "video/mp4", "Content-Length": String(1024 * 1024) });
+		}
+		if (u.pathname === "/cache/") return html(res, pagina("cache", "<p>pedidos de dentro desta página</p>"));
+
 		if (u.pathname === "/anuncios") {
 			return html(res, pagina("anuncios", `
 				<img id="anuncio" src="http://anuncios.teste:${P}/pixel.gif"
