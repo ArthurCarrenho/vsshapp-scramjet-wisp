@@ -96,7 +96,10 @@ jobs:
                    or (.pr as $pr | $pr != null and ($x.commit.message | split("\n")[0] | contains("(#\($pr))")))
                  ) | not)]
               | length')
-            importe=$(git log --format=%H --reverse -- "$caminho" | head -1)
+            # O import é o commit mais antigo a tocar a subárvore. O `tail` lê a saída inteira: o git
+            # escreve um commit por vez num cano, e um `head` que saísse no primeiro deixaria o git
+            # morrer de SIGPIPE, o que o `pipefail` transforma no passo inteiro saindo com 141.
+            importe=$(git rev-list HEAD -- "$caminho" | tail -n 1)
             aqui=$(git rev-list --count "$importe..HEAD" -- "$caminho")
             nossos=$(( $(printf '%s' "$resp" | jq -r '.behind_by') + aqui ))
             base=$(printf '%s' "$resp" | jq -r '.merge_base_commit.sha[0:7]')
@@ -133,7 +136,7 @@ jobs:
             novas=$((novas + 1))
           done < <(printf '%s' "${npm_json:-{\}}" | jq -r 'to_entries[] | select(.value.wanted != .value.latest) | [.key, .value.wanted, .value.latest] | @tsv')
 
-          mbed=$(grep -oE 'mbedtls-[0-9]+\.[0-9]+\.[0-9]+' engines/libcurl.js/client/tools/mbedtls.sh | head -1 | sed 's/^mbedtls-//')
+          mbed=$(grep -m1 -oE 'mbedtls-[0-9]+\.[0-9]+\.[0-9]+' engines/libcurl.js/client/tools/mbedtls.sh | sed 's/^mbedtls-//')
           mbed_ultima=$(git ls-remote --tags --refs https://github.com/Mbed-TLS/mbedtls "refs/tags/mbedtls-${mbed%.*}.*" \
             | sed 's#.*refs/tags/mbedtls-##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
           if [ -n "$mbed_ultima" ] && [ "$mbed_ultima" != "$mbed" ]; then
