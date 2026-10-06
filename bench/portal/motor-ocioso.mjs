@@ -15,9 +15,11 @@
 //          duas falham na conexão, e aqui a aba tem de terminar no erro do site (o wisp entrega a
 //          recusa como `rede/52`), sem ninguém subir o motor.
 //
-// O veredito compara cada caso com o controle. O que sobra depois de descontar o controle (e a
-// subida, no caso `motor`) é o custo de perceber a queda, e passa de 3 s só quando alguém espera um
-// prazo vencer.
+// O veredito compara cada caso com o controle. O que sobra depois de descontar o controle e o
+// prazo próprio do caso é o custo de perceber a queda, e passa de 3 s só quando alguém espera um
+// prazo vencer à toa. O prazo próprio do `motor` é a subida. O do `mudo` é uma volta do cão de
+// guarda do shell (`_VIGIA_MS`, 12 s) mais a sonda de saída do reconnect() (1,5 s): um WebSocket
+// mudo não emite sinal nenhum, e só um prazo o percebe.
 //
 //   BENCH_CHROME     o binário do Chromium
 //   BENCH_SUBIDA_MS  quanto o motor leva para subir de novo (padrão 800)
@@ -34,6 +36,7 @@ prazoDeMorte(Number(process.env.BENCH_LIMITE || 300000));
 
 const SUBIDA_MS = Number(process.env.BENCH_SUBIDA_MS || 800);
 const SOBRA_MS = 3000;
+const PRAZO_DO_CASO = { motor: SUBIDA_MS, mudo: 12000 + 1500 };
 const CASOS = {
 	sw: "o service worker do motor é encerrado",
 	motor: `o motor cai por ociosidade e leva ${SUBIDA_MS} ms para subir`,
@@ -140,19 +143,19 @@ if (controle.primeira !== "inicio" || !controle.chegou) {
 }
 let falhou = false;
 for (const [caso, r] of Object.entries(resultados)) {
-	const subida = caso === "motor" ? SUBIDA_MS : 0;
+	const prazo = PRAZO_DO_CASO[caso] || 0;
 	const problemas = [];
 	if (r.primeira !== "inicio") problemas.push("a primeira página não carregou");
 	if (!r.chegou) problemas.push(`a segunda página não chegou (passou por ${r.passagens.map((p) => p.titulo || p.marca).join(", ")})`);
 	if (caso === "motor" && r.subidas < 1) problemas.push("ninguém subiu o motor de volta");
 	if (caso === "site" && r.garantias > 0) problemas.push(`o motor foi garantido ${r.garantias} vez(es) por um erro do site`);
-	const sobra = r.chegou ? r.ms - controle.ms - subida : null;
+	const sobra = r.chegou ? r.ms - controle.ms - prazo : null;
 	if (sobra !== null && sobra > SOBRA_MS) problemas.push(`perceber a queda custou ${sobra} ms`);
 	if (problemas.length) {
 		falhou = true;
 		console.log(`  ✗ ${caso}: ${problemas.join("; ")}`);
 	} else {
-		console.log(`  ✓ ${caso}: ${r.ms} ms, ${sobra} ms além do controle${subida ? " e da subida" : ""}`);
+		console.log(`  ✓ ${caso}: ${r.ms} ms, ${sobra} ms além do controle${prazo ? ` e do prazo do caso (${prazo} ms)` : ""}`);
 	}
 }
 if (falhou) process.exitCode = 1;
