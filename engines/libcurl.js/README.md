@@ -171,6 +171,7 @@ The valid WebSocket options are:
 - `headers` - HTTP request headers for the websocket handshake.
 - `verbose` - A boolean flag that toggles the verbose libcurl output. This verbose output will be passed to the function defined in `libcurl.stderr`, which is `console.warn` by default.
 - `proxy` - A URL for a `socks5h`, `socks4a`, or `http` proxy server. 
+- `insecure` - (vssh fork) Skip TLS peer and host verification for this connection, the same key the vssh fork accepts on HTTP requests.
 
 The following callbacks are available:
 - `CurlWebSocket.onopen` - Called when the websocket is successfully connected.

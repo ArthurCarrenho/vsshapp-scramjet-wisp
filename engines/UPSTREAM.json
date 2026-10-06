@@ -42,7 +42,7 @@
     "branch": "main",
     "sincronizado": "fb9341e",
     "licenca": "LGPL-3.0",
-    "nota": "não é cópia verbatim: client/wisp_client deixou de ser submódulo e server/ foi descartado",
+    "nota": "não é cópia verbatim: client/wisp_client deixou de ser submódulo e server/ foi descartado. As bibliotecas C são deste repositório: o curl sai do tarball de release com client/tools/patches/curl/ por cima, e o passo deps do upstream.yml vigia o curl e o mbedtls",
     "trazidos": [],
     "recusados": []
   },

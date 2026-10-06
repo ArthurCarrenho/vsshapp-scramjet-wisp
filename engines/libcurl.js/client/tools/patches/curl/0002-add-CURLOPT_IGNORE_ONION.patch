@@ -1,0 +1,85 @@
+From c4e7a7eabda4c2a8a3d4a7fb6617e834b07d79c6 Mon Sep 17 00:00:00 2001
+From: ading2210 <ading2019@gmail.com>
+Date: Tue, 6 Oct 2026 03:13:20 +0000
+Subject: [PATCH 2/2] add CURLOPT_IGNORE_ONION
+
+Rebased onto curl 8.22.0 for vsshapp-scramjet-wisp: the .onion check moved to
+lib/vdns/hostip.c, and option number 329 now belongs to
+CURLOPT_HTTPSIG_ALGORITHM, so the option takes 333.
+
+---
+ include/curl/curl.h | 3 +++
+ lib/easyoptions.c   | 1 +
+ lib/setopt.c        | 3 +++
+ lib/urldata.h       | 1 +
+ lib/vdns/hostip.c   | 2 +-
+ 5 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/include/curl/curl.h b/include/curl/curl.h
+index a3e54a4..88edbff 100644
+--- a/include/curl/curl.h
++++ b/include/curl/curl.h
+@@ -2288,6 +2288,9 @@ typedef enum {
+   /* Space-separated list of components to sign for HTTP Message Signatures */
+   CURLOPT(CURLOPT_HTTPSIG_HEADERS, CURLOPTTYPE_STRINGPOINT, 332),
+ 
++  /* allow resolution of .onion urls */
++  CURLOPT(CURLOPT_IGNORE_ONION, CURLOPTTYPE_LONG, 333),
++
+   CURLOPT_LASTENTRY /* the last unused */
+ } CURLoption;
+ 
+diff --git a/lib/easyoptions.c b/lib/easyoptions.c
+index 1643ec3..060697a 100644
+--- a/lib/easyoptions.c
++++ b/lib/easyoptions.c
+@@ -149,6 +149,7 @@ const struct curl_easyoption Curl_easyopts[] = {
+     CURLOT_LONG, 0 },
+   { "HTTP_VERSION", CURLOPT_HTTP_VERSION, CURLOT_VALUES, 0 },
+   { "IGNORE_CONTENT_LENGTH", CURLOPT_IGNORE_CONTENT_LENGTH, CURLOT_LONG, 0 },
++  { "IGNORE_ONION", CURLOPT_IGNORE_ONION, CURLOT_LONG, 0 },
+   { "INFILE", CURLOPT_READDATA, CURLOT_CBPTR, CURLOT_FLAG_ALIAS },
+   { "INFILESIZE", CURLOPT_INFILESIZE, CURLOT_LONG, 0 },
+   { "INFILESIZE_LARGE", CURLOPT_INFILESIZE_LARGE, CURLOT_OFF_T, 0 },
+diff --git a/lib/setopt.c b/lib/setopt.c
+index 0e15980..2681830 100644
+--- a/lib/setopt.c
++++ b/lib/setopt.c
+@@ -697,6 +697,9 @@ static CURLcode setopt_long_bool(struct Curl_easy *data, CURLoption option,
+   case CURLOPT_IGNORE_CONTENT_LENGTH:
+     s->ignorecl = enabled;
+     break;
++  case CURLOPT_IGNORE_ONION:
++    s->ignore_onion = enabled;
++    break;
+   case CURLOPT_SSL_SESSIONID_CACHE:
+     s->ssl.primary.cache_session = enabled;
+ #ifndef CURL_DISABLE_PROXY
+diff --git a/lib/urldata.h b/lib/urldata.h
+index 1c01018..1609f95 100644
+--- a/lib/urldata.h
++++ b/lib/urldata.h
+@@ -1090,6 +1090,7 @@ struct UserDefined {
+   BIT(no_signal);      /* do not use any signal/alarm handler */
+   BIT(tcp_nodelay);    /* whether to enable TCP_NODELAY or not */
+   BIT(ignorecl);       /* ignore content length */
++  BIT(ignore_onion);   /* allow resolving .onion urls */
+   BIT(http_te_skip);   /* pass the raw body data to the user, even when
+                           transfer-encoded (chunked, compressed) */
+   BIT(http_ce_skip);   /* pass the raw body data to the user, even when
+diff --git a/lib/vdns/hostip.c b/lib/vdns/hostip.c
+index 8464bd2..af220c4 100644
+--- a/lib/vdns/hostip.c
++++ b/lib/vdns/hostip.c
+@@ -727,7 +727,7 @@ static CURLcode hostip_resolv(struct Curl_easy *data,
+   /* We should intentionally error and not resolve .onion TLDs */
+   hostname_len = strlen(peer->hostname);
+   DEBUGASSERT(hostname_len);
+-  if(hostname_len >= 7 &&
++  if(!data->set.ignore_onion && hostname_len >= 7 &&
+      (curl_strequal(&peer->hostname[hostname_len - 6], ".onion") ||
+       curl_strequal(&peer->hostname[hostname_len - 7], ".onion."))) {
+     failf(data, "Not resolving .onion address (RFC 7686)");
+-- 
+2.43.0
+

@@ -253,8 +253,9 @@ jobs:
 
       # As seis bibliotecas C (curl, mbedtls, brotli, nghttp2, zlib, cJSON) são compiladas com
       # emscripten, DUAS vezes (`release` e `single_file`). Sem cache isso é o build mais caro dos
-      # três: 7 minutos, a cada push, sempre. A chave são os scripts que fixam as versões das libs
-      # mais a versão do emsdk — nada mais muda o conteúdo de `client/build/`.
+      # três: 7 minutos, a cada push, sempre. A chave são os scripts que fixam as versões das libs,
+      # os patches que o `curl.sh` aplica e a versão do emsdk, e nada mais muda o conteúdo de
+      # `client/build/`.
       - name: Cache das bibliotecas C
         uses: actions/cache@v5
         with:
@@ -262,6 +263,7 @@ jobs:
           key: >-
             libcurl-c-${{ runner.os }}-${{ hashFiles(
               'engines/libcurl.js/client/tools/*.sh',
+              'engines/libcurl.js/client/tools/patches/**',
               'engines/libcurl.js/client/.emsdk-version'
             ) }}
 

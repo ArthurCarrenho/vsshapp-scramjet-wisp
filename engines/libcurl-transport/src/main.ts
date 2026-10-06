@@ -18,8 +18,8 @@ export type LibcurlClientOptions = {
   transport?: string;
   connections?: Array<number>;
   // vssh fork: skip TLS peer/host verification (self-signed certs on internal/dev
-  // servers) for every host. Applies to HTTP(S) requests via HTTPSession; not to WebSocket
-  // connections. For a single host, see setInsecureHosts().
+  // servers) for every host, on HTTP(S) requests and on proxied WebSocket connections. For a
+  // single host, see setInsecureHosts().
   insecure?: boolean;
 };
 export default class LibcurlClient implements ProxyTransport {
@@ -144,6 +144,7 @@ export default class LibcurlClient implements ProxyTransport {
 
     let socket = new libcurl.WebSocket(url.toString(), protocols, {
       headers: headersObj,
+      insecure: this.insecure || this.insecureHosts.has(url.host.toLowerCase()),
     });
 
     socket.binaryType = "arraybuffer";

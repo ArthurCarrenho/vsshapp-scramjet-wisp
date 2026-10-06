@@ -15,6 +15,7 @@
 //   · antes da exceção, um dos dois abre, ou o erro não é o 60 do libcurl (a verificação);
 //   · com a exceção de `a`, `a` não abre, ou `b` abre, ou algum pedido HTTP chega a `b`;
 //   · `fetch` de dentro da página de `a` alcança `b`;
+//   · um `wss://` de dentro da página de `a` não abre em `a`, ou abre em `b`;
 //   · esquecida a exceção, `a` volta a abrir: uma conexão aberta sem verificação servindo um
 //     pedido que exige verificação.
 //
@@ -22,6 +23,7 @@
 // host, e a sonda para aí, com código 1.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
@@ -58,6 +60,16 @@ const tls = createServer({
 	}
 	res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
 	res.end(`<!doctype html><meta charset="utf-8"><title>${nome}</title><body data-marca="certificado-${nome}">${nome}</body>`);
+});
+// O WebSocket do mesmo servidor: o aperto de mão à mão e uma mensagem, "oi", logo depois.
+const upgrades = { a: 0, b: 0 };
+tls.on("upgrade", (req, socket) => {
+	const nome = String(req.headers.host || "").split(".")[0];
+	if (nome in upgrades) upgrades[nome]++;
+	const aceite = createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+	socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${aceite}\r\n\r\n`);
+	socket.write(Buffer.from([0x81, 2, 0x6f, 0x69]));
+	socket.on("error", () => {});
 });
 await new Promise((ok) => tls.listen(0, "127.0.0.1", ok));
 const PT = tls.address().port;
@@ -131,6 +143,23 @@ try {
 	if (contagem.b) falhas.push(`${contagem.b} fetch(es) da página de a chegaram a b`);
 	if (chegaram.b) falhas.push(`${chegaram.b} pedido(s) HTTP chegaram a b, que não tem exceção`);
 
+	// O WebSocket proxiado leva a mesma exceção: abre em `a` e não em `b`.
+	const ws = await pag.evaluate(([aba, a, b]) => window.__bancada.naAba(aba, `(async () => {
+		const um = (h) => new Promise((ok) => {
+			const w = new WebSocket('wss://' + h + '/ws');
+			const t = setTimeout(() => ok('prazo'), 8000);
+			w.onmessage = (e) => { clearTimeout(t); ok('mensagem ' + e.data); w.close(); };
+			w.onerror = () => { clearTimeout(t); ok('erro'); };
+		});
+		return { a: await um(${JSON.stringify(a)}), b: await um(${JSON.stringify(b)}) };
+	})()`), [a1.id, A, B]);
+	console.log(`wss:// de dentro de a: a = ${ws.a}, b = ${ws.b}; upgrades que chegaram: ${upgrades.a} em a, ${upgrades.b} em b`);
+	if (ws.a !== "mensagem oi") falhas.push(`o wss:// a a, que tem exceção, não abriu: ${ws.a}`);
+	// A recusa do certificado de `b` chega à página como erro ou como silêncio, conforme o motor
+	// propaga a falha; o que reprova é abrir.
+	if (ws.b.startsWith("mensagem")) falhas.push("o wss:// a b, sem exceção, abriu");
+	if (upgrades.b) falhas.push(`${upgrades.b} upgrade(s) de WebSocket chegaram a b`);
+
 	const semVerificacao = await pag.evaluate(([a, b]) => {
 		const m = window.BrowserEngines.get("scramjet-wisp");
 		return [m.certificadoSemVerificacao(`https://${a}/`), m.certificadoSemVerificacao(`https://${b}/`)];
@@ -157,5 +186,5 @@ try {
 
 console.log("\n=== veredito ===");
 if (falhas.length) { for (const f of falhas) console.log(`  ✗ ${f}`); process.exitCode = 1; }
-else console.log("  ✓ a exceção de a abre só a, e esquecê-la volta a exigir o certificado");
+else console.log("  ✓ a exceção de a abre só a, nos pedidos e no WebSocket, e esquecê-la volta a exigir o certificado");
 if (semCapacidade) console.log("  (controle: sem a capacidade, a sonda não chega à exceção)");

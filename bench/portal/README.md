@@ -84,7 +84,7 @@ irmã: **controle** é o mesmo cenário sem o gatilho, **direto** é sem o proxy
 | `cache-de-paginas.mjs` | o download, a mídia e a resposta grande ficam fora do cache, e chegam inteiros à página? | cinco corpos com `max-age`, um sem `Content-Length` |
 | `tarefas-longas.mjs` | quantas long tasks, e de quanto, a thread do shell vê numa navegação pesada? | `/pesada/`: oito scripts de ~250 KB, trinta imagens e um iframe, num documento novo a cada volta |
 | `popups.mjs` | o `window.open` sem gesto devolve `null` e avisa o shell, o clique de verdade num link abre, e a rajada para no teto de 10 por minuto? | `/popups`: um link `target=_blank`, um botão que pede 15 abas, e `__semGesto(n)` chamado pelo CDP com `userGesture: false` |
-| `certificado-por-host.mjs` | a exceção de certificado de um host abre só ele, nenhum pedido chega ao outro, e esquecê-la volta a exigir o certificado? | dois sites HTTPS com o mesmo certificado autoassinado, gerado pelo `openssl` na hora |
+| `certificado-por-host.mjs` | a exceção de certificado de um host abre só ele, nos pedidos e no `wss://`, nenhum pedido chega ao outro, e esquecê-la volta a exigir o certificado? | dois sites HTTPS com o mesmo certificado autoassinado, gerado pelo `openssl` na hora |
 | `mudanca-de-url.mjs` | o `pushState` chega ao shell como `push` e o `replaceState` como `replace`? | `/spa`: três `pushState` e trinta `replaceState` |
 
 ## O que ela ACHOU

@@ -69,7 +69,7 @@ EXPORTED_FUNCS="${EXPORTED_FUNCS:1}"
 #compile options
 RUNTIME_METHODS="addFunction,removeFunction,allocate,ALLOC_NORMAL"
 COMPILER_OPTIONS="-o $MODULE_FILE -lcurl -lmbedtls -lmbedcrypto -lmbedx509 -lcjson -lz -lbrotlidec -lbrotlicommon -lnghttp2 -I $INCLUDE_DIR -L $LIB_DIR"
-EMSCRIPTEN_OPTIONS="-lwebsocket.js -sENVIRONMENT=worker,web -sASSERTIONS=1 -sLLD_REPORT_UNDEFINED -sALLOW_TABLE_GROWTH -sALLOW_MEMORY_GROWTH -sNO_EXIT_RUNTIME -sEXPORTED_FUNCTIONS=$EXPORTED_FUNCS -sEXPORTED_RUNTIME_METHODS=$RUNTIME_METHODS"
+EMSCRIPTEN_OPTIONS="-lwebsocket.js -sENVIRONMENT=worker,web -sLLD_REPORT_UNDEFINED -sALLOW_TABLE_GROWTH -sALLOW_MEMORY_GROWTH -sNO_EXIT_RUNTIME -sEXPORTED_FUNCTIONS=$EXPORTED_FUNCS -sEXPORTED_RUNTIME_METHODS=$RUNTIME_METHODS"
 
 #clean output dir
 rm -rf $OUT_DIR
@@ -87,12 +87,15 @@ if [[ "$*" == *"all"* ]]; then
   exit 0
 fi
 
+# vssh fork: as asserções do emscripten ficam no build de depuração. No release elas pesavam no
+# bundle de produção e escreviam "Assertion failed" no console de quem navegava.
 if [[ "$*" == *"release"* ]]; then
   COMPILER_OPTIONS="-Oz -flto $COMPILER_OPTIONS"
+  EMSCRIPTEN_OPTIONS="$EMSCRIPTEN_OPTIONS -sASSERTIONS=0"
   echo "note: building with release optimizations"
 else
   COMPILER_OPTIONS="$COMPILER_OPTIONS --profiling -g "
-  EMSCRIPTEN_OPTIONS="$EMSCRIPTEN_OPTIONS -sSTACK_OVERFLOW_CHECK=2"
+  EMSCRIPTEN_OPTIONS="$EMSCRIPTEN_OPTIONS -sASSERTIONS=1 -sSTACK_OVERFLOW_CHECK=2"
   echo "note: this is a debug build"
 fi
 
