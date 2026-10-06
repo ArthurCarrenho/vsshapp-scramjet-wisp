@@ -172,10 +172,12 @@ jobs:
           set -euo pipefail
           TITULO="Upstream andou desde a última sincronização"
 
-          corpo=$(cat <<CORPO
-          O upstream das subárvores abaixo ganhou commits que \`engines/\` não tem. Isto é um aviso,
-          não uma tarefa: sincronizar um fork com dezenas de commits nossos por cima é decisão, e o
-          valor disto é a decisão ser tomada sabendo, e não descoberta por acaso.
+          # Cada tabela entra só quando tem linha: um passo pode abrir a issue sozinho, e uma tabela
+          # vazia com o texto dela diria que uma subárvore andou quando quem andou foi uma dependência.
+          subarvores=""
+          if [ -n "$TABELA" ]; then
+            subarvores=$(cat <<SECAO
+          O upstream destas subárvores ganhou commits que \`engines/\` não tem:
 
           | subárvore | upstream | commits deles | commits nossos | desde |
           |---|---|---|---|---|
@@ -184,13 +186,30 @@ jobs:
           "commits deles" é o que falta trazer, fora o que \`engines/UPSTREAM.json\` já registra
           como trazido ou recusado. "commits nossos" é o enxerto que a sincronização vai ter que
           reaplicar por cima (os do fork e os deste repositório em \`engines/\`): é ele que diz se
-          isso é uma tarde ou uma semana.
-
-          O link do upstream abre o diff a partir do merge-base, que inclui o que já foi trazido.
+          isso é uma tarde ou uma semana. O link do upstream abre o diff a partir do merge-base, que
+          inclui o que já foi trazido.
+          SECAO
+          )
+          fi
+          dependencias=""
+          if [ -n "$DEPS" ]; then
+            dependencias=$(cat <<SECAO
+          Estas dependências fora de \`engines/\` têm versão nova:
 
           | dependência | fixada | mais nova |
           |---|---|---|
           ${DEPS}
+          SECAO
+          )
+          fi
+
+          corpo=$(cat <<CORPO
+          Isto é um aviso: sincronizar um fork com dezenas de commits nossos por cima é decisão de uma
+          pessoa, e o valor disto é ela decidir sabendo.
+
+          ${subarvores}
+
+          ${dependencias}
 
           **Ao sincronizar**, registre em \`engines/UPSTREAM.json\` no MESMO commit que traz o
           código: \`sincronizado\` para um import novo, ou uma entrada em \`trazidos\` para um commit
@@ -202,10 +221,11 @@ jobs:
           CORPO
           )
           # `sed` para tirar a indentação do heredoc: manter o texto alinhado no YAML é o que o faz
-          # legível aqui, e 10 espaços à esquerda no markdown viram bloco de código no GitHub.
-          corpo=$(printf '%s' "$corpo" | sed 's/^          //')
+          # legível aqui, e 10 espaços à esquerda no markdown viram bloco de código no GitHub. O
+          # `cat -s` junta as linhas em branco que uma seção vazia deixa.
+          corpo=$(printf '%s' "$corpo" | sed 's/^          //' | cat -s)
 
-          existente=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITULO in:title" --json number,title --jq ".[] | select(.title == \"$TITULO\") | .number" | head -1)
+          existente=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITULO in:title" --json number,title --jq "[.[] | select(.title == \"$TITULO\") | .number] | first // empty")
 
           if [ -n "$existente" ]; then
             gh issue edit "$existente" --repo "$GITHUB_REPOSITORY" --body "$corpo"
