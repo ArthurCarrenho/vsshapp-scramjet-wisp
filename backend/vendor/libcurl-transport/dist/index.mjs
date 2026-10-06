@@ -5832,6 +5832,7 @@ var LibcurlClient = class {
         };
       });
     }
+    this.discardWispConnection();
     libcurl.set_websocket(this.wisp);
     this.session = new libcurl.HTTPSession({
       proxy: this.proxy,
@@ -5846,6 +5847,39 @@ var LibcurlClient = class {
   }
   ready = false;
   async meta() {
+  }
+  // vssh fork: libcurl.js keeps one WispConnection per wisp URL in a module-level map
+  // (`libcurl.wisp.wisp_connections`) and hands it to every new socket until it emits close or
+  // error. A WebSocket that goes silent without closing (a NAT or a load balancer that forgot
+  // the pair) emits neither, so the HTTPSession that init() creates would open its streams on
+  // the same dead connection, and a caller that re-runs init() to recover never gets a new one.
+  // init() drops whatever connection the map holds for this URL, and the new session opens its
+  // own.
+  //
+  // The old connection fails its streams at once and tells its WispWebSockets, whose close
+  // listener deletes the map entry by URL. After that it stops dispatching: the browser fires
+  // the socket's own close event much later, when the map already holds the new connection, and
+  // the same listener would delete that one.
+  discardWispConnection() {
+    const connections = libcurl.wisp?.wisp_connections;
+    if (!connections) return;
+    for (const [url, connection] of Object.entries(connections)) {
+      if (!url.startsWith(this.wisp)) continue;
+      try {
+        connection.on_ws_close?.();
+      } catch {
+      }
+      try {
+        connection.dispatchEvent(new CloseEvent("close"));
+      } catch {
+      }
+      connection.dispatchEvent = () => true;
+      delete connections[url];
+      try {
+        connection.ws?.close();
+      } catch {
+      }
+    }
   }
   // vssh fork: replaces the set of hosts requested without TLS verification. The shell
   // detects this method by name, and an older transport without it keeps verifying every
