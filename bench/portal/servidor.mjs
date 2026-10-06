@@ -128,7 +128,7 @@ function ordemDoIndex() {
 	return [...MODULOS].sort((a, b) => html.indexOf(`src="${a}"`) - html.indexOf(`src="${b}"`));
 }
 
-function paginaDaBancada(portaSites) {
+function paginaDaBancada(portaSites, motorParavel) {
 	const scripts = ordemDoIndex().map((m) => `<script src="/s/proxy/vssh-desktop/${m}"></script>`).join("\n");
 	return `<!doctype html><html><head><meta charset="utf-8"><title>bancada do portal</title></head>
 <body>
@@ -142,7 +142,11 @@ window.vsshSettings = { scramjetPageCache: false };
 window.AppLauncher = {
   appComCapacidade: async () => ({ id: 'scramjet-wisp' }),
   appPorId:         async () => ({ id: 'scramjet-wisp' }),
-  ensureRunning:    async () => ({ url: location.origin + '/s/proxy/app/scramjet-wisp/', ready: true, lastCode: 200 }),
+  // Com o motor parável, o dublê pergunta ao portal de bancada, que o sobe de volta quando ele
+  // caiu: é o caminho do \`ensureRunning\` de verdade, com o tempo de subida no meio.
+  ensureRunning:    ${motorParavel}
+    ? async () => (await fetch('/api/__motor/garantir', { method: 'POST' })).json()
+    : async () => ({ url: location.origin + '/s/proxy/app/scramjet-wisp/', ready: true, lastCode: 200 }),
   appsEmCache:      () => [],
 };
 window.Atividade = {
@@ -186,13 +190,32 @@ ${scripts}
  * `ensureRunning` da página segue dizendo `ready: true` de propósito — foi assim em produção, e é
  * o que faz a sonda medir o caso real em vez de um app parado.
  */
-export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null }) {
+export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null, motorParavel = false, subidaMs = 800 }) {
+	// O motor como o supervisor o trata. `pararMotor()` é o motor descendo por ociosidade: as
+	// conexões do wisp caem, e o portal recusa o app com o 409 "App Not Running", que é o que o
+	// de verdade responde quando o túnel até o app também caiu. O `ensureRunning` da página passa
+	// por `/api/__motor/garantir`, que o sobe de volta depois de `subidaMs`.
+	const motor = { parado: false, conexoes: new Set(), mudas: new Set(), subidas: 0, garantias: 0 };
+
 	const srv = createServer((req, res) => {
 		const caminho = decodeURIComponent(req.url.split("?")[0]);
 
 		if (caminho === "/s/proxy/vssh-desktop/" || caminho === "/s/proxy/vssh-desktop") {
 			res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-			return res.end(paginaDaBancada(portaSites));
+			return res.end(paginaDaBancada(portaSites, motorParavel));
+		}
+		if (caminho === "/api/__motor/garantir" && motorParavel) {
+			motor.garantias += 1;
+			const responder = () => {
+				res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+				res.end(JSON.stringify({ url: `http://127.0.0.1:${srv.address().port}${PREFIXO_DO_APP}`, ready: true, lastCode: 200 }));
+			};
+			if (!motor.parado) return responder();
+			motor.subidas += 1;
+			return void setTimeout(() => { motor.parado = false; responder(); }, subidaMs);
+		}
+		if (motor.parado && caminho.startsWith(PREFIXO_DO_APP)) {
+			return void res.writeHead(409, { "Cache-Control": "no-store" }).end();
 		}
 		if (caminho === "/s/proxy/vssh-desktop/bancada-api.js") {
 			res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-store" });
@@ -232,8 +255,14 @@ export async function subirPortal({ porta = 0, portaSites, statusDosAssets = nul
 
 	// O wisp sobe pelo mesmo caminho de produção — `/…/wisp/` casado por sufixo, como o server.js.
 	srv.on("upgrade", (req, socket, head) => {
-		if (req.url.split("?")[0].endsWith("/wisp/")) wisp.routeRequest(req, socket, head);
-		else socket.destroy();
+		if (!req.url.split("?")[0].endsWith("/wisp/")) return void socket.destroy();
+		if (motor.parado) {
+			socket.write("HTTP/1.1 409 App Not Running\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+			return void socket.destroy();
+		}
+		motor.conexoes.add(socket);
+		socket.on("close", () => motor.conexoes.delete(socket));
+		wisp.routeRequest(req, socket, head);
 	});
 
 	await new Promise((ok) => srv.listen(porta, "127.0.0.1", ok));
@@ -242,7 +271,30 @@ export async function subirPortal({ porta = 0, portaSites, statusDosAssets = nul
 		porta: p,
 		base: `http://127.0.0.1:${p}/s/proxy/vssh-desktop/`,
 		cookies: COOKIES,
-		fechar: () => new Promise((ok) => srv.close(ok)),
+		motor,
+		pararMotor() {
+			motor.parado = true;
+			for (const s of motor.conexoes) s.destroy();
+			motor.conexoes.clear();
+		},
+		// O WebSocket do wisp fechado com o motor de pé: um proxy no caminho derrubando a conexão
+		// ociosa.
+		derrubarWisp() {
+			for (const s of motor.conexoes) s.destroy();
+			motor.conexoes.clear();
+		},
+		// O WebSocket que fica mudo sem fechar (meia-conexão: um NAT ou um balanceador que esqueceu
+		// o par). Nada do que o navegador manda chega ao wisp, e nada volta.
+		// As conexões mudas continuam abertas até o `fechar()`, que as derruba: sem isso o
+		// `srv.close()` esperaria por elas para sempre.
+		silenciarWisp() {
+			for (const s of motor.conexoes) { s.pause(); s.write = () => true; motor.mudas.add(s); }
+			motor.conexoes.clear();
+		},
+		fechar: () => new Promise((ok) => {
+			for (const s of [...motor.conexoes, ...motor.mudas]) s.destroy();
+			srv.close(ok);
+		}),
 	};
 }
 
