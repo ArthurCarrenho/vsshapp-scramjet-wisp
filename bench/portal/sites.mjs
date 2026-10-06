@@ -223,6 +223,21 @@ export async function subirSites({ porta = 0 } = {}) {
 				</script>`));
 		}
 
+		// Pop-ups: um link de aba nova, um botão que abre quinze de uma vez num clique, e uma
+		// função que a sonda chama sem clique nenhum.
+		if (u.pathname === "/popups") {
+			return html(res, pagina("popups", `
+				<a id="novo" href="http://site.teste:${P}/conta" target="_blank">nova aba</a>
+				<button id="rajada" onclick="for (let i = 0; i < 15; i++) window.open('http://site.teste:${P}/conta?r=' + i, '_blank')">quinze abas</button>
+				<script>
+				  window.__semGesto = (n) => {
+				    let nulos = 0;
+				    for (let i = 0; i < n; i++) if (window.open('http://site.teste:${P}/conta?s=' + i, '_blank') === null) nulos++;
+				    return nulos;
+				  };
+				</script>`));
+		}
+
 		if (u.pathname === "/terceiro") {
 			return html(res, pagina("com-terceiro", `
 				<iframe id="quadro" src="http://terceiro.teste:${P}/"></iframe>
