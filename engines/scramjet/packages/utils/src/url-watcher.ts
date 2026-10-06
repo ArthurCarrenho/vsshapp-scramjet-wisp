@@ -3,6 +3,10 @@ import type { Frame } from "@mercuryworkshop/scramjet-controller";
 
 export type UrlWatcherOptions = {};
 
+// vssh fork: o que mudou a URL. `push` e `replace` são o `history` da página, `location` é uma
+// atribuição a `location`, `hash` é a troca de fragmento, e `documento` é um documento novo no frame.
+export type MudancaDeUrl = { tipo: "documento" | "push" | "replace" | "location" | "hash" };
+
 /**
  * Runs a callback whenever the URL of a Frame changes.
  * Includes hash changes and history.pushState/replaceState.
@@ -10,7 +14,7 @@ export type UrlWatcherOptions = {};
  */
 export class UrlWatcherPlugin extends ManagedPlugin {
 	constructor(
-		private onUrlChange: (url: string) => void,
+		private onUrlChange: (url: string, mudanca: MudancaDeUrl) => void,
 		private options: UrlWatcherOptions = {}
 	) {
 		super("url-watcher", []);
@@ -20,18 +24,22 @@ export class UrlWatcherPlugin extends ManagedPlugin {
 		this.tap(frame.hooks.init.post, (context) => {
 			if (!context.isTopLevel) return;
 
-			const notify = () => {
-				this.onUrlChange(context.client.url.href);
-			};
+			this.onUrlChange(context.client.url.href, { tipo: "documento" });
 
-			notify();
-
-			this.tap(context.client.hooks.lifecycle.navigate, (_context, props) => {
-				this.onUrlChange(props.url);
+			this.tap(context.client.hooks.lifecycle.navigate, (ctx, props) => {
+				const tipo =
+					ctx.type === "history" ? (ctx.historico ?? "push")
+					: ctx.type === "hashchange" ? "hash"
+					: "location";
+				this.onUrlChange(props.url, { tipo });
 			});
 
 			// TODO: this will probably make it fire twice if it was triggered by location.hash
-			context.window.addEventListener("hashchange", notify, { capture: true });
+			context.window.addEventListener(
+				"hashchange",
+				() => this.onUrlChange(context.client.url.href, { tipo: "hash" }),
+				{ capture: true }
+			);
 		});
 	}
 }
