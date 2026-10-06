@@ -5042,6 +5042,9 @@ Several C libraries are used, and their licenses are listed below:
       return request_ptr;
     }
     remove_request_now(request_ptr) {
+      if (!this.session_ptr && this.requests_closed && this.requests_closed.has(request_ptr)) {
+        return;
+      }
       if (this.session_ptr) {
         _session_remove_request(this.session_ptr, request_ptr);
       }
@@ -5053,7 +5056,9 @@ Several C libraries are used, and their licenses are listed below:
     }
     //remove the request on the next iteration of the loop
     remove_request(request_ptr) {
-      this.assert_ready();
+      if (!this.session_ptr) {
+        return;
+      }
       setTimeout(() => {
         this.remove_request_now(request_ptr);
       }, 1);
@@ -5081,7 +5086,8 @@ Several C libraries are used, and their licenses are listed below:
       }
     }
     close_now() {
-      for (let request_ptr of this.requests_list) {
+      this.requests_closed = new Set(this.requests_list);
+      for (let request_ptr of [...this.requests_list]) {
         this.remove_request_now(request_ptr);
       }
       _session_cleanup(this.session_ptr);
