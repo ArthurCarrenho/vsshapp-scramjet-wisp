@@ -75,6 +75,9 @@
       if (typeof f.onEsquemaExterno === 'function') {
         f.onEsquemaExterno((u) => retornos.push(['onEsquemaExterno', u]));
       }
+      if (typeof f.onPopupBloqueado === 'function') {
+        f.onPopupBloqueado((u) => retornos.push(['onPopupBloqueado', u]));
+      }
       f.onDownload((info) => retornos.push(['onDownload', info && info.url]));
       f.onContextMenu((ctx) => retornos.push(['onContextMenu', ctx && ctx.linkUrl]));
       f.__retornos = retornos;
@@ -121,6 +124,21 @@
 
     /** O que atravessou a fronteira do frame para o shell, na ordem. */
     retornos: (id) => (frames.get(id).__retornos || []).map((r) => [r[0], r[1]]),
+
+    /**
+     * O centro de um elemento da aba, em coordenadas da página de cima: é onde a sonda clica com
+     * o mouse do playwright. Um `el.click()` é um evento sintético, sem gesto da pessoa, e o motor
+     * trata os dois de forma diferente (uma aba nova só abre com gesto).
+     */
+    centro(id, seletor) {
+      const f = frames.get(id);
+      const el = seletor ? f.el.contentDocument.querySelector(seletor) : null;
+      const q = f.el.getBoundingClientRect();
+      if (!seletor) return { x: q.left + q.width - 40, y: q.top + q.height - 40 };
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: q.left + r.left + r.width / 2, y: q.top + r.top + r.height / 2 };
+    },
 
     /** Clica de verdade num elemento da aba — o clique é o que dispara os hooks do motor. */
     async clicar(id, seletor) {

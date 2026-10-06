@@ -58,19 +58,28 @@ const r = await pag.evaluate(async (alvo) => {
 		cliques[id] = await window.__bancada.clicar(aba.id, "#" + id);
 		await new Promise((ok) => setTimeout(ok, 200));
 	}
-	const antesDoBranco = window.__bancada.retornos(aba.id).length;
-	cliques.branco = await window.__bancada.clicar(aba.id, "#branco");
-
-	// `window.open` para alvo de janela nova, e `window.close()` da própria página.
-	const abriuComTarget = await naAba("window.__abrirJanela('_blank')");
-	const fechouSozinha  = await naAba("window.__fecharSe()");
-
-	return {
-		aba, tabela, cliques, antesDoBranco, abriuComTarget, fechouSozinha,
-		retornos: window.__bancada.retornos(aba.id),
-		log: window.__bancada.log().map((l) => l[1]).filter((t) => t.includes("[scramjet]")),
-	};
+	return { aba, tabela, cliques };
 }, `http://site.teste:${sites.porta}/deeplink`);
+
+// Aba nova só abre com gesto da pessoa (ver `popups.mjs`), então o link `target=_blank` e o
+// `window.open` vêm depois de um clique de verdade, com o mouse do playwright: no link, e numa área
+// vazia do quadro, cuja ativação vale para o `window.open` logo em seguida.
+const clicarDeVerdade = async (seletor) => {
+	const c = await pag.evaluate(([id, s]) => window.__bancada.centro(id, s), [r.aba.id, seletor]);
+	await pag.mouse.click(c.x, c.y);
+	await pag.waitForTimeout(300);
+};
+r.antesDoBranco = (await pag.evaluate((id) => window.__bancada.retornos(id), r.aba.id)).length;
+await clicarDeVerdade("#branco");
+r.cliques.branco = "clique de verdade";
+await clicarDeVerdade(null);
+// `window.open` para alvo de janela nova, e `window.close()` da própria página.
+Object.assign(r, await pag.evaluate(async (id) => ({
+	abriuComTarget: await window.__bancada.naAba(id, "window.__abrirJanela('_blank')"),
+	fechouSozinha: await window.__bancada.naAba(id, "window.__fecharSe()"),
+	retornos: window.__bancada.retornos(id),
+	log: window.__bancada.log().map((l) => l[1]).filter((t) => t.includes("[scramjet]")),
+}), r.aba.id));
 
 await ctx.close();
 await navegador.close();
