@@ -12,14 +12,29 @@
     "anotá-lo criaria um segundo dado para manter em dia.",
     "",
     "AO SINCRONIZAR com o upstream: atualize 'sincronizado' no mesmo commit que traz o código. Os",
-    "dois juntos, ou o arquivo vira ficção."
+    "dois juntos, ou o arquivo vira ficção.",
+    "",
+    "'trazidos' lista o que veio do upstream por cima do 'sincronizado', commit a commit: 'commit' é o",
+    "SHA deles, 'pr' o número do PR quando veio de um PR ainda aberto, e 'em' o commit DESTE",
+    "repositório que o trouxe. O upstream.yml tira esses commits da contagem, e um PR conta como",
+    "trazido também depois do merge lá, pelo '(#N)' que o GitHub põe no título do squash. 'recusados'",
+    "tem a mesma forma e o 'motivo'."
   ],
   "engines/scramjet": {
     "fork": "ArthurCarrenho/vssh-scramjet",
     "upstream": "MercuryWorkshop/scramjet",
     "branch": "main",
     "sincronizado": "0c9a1ec6",
-    "licenca": "AGPL-3.0-only"
+    "licenca": "AGPL-3.0-only",
+    "trazidos": [
+      { "commit": "b14b709a", "em": "2b43ff9", "nota": "Fix export escape (#94)" },
+      { "commit": "efc723bf", "em": "9c432d8", "nota": "[runway] fix flakes" },
+      { "commit": "783030b4", "em": "74fb669", "nota": "[chrome] UI Tweakability (#88)" },
+      { "pr": 187, "commit": "04c193c8", "em": "a27557d", "nota": "typeof(x).postMessage" },
+      { "pr": 186, "commit": "beff268f", "em": "eff23da", "nota": "setAttribute e getResponseHeader com nome não string" },
+      { "pr": 188, "commit": "ca976dad", "em": "ddc5a53", "nota": "setAttributeNode" }
+    ],
+    "recusados": []
   },
   "engines/libcurl.js": {
     "fork": "ArthurCarrenho/vssh-libcurl.js",
@@ -27,7 +42,9 @@
     "branch": "main",
     "sincronizado": "fb9341e",
     "licenca": "LGPL-3.0",
-    "nota": "não é cópia verbatim: client/wisp_client deixou de ser submódulo e server/ foi descartado"
+    "nota": "não é cópia verbatim: client/wisp_client deixou de ser submódulo e server/ foi descartado",
+    "trazidos": [],
+    "recusados": []
   },
   "engines/libcurl-transport": {
     "fork": "ArthurCarrenho/vssh-libcurl-transport",
@@ -35,6 +52,8 @@
     "branch": "master",
     "sincronizado": "af6da67",
     "licenca": "AGPL-3.0-only",
-    "nota": "o branch é master, e não main — a diferença já seria um workflow calado se assumida"
+    "nota": "o branch é master, e não main — a diferença já seria um workflow calado se assumida",
+    "trazidos": [],
+    "recusados": []
   }
 }

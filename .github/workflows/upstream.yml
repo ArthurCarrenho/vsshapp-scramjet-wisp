@@ -1,11 +1,12 @@
 name: Upstream
 
-# Avisa quando o upstream de alguma subárvore de `engines/` andar.
+# Avisa quando o upstream de alguma subárvore de `engines/` andar, e quando uma dependência que vive
+# fora de `engines/` tiver versão nova: o npm do backend e as bibliotecas C do libcurl.js (o mbedtls
+# e o curl, fixados em `engines/libcurl.js/client/tools/*.sh`).
 #
-# Trazer o código continua sendo manual — a decisão de sincronizar um fork com 32 commits nossos por
-# cima não é de robô. O que este workflow garante é que ela seja **avisada** em vez de lembrada: sem
-# ele, "o upstream mexeu" é uma coisa que alguém descobre meses depois, por acaso, ao abrir o
-# repositório dele por outro motivo.
+# Trazer o código continua manual: sincronizar um fork com dezenas de commits nossos por cima é
+# decisão de uma pessoa. Este workflow garante que ela seja avisada. Sem ele, alguém descobriria
+# que o upstream mexeu meses depois, por acaso, ao abrir o repositório dele por outro motivo.
 #
 # Como ele sabe o que comparar: `engines/UPSTREAM.json` diz, para cada subárvore, qual é o fork, qual
 # é o upstream, qual é o branch DELE e em que commit do nosso fork a cópia foi feita. O ponto
@@ -27,6 +28,13 @@ name: Upstream
 # estava na mesma resposta e passou batido: `merge_base` era igual ao HEAD do upstream, e a lista
 # `.commits` vinha VAZIA. Quando a contagem não bate com nada, olhe a lista.
 #
+# O compare mede a partir do merge-base do FORK, e um commit do upstream trazido aqui por
+# `git am --directory` não o move: a contagem seguiria dizendo que ele falta. Por isso o
+# `UPSTREAM.json` lista em `trazidos` (e `recusados`) o que já foi decidido, e os commits do compare
+# passam por esse filtro, pelo SHA ou pelo `(#N)` que o squash de um PR põe no título. O enxerto
+# também tem duas metades: os commits do fork e os feitos neste repositório em `engines/<sub>` desde
+# o import, que é o primeiro commit a tocar a subárvore.
+#
 # Uma issue só, atualizada, e nunca uma por execução: um alarme que abre issue toda semana vira
 # ruído e passa a ser fechado sem ler, que é o oposto do que ele existe para fazer.
 
@@ -47,7 +55,10 @@ jobs:
     name: O upstream andou?
     runs-on: ubuntu-latest
     steps:
+      # O histórico inteiro: os commits nossos em `engines/` se contam desde o import.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Comparar cada subárvore com o upstream dela
         id: comparar
@@ -74,11 +85,20 @@ jobs:
               continue
             fi
 
-            # `deles` é o que se vigia; `nossos` entra no relatório porque é o tamanho do enxerto que
-            # a sincronização vai ter que reaplicar — é o número que decide se ela é uma tarde ou uma
-            # semana, e quem lê a issue precisa dele para decidir.
-            deles=$(printf '%s' "$resp" | jq -r '.ahead_by')
-            nossos=$(printf '%s' "$resp" | jq -r '.behind_by')
+            # `deles` é o que se vigia, sem o que já veio ou foi recusado. `nossos` entra no relatório
+            # porque mede o enxerto que a sincronização vai reaplicar, e quem lê a issue decide por
+            # ele se o trabalho é de uma tarde ou de uma semana.
+            decididos=$(jq -c --arg c "$caminho" '[.[$c].trazidos[]?, .[$c].recusados[]?]' engines/UPSTREAM.json)
+            deles=$(printf '%s' "$resp" | jq --argjson k "$decididos" '
+              [.commits[] | . as $x
+               | select($k | any(
+                   (.commit as $sha | $sha != null and ($x.sha | startswith($sha)))
+                   or (.pr as $pr | $pr != null and ($x.commit.message | split("\n")[0] | contains("(#\($pr))")))
+                 ) | not)]
+              | length')
+            importe=$(git log --format=%H --reverse -- "$caminho" | head -1)
+            aqui=$(git rev-list --count "$importe..HEAD" -- "$caminho")
+            nossos=$(( $(printf '%s' "$resp" | jq -r '.behind_by') + aqui ))
             base=$(printf '%s' "$resp" | jq -r '.merge_base_commit.sha[0:7]')
             if [ "$deles" -gt 0 ]; then
               linhas="${linhas}| \`$caminho\` | [$upstream](https://github.com/$upstream/compare/$base...$branch) | **$deles** | $nossos | \`$base\` |"$'\n'
@@ -95,13 +115,56 @@ jobs:
             echo "FIM"
           } >> "$GITHUB_OUTPUT"
 
+      # O npm sem `node_modules` lê o lockfile, e é o que basta para dizer o que o semver do
+      # `package.json` não alcança (`wanted` diferente de `latest`). O mbedtls se compara dentro da
+      # linha fixada (3.6.x), que é a de suporte longo e a que traz as correções de CVE; o curl, com o
+      # release mais novo.
+      - name: As dependências fora de engines/
+        id: deps
+        run: |
+          set -euo pipefail
+          linhas=""
+          novas=0
+
+          npm_json=$(cd backend && npm outdated --json 2>/dev/null || true)
+          while IFS=$'\t' read -r nome quer ultima; do
+            [ -n "$nome" ] || continue
+            linhas="${linhas}| npm \`$nome\` | $quer | **$ultima** |"$'\n'
+            novas=$((novas + 1))
+          done < <(printf '%s' "${npm_json:-{\}}" | jq -r 'to_entries[] | select(.value.wanted != .value.latest) | [.key, .value.wanted, .value.latest] | @tsv')
+
+          mbed=$(grep -oE 'mbedtls-[0-9]+\.[0-9]+\.[0-9]+' engines/libcurl.js/client/tools/mbedtls.sh | head -1 | sed 's/^mbedtls-//')
+          mbed_ultima=$(git ls-remote --tags --refs https://github.com/Mbed-TLS/mbedtls "refs/tags/mbedtls-${mbed%.*}.*" \
+            | sed 's#.*refs/tags/mbedtls-##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ -n "$mbed_ultima" ] && [ "$mbed_ultima" != "$mbed" ]; then
+            linhas="${linhas}| mbedtls | $mbed | **$mbed_ultima** |"$'\n'
+            novas=$((novas + 1))
+          fi
+
+          curl_pin=$(grep -oE '^CURL_VERSION="[^"]+"' engines/libcurl.js/client/tools/curl.sh | cut -d'"' -f2)
+          curl_ultima=$(git ls-remote --tags --refs https://github.com/curl/curl 'refs/tags/curl-*' \
+            | sed 's#.*refs/tags/curl-##' | grep -E '^[0-9]+_[0-9]+_[0-9]+$' | tr _ . | sort -V | tail -1)
+          if [ -n "$curl_ultima" ] && [ "$curl_ultima" != "$curl_pin" ]; then
+            linhas="${linhas}| curl | $curl_pin | **$curl_ultima** |"$'\n'
+            novas=$((novas + 1))
+          fi
+
+          echo "dependências: npm $(printf '%s' "${npm_json:-{\}}" | jq 'length') desatualizadas, mbedtls $mbed (última ${mbed_ultima:-?}), curl $curl_pin (última ${curl_ultima:-?})"
+          {
+            echo "novas=$novas"
+            echo "tabela<<FIM"
+            printf '%s' "$linhas"
+            echo "FIM"
+          } >> "$GITHUB_OUTPUT"
+
       # Sem nada atrasado não se toca em issue nenhuma — nem para fechar. Fechar sozinho uma issue
       # que alguém está usando para anotar o plano de sincronização seria pior que deixá-la aberta.
       - name: Abrir ou atualizar a issue
-        if: steps.comparar.outputs.atrasados != '0'
+        if: steps.comparar.outputs.atrasados != '0' || steps.deps.outputs.novas != '0'
         env:
           GH_TOKEN: ${{ github.token }}
           TABELA: ${{ steps.comparar.outputs.tabela }}
+          DEPS: ${{ steps.deps.outputs.tabela }}
         run: |
           set -euo pipefail
           TITULO="Upstream andou desde a última sincronização"
@@ -115,15 +178,22 @@ jobs:
           |---|---|---|---|---|
           ${TABELA}
 
-          "commits deles" é o que falta trazer. "commits nossos" é o enxerto que a sincronização vai
-          ter que reaplicar por cima — é ele que diz se isso é uma tarde ou uma semana.
+          "commits deles" é o que falta trazer, fora o que \`engines/UPSTREAM.json\` já registra
+          como trazido ou recusado. "commits nossos" é o enxerto que a sincronização vai ter que
+          reaplicar por cima (os do fork e os deste repositório em \`engines/\`): é ele que diz se
+          isso é uma tarde ou uma semana.
 
-          O link do upstream abre o diff a partir do merge-base — é exatamente o que eles fizeram e
-          nós não temos.
+          O link do upstream abre o diff a partir do merge-base, que inclui o que já foi trazido.
 
-          **Ao sincronizar**, atualize \`sincronizado\` em \`engines/UPSTREAM.json\` no MESMO commit
-          que traz o código, ou este relatório passa a mentir. E rode \`rewritertests\` do fork do
-          scramjet: é a única coisa que pega os nossos 32 commits quebrando contra código novo deles.
+          | dependência | fixada | mais nova |
+          |---|---|---|
+          ${DEPS}
+
+          **Ao sincronizar**, registre em \`engines/UPSTREAM.json\` no MESMO commit que traz o
+          código: \`sincronizado\` para um import novo, ou uma entrada em \`trazidos\` para um commit
+          ou PR avulso. E rode \`cargo test -p js\` em \`engines/scramjet/packages/core/rewriter\`, o
+          mesmo teste do \`motor.yml\`: é ele que pega o nosso enxerto quebrando contra código novo
+          deles.
 
           <sub>Atualizado automaticamente por \`.github/workflows/upstream.yml\`.</sub>
           CORPO
