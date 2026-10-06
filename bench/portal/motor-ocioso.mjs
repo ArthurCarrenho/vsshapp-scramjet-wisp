@@ -11,6 +11,9 @@
 //   wisp   o WebSocket do wisp fecha com o motor de pé, como um proxy no caminho derrubando a
 //          conexão ociosa.
 //   mudo   o WebSocket do wisp fica mudo sem fechar (um NAT ou um balanceador que esqueceu o par).
+//   site   nada cai, e a segunda navegação vai a uma porta fechada. É o contraponto de `motor`: as
+//          duas falham na conexão, e aqui a aba tem de terminar no erro do site (o wisp entrega a
+//          recusa como `rede/52`), sem ninguém subir o motor.
 //
 // O veredito compara cada caso com o controle. O que sobra depois de descontar o controle (e a
 // subida, no caso `motor`) é o custo de perceber a queda, e passa de 3 s só quando alguém espera um
@@ -18,9 +21,10 @@
 //
 //   BENCH_CHROME     o binário do Chromium
 //   BENCH_SUBIDA_MS  quanto o motor leva para subir de novo (padrão 800)
-//   BENCH_CASOS      os casos, separados por vírgula (padrão sw,motor,wisp,mudo)
+//   BENCH_CASOS      os casos, separados por vírgula (padrão sw,motor,wisp,mudo,site)
 //   BENCH_LIMITE     prazo de morte (padrão 300 s)
 
+import net from "node:net";
 import { prazoDeMorte } from "../comum.mjs";
 import { abrirNavegador } from "./navegador.mjs";
 import { subirSites } from "./sites.mjs";
@@ -35,9 +39,15 @@ const CASOS = {
 	motor: `o motor cai por ociosidade e leva ${SUBIDA_MS} ms para subir`,
 	wisp: "o WebSocket do wisp fecha, com o motor de pé",
 	mudo: "o WebSocket do wisp fica mudo, sem fechar",
+	site: "o site recusa a conexão, com o motor de pé",
 };
 const pedidos = (process.env.BENCH_CASOS || Object.keys(CASOS).join(",")).split(",").map((c) => c.trim()).filter(Boolean);
 for (const c of pedidos) if (!CASOS[c]) throw new Error(`caso desconhecido: ${c} (os casos são ${Object.keys(CASOS).join(", ")})`);
+
+// Uma porta em que ninguém escuta: aberta pelo sistema e fechada em seguida.
+const portaFechada = await new Promise((ok) => {
+	const s = net.createServer().listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)); });
+});
 
 const sites  = await subirSites();
 const portal = await subirPortal({ portaSites: sites.porta, motorParavel: true, subidaMs: SUBIDA_MS });
@@ -54,6 +64,7 @@ async function rodada(caso) {
 
 	await new Promise((r) => setTimeout(r, 3000));
 	const subidasAntes = portal.motor.subidas;
+	const garantiasAntes = portal.motor.garantias;
 	const logAntes = await pag.evaluate(() => window.__bancada.log().length);
 	if (caso === "sw") {
 		const cdp = await ctx.newCDPSession(pag);
@@ -66,13 +77,14 @@ async function rodada(caso) {
 	else if (caso === "mudo") portal.silenciarWisp();
 
 	const t0 = Date.now();
-	await pag.evaluate(([id, alvo]) => { window.__bancada.ir(id, alvo, 60000); },
-		[primeira.id, `http://site.teste:${sites.porta}/conta`]);
+	const alvo = caso === "site" ? `http://site.teste:${portaFechada}/` : `http://site.teste:${sites.porta}/conta`;
+	await pag.evaluate(([id, url]) => { window.__bancada.ir(id, url, 60000); }, [primeira.id, alvo]);
 	// O primeiro `load` pode ser uma página de falha. A aba é vigiada até o site chegar (ou o prazo
-	// acabar), e cada documento diferente que passou por ela fica anotado com o instante.
+	// acabar), e cada documento diferente que passou por ela fica anotado com o instante. No caso
+	// `site` não há site para chegar: a vigia dura 4 s, e vale o último documento.
 	const passagens = [];
 	let ms = null;
-	for (let fim = Date.now() + 60000; Date.now() < fim;) {
+	for (let fim = Date.now() + (caso === "site" ? 4000 : 60000); Date.now() < fim;) {
 		const v = await pag.evaluate((id) => {
 			const o = window.__bancada.olhar(id);
 			let causa = null;
@@ -90,11 +102,18 @@ async function rodada(caso) {
 	const log = await pag.evaluate((n) => window.__bancada.log().slice(n).map((l) => l[1])
 		.filter((t) => t.includes("[scramjet]")), logAntes);
 	await ctx.close();
-	return { primeira: primeira.marca, chegou: ms !== null, ms, passagens, log, subidas: portal.motor.subidas - subidasAntes };
+	if (caso === "site") {
+		const ultimo = passagens.at(-1);
+		ms = /^(recusa|rede|tempo)\//.test(ultimo?.causa || "") ? ultimo.em : null;
+	}
+	return {
+		primeira: primeira.marca, chegou: ms !== null, ms, passagens, log,
+		subidas: portal.motor.subidas - subidasAntes, garantias: portal.motor.garantias - garantiasAntes,
+	};
 }
 
 function mostrar(r) {
-	console.log(`   ${r.primeira} → ${r.chegou ? `conta em ${r.ms} ms` : "a segunda página não chegou"}`);
+	console.log(`   ${r.primeira} → ${r.chegou ? `${r.passagens.at(-1).titulo} em ${r.ms} ms` : "a segunda página não chegou"}`);
 	for (const p of r.passagens) console.log(`   +${p.em} ms: marca=${p.marca} título=${JSON.stringify(p.titulo)} causa=${p.causa} motor=${p.motor}`);
 	for (const t of r.log) console.log(`   log: ${t.slice(0, 220)}`);
 }
@@ -126,6 +145,7 @@ for (const [caso, r] of Object.entries(resultados)) {
 	if (r.primeira !== "inicio") problemas.push("a primeira página não carregou");
 	if (!r.chegou) problemas.push(`a segunda página não chegou (passou por ${r.passagens.map((p) => p.titulo || p.marca).join(", ")})`);
 	if (caso === "motor" && r.subidas < 1) problemas.push("ninguém subiu o motor de volta");
+	if (caso === "site" && r.garantias > 0) problemas.push(`o motor foi garantido ${r.garantias} vez(es) por um erro do site`);
 	const sobra = r.chegou ? r.ms - controle.ms - subida : null;
 	if (sobra !== null && sobra > SOBRA_MS) problemas.push(`perceber a queda custou ${sobra} ms`);
 	if (problemas.length) {
