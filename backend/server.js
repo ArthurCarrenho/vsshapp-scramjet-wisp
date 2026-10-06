@@ -25,8 +25,16 @@ import { conferirVersoes, resumirVersoes, conferirMotor, resumirMotor, hashDoMot
 // então o pacote entra pelo `createRequire`. Um servidor sem o runtime deixa este `require` lançar
 // no topo do módulo, nomeando o pacote: o motor não tem como escutar sem ele, e morrer aqui diz o
 // motivo, enquanto morrer no `listen` diria só que o endereço não abriu.
-const { servidor } = createRequire(import.meta.url)('vssh');
+const vssh = createRequire(import.meta.url)('vssh');
+const { servidor } = vssh;
 const RAIZ = path.dirname(fileURLToPath(import.meta.url));
+
+// As contas que o motor publica no ambiente, pelo `recursos.metricas` do manifesto: as conexões
+// wisp por nível de rede, cada stream pelo desfecho, as falhas de resolução pelo código e os
+// upgrades recusados pelo motivo. O portal as mostra como `vssh_app_events_total{app="scramjet-wisp"}`.
+// Sem o par de credencial no ambiente, publicar não faz nada, e um runtime anterior ao
+// `vssh.metricas` deixa o motor sem contas, e de pé.
+const metricas = vssh.metricas ?? { contar() {} };
 
 // Log estruturado em $VSSH_APP_DATA_DIR (~/.vssh-apps/<id>/data/app.log), NDJSON, uma linha por
 // evento. Ele existe ao lado do stdout por causa do `run.log`: o portal manda stdout e stderr para
@@ -43,7 +51,10 @@ logging.set_level(logging.WARN);
 // A política de rede (família de resolução, teto de streams e o que o motor alcança) mora em
 // `rede.js`, com bancada própria; a régua de destinos roda no socket de cada stream (`tcp.js`).
 aplicarPolitica(wisp, {
-  aoFalhar: (hostname, erro) => log('dns_falhou', { hostname, erro: erro?.code || String(erro) }),
+  aoFalhar: (hostname, erro) => {
+    log('dns_falhou', { hostname, erro: erro?.code || String(erro) });
+    metricas.contar('dns_falhas', 1, { erro: /^[A-Z_]{1,32}$/.test(erro?.code || '') ? erro.code : 'outro' });
+  },
   // Host só-AAAA: a única situação em que uma conexão sai por IPv6. A linha no log separa "a rota
   // IPv6 deste servidor está quebrada" de "o site está fora".
   aoRecuar: (hostname, endereco) => log('dns_recuou_ipv6', { hostname, endereco }),
@@ -281,6 +292,7 @@ server.on('upgrade', (req, socket, head) => {
     // caída — o ScramjetEngine só vê o socket fechar. Sem esta linha, um token dessincronizado
     // entre portal e app (ex.: env file reescrito com o app já no ar) vira horas de caça.
     log('upgrade-rejected', { reason: 'token', hasHeader: !!req.headers['x-vssh-app-token'] });
+    metricas.contar('upgrades_recusados', 1, { motivo: 'token' });
     socket.destroy();
     return;
   }
@@ -288,16 +300,19 @@ server.on('upgrade', (req, socket, head) => {
     // O nível de rede vale para a conexão inteira: uma conexão wisp é uma página do shell, e o
     // portal escreve o cabeçalho a partir do servidor dela (ver `rede.js`).
     const nivel = nivelDoPedido(req.headers);
+    metricas.contar('conexoes_wisp', 1, { nivel: String(nivel) });
     wisp.routeRequest(req, socket, head, {
       TCPSocket: criarSocketTcp({
         nivel,
         resolver: wisp.options.dns_method,
         aoRecusar: ({ hostname, porta, ip, classe, motivo }) =>
           log('destino-recusado', { hostname, porta, ip, classe, motivo, nivel }),
+        aoDesfecho: (desfecho) => metricas.contar('streams', 1, { desfecho }),
       }),
     });
   } else {
     log('upgrade-rejected', { reason: 'path', url: req.url.split('?')[0] });
+    metricas.contar('upgrades_recusados', 1, { motivo: 'caminho' });
     socket.destroy();
   }
 });
