@@ -2,6 +2,7 @@
   "id": "scramjet-wisp",
   "name": "Motor Scramjet (wisp)",
   "version": "5.0.0",
+  "icon": "icon.svg",
   "type": "engine",
   "kind": "service",
   "category": "Engine",
