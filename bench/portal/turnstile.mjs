@@ -147,7 +147,9 @@ try {
 			const alvo = `https://peet.ws/turnstile-test/${modo}.html`;
 			let ler;
 			if (DIRETO) {
-				await pag.goto(alvo);
+				// O `load` espera a folha de estilo de outro domínio que a demonstração puxa, e ela pode não
+				// chegar de uma rede; o widget roda sem ela.
+				await pag.goto(alvo, { waitUntil: "domcontentloaded", timeout: 60000 });
 				ler = () => pag.evaluate(LER);
 			} else {
 				await pag.goto(portal.base, { waitUntil: "load" });
