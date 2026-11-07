@@ -19,6 +19,9 @@
 // numa máquina sem saída IPv6. `BENCH_BRUNHILD=mudo:<ms>` troca isso pelo que um resolvedor com
 // recuo para IPv6 produzia num servidor de rota IPv6 quebrada: a conexão a ele fica muda por `<ms>`.
 //
+// `BENCH_ALVO=<url>` troca as demonstrações por uma página qualquer com o widget, e
+// `BENCH_CLICAR=1` clica na caixinha dela.
+//
 // Os três defeitos que esta sonda achou, e onde mora cada conserto:
 //   - `window.postMessage()` sem argumento era aceito pelo envelope do motor e entregava uma
 //     mensagem com `data` indefinido; o iframe do desafio chama assim de propósito e espera o
@@ -42,7 +45,9 @@ const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const BACKEND = process.env.BENCH_BACKEND || path.join(AQUI, "..", "..", "backend");
 const DIRETO = process.env.BENCH_DIRETO === "1";
 const VOLTAS = Number(process.env.BENCH_VOLTAS || 2);
-const MODOS = (process.env.BENCH_MODOS || "non-interactive,invisible,managed").split(",");
+const ALVO_LIVRE = process.env.BENCH_ALVO || null;
+const MODOS = ALVO_LIVRE ? ["alvo"] : (process.env.BENCH_MODOS || "non-interactive,invisible,managed").split(",");
+const CLICAR = (modo) => modo === "managed" || (modo === "alvo" && process.env.BENCH_CLICAR === "1");
 const ESPERA = Number(process.env.BENCH_ESPERA || 20000);
 const PROXY = process.env.HTTPS_PROXY ? new URL(process.env.HTTPS_PROXY) : null;
 
@@ -144,7 +149,7 @@ try {
 			const anotar = (t) => { for (const m of String(t).matchAll(/Error: (\d{6})/g)) erros.add(m[1]); };
 			pag.on("pageerror", (e) => anotar(e.message));
 			pag.on("console", (m) => anotar(m.text()));
-			const alvo = `https://peet.ws/turnstile-test/${modo}.html`;
+			const alvo = modo === "alvo" ? ALVO_LIVRE : `https://peet.ws/turnstile-test/${modo}.html`;
 			let ler;
 			if (DIRETO) {
 				// O `load` espera a folha de estilo de outro domínio que a demonstração puxa, e ela pode não
@@ -157,7 +162,7 @@ try {
 				const aba = await pag.evaluate(async (a) => { await window.__bancada.iniciar(); return window.__bancada.abrir(a, 30000); }, alvo);
 				ler = () => pag.evaluate(([id, e]) => window.__bancada.naAba(id, e), [aba.id, LER]);
 			}
-			if (modo === "managed") { await pag.waitForTimeout(6000); await clicarNaCaixa(pag); }
+			if (CLICAR(modo)) { await pag.waitForTimeout(6000); await clicarNaCaixa(pag); }
 			let token = "";
 			for (let t = 0; t < ESPERA / 1000 && !token; t++) {
 				await pag.waitForTimeout(1000);
