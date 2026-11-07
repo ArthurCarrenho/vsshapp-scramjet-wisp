@@ -1,13 +1,46 @@
 import { iswindow } from "@client/entry";
 import { SCRAMJETCLIENT } from "@/symbols";
 import { ScramjetClient } from "@client/index";
-import { Object_defineProperty } from "@/shared/snapshot";
+import { _URL, Object_defineProperty } from "@/shared/snapshot";
 import { POLLUTANT } from "./realm";
+
+// O `targetOrigin` que o nativo aceita: `*`, `/`, ou uma URL absoluta, pelo mesmo parser de URL.
+// O resto ele recusa com SyntaxError.
+function origemDeAlvoValida(alvo: string): boolean {
+	try {
+		new _URL(alvo);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 export default function (client: ScramjetClient, self: Self) {
 	if (iswindow)
 		client.Proxy("window.postMessage", {
 			apply(ctx) {
+				// vssh fork: a chamada sem argumento e a com um `targetOrigin` que não é URL vão
+				// para o nativo como vieram, e ele lança o erro dele antes de enviar qualquer coisa.
+				// O envelope abaixo aceitaria as duas e entregaria uma mensagem que o navegador
+				// nunca entrega. O iframe do Turnstile chama `postMessage()` em si mesmo e espera o
+				// TypeError; com o envelope, o ouvinte de `message` dele recebe `data` indefinido,
+				// lança, e o desafio falha.
+				if (ctx.args.length === 0) return;
+				// O alvo é lido uma vez só: num objeto de opções, `targetOrigin` pode ser um getter.
+				const alvoPedido =
+					typeof ctx.args[1] === "string"
+						? ctx.args[1]
+						: ctx.args[1] && typeof ctx.args[1] === "object"
+							? ctx.args[1].targetOrigin
+							: undefined;
+				if (
+					typeof alvoPedido === "string" &&
+					alvoPedido !== "*" &&
+					alvoPedido !== "/" &&
+					!origemDeAlvoValida(alvoPedido)
+				)
+					return;
+
 				// so we need to send the real origin here, since the recieving window can't possibly know.
 				// except, remember that this code is being ran in a different realm than the invoker, so if we ask our `client` it may give us the wrong origin
 				// if we were given any object that came from the real realm we can use that to get the real origin
@@ -78,12 +111,6 @@ export default function (client: ScramjetClient, self: Self) {
 				//
 				// Então o alvo pedido viaja no envelope e é conferido na RECEPÇÃO, onde o
 				// cliente sabe a própria origem lógica — ver `_init` em `event.ts`.
-				const alvoPedido =
-					typeof ctx.args[1] === "string"
-						? ctx.args[1]
-						: ctx.args[1] && typeof ctx.args[1] === "object"
-							? ctx.args[1].targetOrigin
-							: undefined;
 				if (typeof alvoPedido === "string" && alvoPedido !== "*") {
 					// `/` quer dizer "a mesma origem de quem manda", e é resolvido aqui, do
 					// lado que a conhece.

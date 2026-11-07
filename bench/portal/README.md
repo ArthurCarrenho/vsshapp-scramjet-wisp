@@ -65,6 +65,8 @@ node tarefas-longas.mjs     # quanto uma navegação pesada segura a thread do s
 node popups.mjs             # sem gesto, nada abre; com gesto, abre até o teto?
 node certificado-por-host.mjs  # aceitar o certificado de um site abre só ele?
 node mudanca-de-url.mjs     # o shell sabe se a página empilhou ou trocou a URL?
+node reino-dos-nos.mjs      # o elemento da página é objeto da página, ou do shell?
+node turnstile.mjs          # o Turnstile entrega o token pelo motor? (sai para a internet)
 ```
 
 Cada script termina com `=== veredito ===` e um `process.exitCode`, no mesmo vocabulário da bancada
@@ -86,6 +88,8 @@ irmã: **controle** é o mesmo cenário sem o gatilho, **direto** é sem o proxy
 | `popups.mjs` | o `window.open` sem gesto devolve `null` e avisa o shell, o clique de verdade num link abre, e a rajada para no teto de 10 por minuto? | `/popups`: um link `target=_blank`, um botão que pede 15 abas, e `__semGesto(n)` chamado pelo CDP com `userGesture: false` |
 | `certificado-por-host.mjs` | a exceção de certificado de um host abre só ele, nos pedidos e no `wss://`, nenhum pedido chega ao outro, e esquecê-la volta a exigir o certificado? | dois sites HTTPS com o mesmo certificado autoassinado, gerado pelo `openssl` na hora |
 | `mudanca-de-url.mjs` | o `pushState` chega ao shell como `push` e o `replaceState` como `replace`? | `/spa`: três `pushState` e trinta `replaceState` |
+| `reino-dos-nos.mjs` | o `<script async>` vê a própria URL, e o elemento tem os protótipos da página, e não os do shell? | doze cargas de uma página com um script que se anota no instante em que roda |
+| `turnstile.mjs` | o Cloudflare Turnstile entrega o token nos três modos do widget? `BENCH_DIRETO=1` é a coluna sem o motor | as demonstrações do peet.ws, com clique na caixinha do modo `managed`; com `HTTPS_PROXY`, o wisp sai por túnel CONNECT |
 
 ## O que ela ACHOU
 

@@ -189,8 +189,12 @@ ${scripts}
  * 403, em que o portal dizia `ready: true` e recusava tudo o que vinha depois. O dublê de
  * `ensureRunning` da página segue dizendo `ready: true` de propósito — foi assim em produção, e é
  * o que faz a sonda medir o caso real em vez de um app parado.
+ *
+ * `TCPSocket` é a classe de socket que o wisp usa para cada stream, a mesma opção que o
+ * `server.js` de produção passa ao `routeRequest`. Sem ela vale o socket do wisp-js, que conecta
+ * direto; `turnstile.mjs` passa uma que sai por um túnel CONNECT quando a máquina só tem proxy.
  */
-export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null, motorParavel = false, subidaMs = 800 }) {
+export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null, motorParavel = false, subidaMs = 800, TCPSocket = null }) {
 	// O motor como o supervisor o trata. `pararMotor()` é o motor descendo por ociosidade: as
 	// conexões do wisp caem, e o portal recusa o app com o 409 "App Not Running", que é o que o
 	// de verdade responde quando o túnel até o app também caiu. O `ensureRunning` da página passa
@@ -262,7 +266,7 @@ export async function subirPortal({ porta = 0, portaSites, statusDosAssets = nul
 		}
 		motor.conexoes.add(socket);
 		socket.on("close", () => motor.conexoes.delete(socket));
-		wisp.routeRequest(req, socket, head);
+		wisp.routeRequest(req, socket, head, TCPSocket ? { TCPSocket } : undefined);
 	});
 
 	await new Promise((ok) => srv.listen(porta, "127.0.0.1", ok));
