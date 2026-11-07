@@ -5,13 +5,19 @@
 // com bancada própria (`tests/rede.test.js`), porque nenhuma delas se prova sem tirá-la do
 // `server.js`.
 //
-// ─── Família: IPv4 primeiro, IPv6 só quando não há IPv4 ─────────────────────────────────────────
+// ─── Família: só IPv4 ─────────────────────────────────────────────────────────────────────────
 //
 // O `dns_method` do wisp-js é uma função nossa (`criarResolvedorIPv4`), e é o único lugar do pacote
-// onde a família é decisão de quem o usa. Pedimos `{ family: 4 }` ao `dns.lookup` e recuamos para
-// `{ family: 6 }` só quando o nome não tem registro A. Um host dual-stack sai por IPv4, que não
-// depende de a rota IPv6 do servidor existir; um host só-AAAA (a infraestrutura de desafio do
-// Cloudflare, `brunhild.challenges.cloudflare.com`, é um) continua alcançável.
+// onde a família é decisão de quem o usa. Ela pede `{ family: 4 }` ao `dns.lookup`, e um nome sem
+// registro A falha na resolução, na hora. O motor não sai por IPv6.
+//
+// O caso que decide é o host só-AAAA. O Cloudflare Turnstile pede a
+// `brunhild.challenges.cloudflare.com`, que só tem AAAA, para saber se a máquina alcança IPv6. Quando
+// esse pedido falha na hora, o desafio segue e entrega o token. Quando ele fica pendurado, o desafio
+// termina em 300010 ou 600010, e é isso que acontece numa máquina com rota IPv6 que não entrega
+// nada: o SYN some e a conexão espera o navegador desistir. A bancada mede os dois casos em
+// `bench/portal/turnstile.mjs` (`BENCH_BRUNHILD`): com o nome sem endereço, 6 de 6 cargas com
+// token; com a conexão muda por 3 s, 3 de 6.
 //
 // Destino IPv6 literal (`http://[2606:4700::1]/`) não chega ao DNS: a `hostname_blacklist` com
 // `/:/` o recusa antes, no `is_stream_allowed`. Nome de host não tem dois pontos (RFC 1123), então
@@ -54,43 +60,22 @@ export const LITERAL_IPV6 = /:/;
 // antes de conferir o teto (`connection.mjs`), então o valor configurado é o teto mais 1.
 export const TETO_DE_STREAMS = 128;
 
-// Erros de resolução que significam "não há endereço DESTA família", e não "este nome não existe".
-// `ENODATA` é o caso exato do host só-AAAA; o `dns.lookup` do Node reporta `ENOTFOUND` para ele em
-// várias plataformas, então os dois entram.
-const SEM_ENDERECO = new Set(['ENOTFOUND', 'ENODATA', 'EAI_NODATA', 'EAI_NONAME']);
-
 /**
- * Resolvedor de nomes que prefere IPv4 e recua para IPv6 quando o nome não tem registro A.
+ * Resolvedor de nomes só por IPv4: um nome sem registro A falha aqui.
  *
  * @param {object}   [opcoes]
  * @param {Function} [opcoes.lookup]   `dns.lookup` (injetável: a bancada não toca a rede)
- * @param {Function} [opcoes.aoFalhar] chamado com (hostname, erro) quando a resolução falha de vez
- * @param {Function} [opcoes.aoRecuar] chamado com (hostname, endereço) quando cai para IPv6
+ * @param {Function} [opcoes.aoFalhar] chamado com (hostname, erro) quando a resolução falha
  * @returns {(hostname: string) => Promise<string>}
  */
-export function criarResolvedorIPv4({ lookup = dns.lookup, aoFalhar, aoRecuar } = {}) {
-  return async function resolverPreferindoIPv4(hostname) {
-    let erroV4;
+export function criarResolvedorIPv4({ lookup = dns.lookup, aoFalhar } = {}) {
+  return async function resolverPorIPv4(hostname) {
     try {
       const { address } = await lookup(hostname, { family: 4 });
       return address;
     } catch (erro) {
-      erroV4 = erro;
-      // Nome que não existe, servidor de DNS fora, etc.: recuar para IPv6 não ajudaria em nada.
-      if (!SEM_ENDERECO.has(erro?.code)) {
-        try { aoFalhar?.(hostname, erro); } catch { /* diagnóstico não derruba resolução */ }
-        throw erro;
-      }
-    }
-
-    try {
-      const { address } = await lookup(hostname, { family: 6 });
-      try { aoRecuar?.(hostname, address); } catch { /* idem */ }
-      return address;
-    } catch {
-      // Não tem A nem AAAA: o erro que interessa ao diagnóstico é o da família preferida.
-      try { aoFalhar?.(hostname, erroV4); } catch { /* idem */ }
-      throw erroV4;
+      try { aoFalhar?.(hostname, erro); } catch { /* diagnóstico não derruba resolução */ }
+      throw erro;
     }
   };
 }
@@ -258,13 +243,12 @@ export function decidirDestino({ ip, porta, nivel, uid = process.getuid?.(), soc
  * da porta, do dono e do nível, então as duas chaves ficam abertas e a decisão acontece no socket
  * (`tcp.js`), sobre o endereço resolvido.
  */
-export function aplicarPolitica(wisp, { lookup, aoFalhar, aoRecuar } = {}) {
+export function aplicarPolitica(wisp, { lookup, aoFalhar } = {}) {
   const opcoes = wisp.options;
 
-  opcoes.dns_method = criarResolvedorIPv4({ lookup, aoFalhar, aoRecuar });
+  opcoes.dns_method = criarResolvedorIPv4({ lookup, aoFalhar });
 
-  // Recusa literal IPv6 como destino digitado. O IPv6 que vem do DNS (host só-AAAA) passa pelo
-  // resolvedor e pela régua como qualquer outro endereço.
+  // Recusa literal IPv6 como destino digitado; o resolvedor não entrega IPv6.
   opcoes.hostname_blacklist = [LITERAL_IPV6];
 
   opcoes.allow_private_ips  = true;

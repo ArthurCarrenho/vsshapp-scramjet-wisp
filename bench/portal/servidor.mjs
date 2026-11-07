@@ -70,7 +70,7 @@ function lookupDaBancada(hostname, opcoes) {
 	return import("node:dns/promises").then((dns) => dns.lookup(hostname, opcoes));
 }
 
-aplicarPolitica(wisp, { lookup: lookupDaBancada, aoFalhar: () => {}, aoRecuar: () => {} });
+aplicarPolitica(wisp, { lookup: lookupDaBancada, aoFalhar: () => {} });
 
 // ─── Os assets do motor, do vendor ───────────────────────────────────────────────────────────
 // Tudo o que o portal serve em nome do app mora sob este prefixo — e é nesta granularidade que

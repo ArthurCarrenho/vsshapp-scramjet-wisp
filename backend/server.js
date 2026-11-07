@@ -55,9 +55,6 @@ aplicarPolitica(wisp, {
     log('dns_falhou', { hostname, erro: erro?.code || String(erro) });
     metricas.contar('dns_falhas', 1, { erro: /^[A-Z_]{1,32}$/.test(erro?.code || '') ? erro.code : 'outro' });
   },
-  // Host só-AAAA: a única situação em que uma conexão sai por IPv6. A linha no log separa "a rota
-  // IPv6 deste servidor está quebrada" de "o site está fora".
-  aoRecuar: (hostname, endereco) => log('dns_recuou_ipv6', { hostname, endereco }),
 });
 
 const TOKEN = process.env.VSSH_APP_TOKEN || null;

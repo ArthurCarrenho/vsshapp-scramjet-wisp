@@ -13,6 +13,12 @@
 // túnel CONNECT nesse proxy, e o transporte do navegador aceita qualquer certificado, porque o
 // proxy reabre o TLS com a CA dele. Sem `HTTPS_PROXY`, o wisp sai direto e o TLS é o do site.
 //
+// Pelo túnel, quem resolve o nome é o proxy, e o resolvedor do motor (`criarResolvedorIPv4`, de
+// `rede.js`) roda sobre um DNS de mentira que só conhece um fato: o host do teste de IPv6 do
+// Turnstile, `brunhild.challenges.cloudflare.com`, não tem registro A. É o que decide o desfecho
+// numa máquina sem saída IPv6. `BENCH_BRUNHILD=mudo:<ms>` troca isso pelo que um resolvedor com
+// recuo para IPv6 produzia num servidor de rota IPv6 quebrada: a conexão a ele fica muda por `<ms>`.
+//
 // Os três defeitos que esta sonda achou, e onde mora cada conserto:
 //   - `window.postMessage()` sem argumento era aceito pelo envelope do motor e entregava uma
 //     mensagem com `data` indefinido; o iframe do desafio chama assim de propósito e espera o
@@ -72,14 +78,42 @@ class Tunel extends EventEmitter {
 	destroy() { this.s.destroy(); }
 }
 
+// A conexão que não abre e não recusa: o SYN que some numa rota IPv6 quebrada.
+class Mudo extends EventEmitter {
+	constructor(ms) {
+		super();
+		this.t = setTimeout(() => this.destroy(), ms);
+	}
+	setNoDelay() {}
+	setTimeout() {}
+	pause() {}
+	resume() {}
+	write() { return true; }
+	end() { this.destroy(); }
+	destroy() {
+		if (this.fechou) return;
+		this.fechou = true;
+		clearTimeout(this.t);
+		this.emit("close");
+	}
+}
+
+const SO_IPV6 = "brunhild.challenges.cloudflare.com";
+const MUDO_MS = /^mudo:(\d+)$/.exec(process.env.BENCH_BRUNHILD || "")?.[1];
+
 let TCPSocket = null;
 if (PROXY && !DIRETO) {
 	const { criarSocketTcp } = await import(pathToFileURL(path.join(BACKEND, "tcp.js")).href);
-	// Quem resolve o nome e decide o destino é o proxy; a régua de rede do motor tem bancada própria.
+	const { criarResolvedorIPv4 } = await import(pathToFileURL(path.join(BACKEND, "rede.js")).href);
+	const semA = () => Object.assign(new Error(`getaddrinfo ENODATA ${SO_IPV6}`), { code: "ENODATA" });
+	const resolverDoMotor = criarResolvedorIPv4({
+		lookup: async (nome) => { if (nome === SO_IPV6) throw semA(); return { address: nome, family: 4 }; },
+	});
+	// A régua de destinos tem bancada própria, e o endereço que o proxy escolhe não passa por aqui.
 	TCPSocket = criarSocketTcp({
-		resolver: async (nome) => nome,
+		resolver: MUDO_MS ? async (nome) => nome : resolverDoMotor,
 		decidir: () => ({ permitido: true }),
-		conectar: ({ host, port }) => new Tunel(host, port),
+		conectar: ({ host, port }) => (MUDO_MS && host === SO_IPV6 ? new Mudo(Number(MUDO_MS)) : new Tunel(host, port)),
 	});
 }
 

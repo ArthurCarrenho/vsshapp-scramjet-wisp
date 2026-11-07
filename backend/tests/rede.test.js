@@ -49,27 +49,24 @@ test('resolver um nome pede explicitamente família 4', async () => {
   assert.deepEqual(chamadas, [{ hostname: 'exemplo.com', opcoes: { family: 4 } }]);
 });
 
-test('host só-AAAA RECUA para IPv6 em vez de ser recusado', async () => {
-  // Regressão medida em produção: `brunhild.challenges.cloudflare.com` (infraestrutura de desafio
-  // do Cloudflare) não tem registro A nenhum, só AAAA. Com `family: 4` fixo, ele virava
-  // `getaddrinfo ENOTFOUND` e o desafio não completava — ou seja, a política atrapalhava
-  // exatamente o caminho que deveria ajudar a destravar.
-  const recuos = [];
+test('host só-AAAA falha na resolução, na hora, sem perguntar por IPv6', async () => {
+  // `brunhild.challenges.cloudflare.com` só tem AAAA. Numa máquina com rota IPv6 que não entrega
+  // nada, a conexão a ele fica pendurada e o Turnstile termina em erro; com o nome falhando aqui, o
+  // desafio segue (`bench/portal/turnstile.mjs`, `BENCH_BRUNHILD`).
+  const familias = [];
   const resolver = criarResolvedorIPv4({
-    lookup: async (hostname, opcoes) => {
-      if (opcoes.family === 4) {
-        throw Object.assign(new Error('getaddrinfo ENODATA'), { code: 'ENODATA' });
-      }
+    lookup: async (_h, opcoes) => {
+      familias.push(opcoes.family);
+      if (opcoes.family === 4) throw Object.assign(new Error('getaddrinfo ENODATA'), { code: 'ENODATA' });
       return { address: '2606:4700::6812:1192', family: 6 };
     },
-    aoRecuar: (h, endereco) => recuos.push([h, endereco]),
   });
 
-  assert.equal(await resolver('so-aaaa.exemplo'), '2606:4700::6812:1192');
-  assert.deepEqual(recuos, [['so-aaaa.exemplo', '2606:4700::6812:1192']]);
+  await assert.rejects(() => resolver('so-aaaa.exemplo'), (e) => e.code === 'ENODATA');
+  assert.deepEqual(familias, [4]);
 });
 
-test('host dual-stack continua saindo por IPv4 — é o que evita rota IPv6 quebrada', async () => {
+test('host dual-stack sai por IPv4', async () => {
   const familias = [];
   const resolver = criarResolvedorIPv4({
     lookup: async (_h, opcoes) => {
@@ -80,30 +77,6 @@ test('host dual-stack continua saindo por IPv4 — é o que evita rota IPv6 queb
 
   assert.equal(await resolver('dual.exemplo'), '104.18.94.41');
   assert.deepEqual(familias, [4], 'nem chegou a perguntar por IPv6');
-});
-
-test('nome que não existe falha na hora, sem tentar IPv6 à toa', async () => {
-  // Recuar aqui não ajudaria em nada, e só atrasaria o erro.
-  const familias = [];
-  const resolver = criarResolvedorIPv4({
-    lookup: async (_h, opcoes) => {
-      familias.push(opcoes.family);
-      throw Object.assign(new Error('queryA ESERVFAIL'), { code: 'ESERVFAIL' });
-    },
-  });
-
-  await assert.rejects(() => resolver('nao.existe'), (e) => e.code === 'ESERVFAIL');
-  assert.deepEqual(familias, [4]);
-});
-
-test('sem A e sem AAAA, o erro que sobe é o da família preferida', async () => {
-  const resolver = criarResolvedorIPv4({
-    lookup: async (_h, opcoes) => {
-      throw Object.assign(new Error(`sem endereço family ${opcoes.family}`), { code: 'ENOTFOUND', familia: opcoes.family });
-    },
-  });
-
-  await assert.rejects(() => resolver('nada.exemplo'), (e) => e.familia === 4);
 });
 
 test('a falha de resolução é comunicada, senão vira "a página não carrega" sem pista', async () => {
