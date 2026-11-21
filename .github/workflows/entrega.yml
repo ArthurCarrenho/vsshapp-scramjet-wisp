@@ -28,6 +28,8 @@ name: Entrega
 #   - VSSH_REPO_PUBLISH_TOKEN: token de publicação do Worker, escopado `app:scramjet-wisp`.
 # Variable opcional (não secret):
 #   - VSSH_REPO_API (default abaixo): base URL do Worker do repositório.
+#   - VSSH_SITIOS: os repositórios dos sítios, em JSON, cópia da variável da organização; com ela
+#     o pacote vai a cada um, e sem ela só ao VSSH_REPO_API.
 
 on:
   push:
@@ -199,6 +201,7 @@ jobs:
         env:
           VSSH_REPO_API: ${{ vars.VSSH_REPO_API || 'https://vssh-repo.colabh.org' }}
           VSSH_REPO_PUBLISH_TOKEN: ${{ secrets.VSSH_REPO_PUBLISH_TOKEN }}
+          VSSH_SITIOS: ${{ vars.VSSH_SITIOS }}
         run: |
           set -euo pipefail
           # `add -f` porque `backend/vendor/` pode estar gitignorado localmente algum dia; o
@@ -227,4 +230,27 @@ jobs:
           done
           echo "os 7 arquivos do contrato estão no pacote."
 
-          bash _sdk/scripts/vssh-app-publish "app/." --version "5.0.${{ github.run_number }}"
+          # Com a lista `VSSH_SITIOS` (a variável deste repositório, cópia da da organização, que não
+          # chega a um repositório de fora dela), o pacote é montado uma vez, com a conferência contra
+          # o primeiro repositório da lista, e o mesmo lote vai a cada repositório dela, com a mesma
+          # interna. Um sítio que falha não impede os outros, e o passo termina vermelho com o nome
+          # dele. Sem a lista, o app vai só ao `VSSH_REPO_API`, e o run avisa.
+          VERSAO="5.0.${{ github.run_number }}"
+          if [ -z "${VSSH_SITIOS}" ]; then
+            echo "::warning::A variável VSSH_SITIOS não chegou a este repositório: o app vai só a ${VSSH_REPO_API}."
+            bash _sdk/scripts/vssh-app-publish "app/." --version "${VERSAO}"
+            exit 0
+          fi
+          SITIOS=$(python3 -c "import json,os;[print(s['nome']+'\t'+s['api']) for s in json.loads(os.environ['VSSH_SITIOS'])]")
+          lote="${RUNNER_TEMP}/lote"
+          VSSH_REPO_API=$(printf '%s\n' "${SITIOS}" | head -1 | cut -f2) \
+            bash _sdk/scripts/vssh-app-publish "app/." --version "${VERSAO}" --empacotar "${lote}"
+          FALHAS=()
+          while IFS=$'\t' read -r nome api; do
+            VSSH_REPO_API="${api}" VSSH_SITIO="${nome}" bash _sdk/scripts/vssh-app-publish --enviar "${lote}" \
+              || FALHAS+=("${nome}")
+          done <<< "${SITIOS}"
+          if [ "${#FALHAS[@]}" -gt 0 ]; then
+            printf '::error::O envio falhou em %s\n' "${FALHAS[@]}"
+            exit 1
+          fi
