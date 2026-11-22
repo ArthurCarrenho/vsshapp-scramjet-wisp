@@ -11,7 +11,7 @@
 //
 // ─── O que já é contrato, e portanto reprova ─────────────────────────────────────────────────
 //
-// Nova aba (`target=_blank`, `window.open`) e `window.close()` da própria página TÊM de atravessar
+// Nova aba (`target=_blank`, `window.open`, Ctrl+clique) e `window.close()` da própria página TÊM de atravessar
 // a fronteira do frame pelos retornos, porque a alternativa é o navegador hospedeiro abrindo uma
 // janela fora do ambiente, com o IP de quem lê — que é o defeito que os hooks existem para
 // impedir, e está escrito por extenso no fonte.
@@ -72,6 +72,15 @@ const clicarDeVerdade = async (seletor) => {
 r.antesDoBranco = (await pag.evaluate((id) => window.__bancada.retornos(id), r.aba.id)).length;
 await clicarDeVerdade("#branco");
 r.cliques.branco = "clique de verdade";
+// Ctrl+clique num link comum (sem target): em todo navegador, uma aba nova em segundo plano. O
+// padrão do navegador hospedeiro abriria a URL reescrita numa aba DELE.
+const antesDoCtrl = (await pag.evaluate((id) => window.__bancada.retornos(id), r.aba.id)).length;
+await pag.keyboard.down("Control");
+await clicarDeVerdade("#mesmo");
+await pag.keyboard.up("Control");
+r.cliques.mesmoComCtrl = "clique de verdade, com Ctrl";
+r.doCtrl = (await pag.evaluate((id) => window.__bancada.retornos(id), r.aba.id)).slice(antesDoCtrl);
+r.abaDepoisDoCtrl = await pag.evaluate((id) => window.__bancada.olhar(id), r.aba.id);
 await clicarDeVerdade(null);
 // `window.open` para alvo de janela nova, e `window.close()` da própria página.
 Object.assign(r, await pag.evaluate(async (id) => ({
@@ -132,6 +141,10 @@ if (typeof punho === "string" && punho.startsWith("erro:")) {
 } else if (punho.chamouFocus !== true) {
 	falhas.push(`o punho de window.open não sobrevive a um focus(): ${JSON.stringify(punho.chamouFocus)}`);
 }
+const ctrlAbriu = (r.doCtrl || []).filter((x) => x[0] === "onOpenTab").map((x) => String(x[1]));
+if (!ctrlAbriu.length) falhas.push(`Ctrl+clique num link comum não abriu aba no ambiente: ${JSON.stringify(r.doCtrl)}`);
+for (const u of ctrlAbriu) if (u.includes("~sj/")) falhas.push(`o Ctrl+clique mandou ao shell a URL REESCRITA (${u.slice(0, 60)})`);
+if (r.abaDepoisDoCtrl?.marca !== "deeplink") falhas.push(`o Ctrl+clique navegou a própria aba (marca=${r.abaDepoisDoCtrl?.marca})`);
 if (janelasDoHospedeiro.length) falhas.push(`abriu ${janelasDoHospedeiro.length} janela(s) no navegador HOSPEDEIRO: ${JSON.stringify(janelasDoHospedeiro)}`);
 
 console.log("\n=== veredito ===");
