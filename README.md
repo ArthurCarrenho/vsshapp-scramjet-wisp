@@ -48,10 +48,10 @@ curl -i http://127.0.0.1:48123/
 # Numa URL com a versão atual, `/v/<versao>/scram/scramjet.js`, o arquivo sai imutável.
 curl -s http://127.0.0.1:48123/versao
 
-# Os 7 assets que o cliente realmente carrega. Todos devem dar 200 com tamanho > 0.
+# Os 8 assets que o cliente realmente carrega. Todos devem dar 200 com tamanho > 0.
 for p in scram/scramjet.js scram/scramjet.wasm \
          controller/controller.api.js controller/controller.inject.js \
-         controller/controller.sw.js libcurl/index.js utils/scramjet-utils.js; do
+         controller/controller.sw.js libcurl/index.js libcurl/libcurl.wasm utils/scramjet-utils.js; do
   curl -sS -o /dev/null -w "%{http_code} %{size_download}\t$p\n" "http://127.0.0.1:48123/$p"
 done
 ```

@@ -222,7 +222,7 @@ jobs:
           for arq in scramjet/dist/scramjet.js scramjet/dist/scramjet.wasm \
                      controller/dist/controller.api.js controller/dist/controller.inject.js \
                      controller/dist/controller.sw.js utils/dist/scramjet-utils.js \
-                     libcurl-transport/dist/index.js; do
+                     libcurl-transport/dist/index.js libcurl-transport/dist/libcurl.wasm; do
             git -C app ls-files --error-unmatch "backend/vendor/$arq" >/dev/null 2>&1 \
               || { echo "não está no índice do pacote: backend/vendor/$arq"; exit 1; }
             [ -s "app/backend/vendor/$arq" ] \

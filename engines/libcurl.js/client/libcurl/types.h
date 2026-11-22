@@ -11,6 +11,11 @@ struct RequestInfo {
   DataCallback data_callback;
   DataCallback headers_callback;
   EndCallback end_callback;
+  //vssh fork: a sessão TLS de um pedido com "_vssh_certinfo", lida pelo certinfo_prereq
+  int tls_seen;
+  unsigned int tls_verify_flags;
+  const char* tls_version;
+  const char* tls_cipher;
 };
 
 struct WSResult {

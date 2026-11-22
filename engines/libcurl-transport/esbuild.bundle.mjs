@@ -99,3 +99,7 @@ await build({
 })
 
 fs.renameSync('./dist/main.d.ts', './dist/index.d.ts')
+
+// vssh fork: o wasm do libcurl viaja ao lado do bundle, e o transporte o acha pelo endereço do
+// próprio script (o `WASM_PADRAO` de src/main.ts). O backend do app serve `dist/` inteiro.
+fs.copyFileSync('./lib/libcurl.wasm', './dist/libcurl.wasm')

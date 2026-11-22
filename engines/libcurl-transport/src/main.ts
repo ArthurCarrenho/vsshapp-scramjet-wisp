@@ -3,13 +3,31 @@ import type {
   TransferrableResponse,
   ProxyTransport,
 } from "@mercuryworkshop/proxy-transports";
-// vssh fork: import the vendored, patched single-file build of libcurl.js (lib/
-// libcurl_full.mjs) instead of the upstream "libcurl.js/bundled" package. That build
-// includes the CURLOPT_SSL_VERIFYPEER/VERIFYHOST opt-out (the "insecure" option below)
-// and is produced by the ArthurCarrenho/vssh-libcurl.js fork's CI. esbuild inlines this
-// file (with its embedded WASM) into dist/, so the runtime never resolves libcurl.js.
+// vssh fork: the vendored build of libcurl.js from engines/libcurl.js (lib/libcurl.mjs), with the
+// WASM in its own file (lib/libcurl.wasm), which the bundle step copies next to dist/index.js.
+// esbuild inlines the JS glue into dist/, so the runtime never resolves libcurl.js.
+//
+// The WASM travels apart from the JS so that the browser compiles it while it downloads
+// (WebAssembly.instantiateStreaming) and keeps the compiled code between page loads. Embedded as
+// base64 in the JS, it was decoded and compiled again on every load of the shell.
 // @ts-ignore
-import { libcurl } from "../lib/libcurl_full.mjs";
+import { libcurl } from "../lib/libcurl.mjs";
+
+// Where the WASM is when nobody says: next to the script that is running now. The UMD bundle runs
+// from a <script>, and document.currentScript is only set while it evaluates, so it is read here,
+// at the top of the module, and not in init().
+const WASM_PADRAO: string | undefined = (() => {
+  try {
+    const src = (globalThis as any).document?.currentScript?.src;
+    return src ? new URL("libcurl.wasm", src).href : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
+// load_wasm() starts a second instantiation if it is called again before the first one ends, so
+// every client of this page waits on the same load.
+let carga: Promise<void> | null = null;
 
 export type LibcurlClientOptions = {
   wisp: string;
@@ -21,6 +39,19 @@ export type LibcurlClientOptions = {
   // servers) for every host, on HTTP(S) requests and on proxied WebSocket connections. For a
   // single host, see setInsecureHosts().
   insecure?: boolean;
+  // vssh fork: the URL of libcurl.wasm. Without it, the file next to the script that loaded this
+  // bundle.
+  wasm?: string;
+};
+
+// vssh fork: what certificateOf() answers. `certs` are the PEMs the server sent, from the leaf on;
+// `verifyFlags` are mbedtls' MBEDTLS_X509_BADCERT_* flags for that chain against the CA bundle and
+// the host name, and 0 means it verifies.
+export type CertificateReport = {
+  verified: boolean;
+  verifyFlags: number;
+  certs: string[];
+  tls: { version?: string; cipher?: string };
 };
 export default class LibcurlClient implements ProxyTransport {
   session: any;
@@ -29,6 +60,7 @@ export default class LibcurlClient implements ProxyTransport {
   transport?: string;
   connections?: Array<number>;
   insecure?: boolean;
+  wasmUrl?: string;
   // vssh fork: the hosts (URL.host, with the port when it is not the default) whose
   // certificate the person accepted on the TLS error page. libcurl reads `insecure` per
   // request, and curl only reuses a connection whose TLS settings match, so a connection
@@ -41,6 +73,7 @@ export default class LibcurlClient implements ProxyTransport {
     this.proxy = options.proxy;
     this.connections = options.connections;
     this.insecure = options.insecure;
+    this.wasmUrl = options.wasm ?? WASM_PADRAO;
     if (!this.wisp.endsWith("/")) {
       throw new TypeError(
         "The Websocket URL must end with a trailing forward slash."
@@ -64,13 +97,14 @@ export default class LibcurlClient implements ProxyTransport {
   async init() {
     if (this.transport) libcurl.transport = this.transport;
     if (!libcurl.ready) {
-      await new Promise((resolve, reject) => {
-        libcurl.onload = () => {
-          console.log("loaded libcurl.js v" + libcurl.version.lib);
-          this.ready = true;
-          resolve(null);
-        };
+      if (!this.wasmUrl) throw new TypeError("libcurl.wasm: pass the `wasm` option with its URL.");
+      carga ??= Promise.resolve(libcurl.load_wasm(this.wasmUrl)).catch((e: unknown) => {
+        carga = null;
+        throw e;
       });
+      await carga;
+      console.log("loaded libcurl.js v" + libcurl.version.lib);
+      this.ready = true;
     }
 
     this.discardWispConnection();
@@ -121,6 +155,31 @@ export default class LibcurlClient implements ProxyTransport {
   // host that the global `insecure` flag does not cover.
   setInsecureHosts(hosts: Iterable<string>) {
     this.insecureHosts = new Set(Array.from(hosts, (h) => String(h).toLowerCase()));
+  }
+
+  // vssh fork: the certificate of a site, read by the same libcurl, CA bundle and wisp exit that
+  // carry its pages: a GET on a new connection and a new TLS session, since libcurl only fills the
+  // chain while the certificates are exchanged, aborted as soon as the headers arrive. A HEAD would
+  // not do: its transfer ends with the headers, and libcurl has already let go of the TLS session
+  // when they are read. The request itself skips verification so that the chain arrives even from
+  // a server that would be refused, and libcurl checks it afterwards with the profile curl uses.
+  // Rejects when no connection could be made at all.
+  async certificateOf(url: string): Promise<CertificateReport> {
+    const parar = new AbortController();
+    const r = await this.session.fetch(url, {
+      redirect: "manual",
+      credentials: "omit",
+      signal: parar.signal,
+      _vssh_certinfo: true,
+    });
+    parar.abort();
+    const flags = Number(r?.tls?.verify_flags);
+    return {
+      verified: flags === 0,
+      verifyFlags: Number.isFinite(flags) ? flags : -1,
+      certs: Array.isArray(r?.certinfo) ? r.certinfo : [],
+      tls: { version: r?.tls?.version, cipher: r?.tls?.cipher },
+    };
   }
 
   async request(

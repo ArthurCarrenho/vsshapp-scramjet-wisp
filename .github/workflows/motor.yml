@@ -235,8 +235,8 @@ jobs:
 
   # ── libcurl.js ─────────────────────────────────────────────────────────────────────────────
   #
-  # Não produz nada que produção consuma: o que o transport usa é o `lib/libcurl_full.mjs`
-  # COMMITADO. Este job existe para dizer se aquele blob ainda corresponde ao fonte — ver o
+  # Não produz nada que produção consuma: o que o transport usa é o `lib/libcurl.mjs` e o
+  # `lib/libcurl.wasm` COMMITADOS. Este job existe para dizer se aquele blob ainda corresponde ao fonte — ver o
   # comentário do passo de comparação, que explica por que ele avisa e não reprova.
   libcurljs:
     name: libcurl.js (deriva do blob)
@@ -335,40 +335,30 @@ jobs:
       # era "emscripten diferente gera código diferente" — verdade, mas não a parte que importava.
       # Baixando o artefato e comparando linha a linha, só OITO linhas diferiam, e uma delas era a
       # do wsproxy. Daí veio o passo acima. O aviso estava certo; o palpite sobre ele, não.
-      - name: O blob commitado ainda corresponde ao fonte?
+      - name: O que está commitado ainda corresponde ao fonte?
         run: |
-          NOVO=engines/libcurl.js/client/out/libcurl_full.mjs
-          VELHO=engines/libcurl-transport/lib/libcurl_full.mjs
-          a=$(stat -c%s "$VELHO"); b=$(stat -c%s "$NOVO")
-          echo "commitado:    $a bytes"
-          echo "reconstruído: $b bytes"
-          echo "delta:        $((b - a)) bytes"
-          if cmp -s "$VELHO" "$NOVO"; then
-            echo "idêntico — o CA bundle não mudou desde a última vendorização"
-            exit 0
-          fi
-          # O sinal que DISCRIMINA é a contagem de linhas divergentes, não o número de bytes — e
-          # isto é calibração medida, não estimativa. O bundle tem 1.531 linhas, e o módulo do
-          # emscripten (com o `.wasm` em base64, onde o CA bundle vive) é UMA delas, a linha 12.
+          # O transport vendoriza dois arquivos: a cola JS (`libcurl.mjs`) e o wasm. O CA bundle
+          # mora dentro do wasm e flutua de propósito, então o wasm muda de um build para o outro
+          # sem que o fonte mude; a cola JS não tem por que mudar. A pergunta que discrimina é se a
+          # cola continua idêntica, e o tamanho do wasm vai só como informação.
           #
-          # O `diff` cospe DUAS linhas por linha modificada (um `<` e um `>`), então o corte é 2:
-          #
-          #   ≤2 → uma linha modificada, a do base64 do wasm. É o CA flutuando; foi o que deu com
-          #        3.1.6: 1.948 bytes de diferença, e as outras 1.530 linhas idênticas.
-          #   >2 → o código de cola JS mudou, e aí é toolchain ou fonte. Com 3.1.72 deu OITO
-          #        (quatro linhas modificadas), e uma delas desfazia o patch do wsproxy.
-          #
-          # Por bytes essa distinção não aparece: 36 KB e 2 KB são "diferente" do mesmo jeito.
-          # `--strip-trailing-cr` não é zelo à toa: o blob é versionado e este repositório é editado
-          # no Windows, onde o working copy fica CRLF. Sem a opção, um checkout que trouxesse CR
-          # faria as 1.531 linhas "diferirem" e o job acusaria mudança de cola JS para sempre — um
-          # alarme permanente, que é o mesmo que alarme nenhum. Medido: sem ela, aqui dá 3.062.
-          n=$(diff --strip-trailing-cr <(cat "$VELHO") <(cat "$NOVO") | grep -c '^[<>]' || true)
-          echo "linhas divergentes: $n (de $(wc -l < "$VELHO"))"
-          if [ "$n" -le 2 ]; then
-            echo "::notice::o blob difere em $((b - a)) bytes, numa linha só — a do base64 do wasm. É o CA bundle, que flutua de propósito."
+          # `--strip-trailing-cr` porque este repositório também é editado no Windows, onde o
+          # working copy fica CRLF; sem a opção, todas as linhas "difeririam" para sempre.
+          OUT=engines/libcurl.js/client/out
+          LIB=engines/libcurl-transport/lib
+          a=$(stat -c%s "$LIB/libcurl.wasm"); b=$(stat -c%s "$OUT/libcurl.wasm")
+          echo "wasm commitado:    $a bytes"
+          echo "wasm reconstruído: $b bytes (delta $((b - a)))"
+          n=$(diff --strip-trailing-cr "$LIB/libcurl.mjs" "$OUT/libcurl.mjs" | grep -c '^[<>]' || true)
+          echo "linhas divergentes na cola JS: $n (de $(wc -l < "$LIB/libcurl.mjs"))"
+          if [ "$n" -eq 0 ]; then
+            if cmp -s "$LIB/libcurl.wasm" "$OUT/libcurl.wasm"; then
+              echo "idêntico"
+            else
+              echo "::notice::a cola JS é a mesma, e o wasm difere em $((b - a)) bytes: é o CA bundle, que flutua de propósito."
+            fi
           else
-            echo "::warning::o blob difere em $n linhas, e não só na do wasm. Isso não é o CA bundle: é o código de cola JS mudando, o que aponta para toolchain ou fonte. Baixe o artefato e compare linha a linha antes de re-vendorizar."
+            echo "::warning::a cola JS difere em $n linhas. Isso não é o CA bundle: é toolchain ou fonte. Baixe o artefato e compare antes de re-vendorizar."
           fi
 
       - uses: actions/upload-artifact@v6

@@ -1,9 +1,9 @@
 // Prova o TRANSPORTE, não o wasm solto.
 //
 // O A/B anterior mede libcurl.js direto. O que o cliente carrega em produção é o bundle do
-// @mercuryworkshop/libcurl-transport, com o libcurl_full.mjs inlineado dentro pelo esbuild — e é
-// esse arquivo vendorizado que estamos publicando. Se a vendorização pegou o wasm errado, ou o
-// esbuild inlineou uma cópia antiga, é aqui que aparece.
+// @mercuryworkshop/libcurl-transport, com a cola JS do libcurl.mjs inlineada pelo esbuild e o
+// libcurl.wasm ao lado, no mesmo dist/: é esse par vendorizado que estamos publicando. Se a
+// vendorização pegou o wasm errado, ou o esbuild inlineou uma cola antiga, é aqui que aparece.
 //
 // Mesma pergunta de sempre: 40 requisições ao mesmo host h2 abrem quantas conexões TCP?
 import { spawn } from 'node:child_process';

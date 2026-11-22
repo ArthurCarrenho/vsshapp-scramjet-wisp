@@ -39,6 +39,10 @@ CURL* create_request(const char* url, int request_id, DataCallback data_callback
   request_info->end_callback = end_callback;
   request_info->data_callback = data_callback;
   request_info->headers_callback = headers_callback;
+  request_info->tls_seen = 0;
+  request_info->tls_verify_flags = 0;
+  request_info->tls_version = NULL;
+  request_info->tls_cipher = NULL;
 
   curl_easy_setopt(http_handle, CURLOPT_PRIVATE, request_info);
   curl_easy_setopt(http_handle, CURLOPT_URL, url);

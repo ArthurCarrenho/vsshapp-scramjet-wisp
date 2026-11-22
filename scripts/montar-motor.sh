@@ -46,7 +46,7 @@ FONTE="$(git -C "$RAIZ" rev-parse "HEAD:$FORK")"
 contrato_de() {
 	case "$1" in
 		scramjet)  printf 'scramjet/dist/scramjet.js\nscramjet/dist/scramjet.wasm\ncontroller/dist/controller.api.js\ncontroller/dist/controller.inject.js\ncontroller/dist/controller.sw.js\nutils/dist/scramjet-utils.js\n' ;;
-		transport) printf 'libcurl-transport/dist/index.js\n' ;;
+		transport) printf 'libcurl-transport/dist/index.js\nlibcurl-transport/dist/libcurl.wasm\n' ;;
 	esac
 }
 
@@ -78,13 +78,11 @@ copiar() {  # copiar <destino> <origem-do-pacote>
 	local destino="$1" pkg="$2"
 	mkdir -p "$SAIDA/$destino"
 	cp -r "$pkg/dist" "$SAIDA/$destino/"
-	# Só `dist/` e o `package.json`. O `lib/` do pacote npm NÃO vem, e agora que o vendor é
-	# versionado isso deixou de ser detalhe: o `lib/` do libcurl-transport são 2 MB de
-	# `libcurl_full.mjs` que o esbuild JÁ inlineou dentro de `dist/index.js` — o `dist` só o menciona
-	# num comentário (`// lib/libcurl_full.mjs`), e nenhum `dist/` de nenhum dos quatro tem import
-	# real para `../lib`. Copiá-lo dobraria o blob no repositório a cada bump do motor, para servir
-	# a um `exports` que ninguém resolve: o backend não importa estes pacotes, serve arquivos de
-	# dentro deles.
+	# Só `dist/` e o `package.json`. O `lib/` do pacote npm NÃO vem: no libcurl-transport, a cola
+	# JS de `lib/libcurl.mjs` já está inlineada em `dist/index.js`, e o `lib/libcurl.wasm` já foi
+	# copiado para `dist/` pelo `esbuild.bundle.mjs`. Copiar `lib/` dobraria o wasm no repositório a
+	# cada bump do motor, para servir a um `exports` que ninguém resolve: o backend não importa estes
+	# pacotes, serve arquivos de dentro deles.
 	cp "$pkg/package.json" "$SAIDA/$destino/"
 
 	# Fora do `dist/` copiado: o que nenhum navegador carrega. `temp-types-build/` é o bundle

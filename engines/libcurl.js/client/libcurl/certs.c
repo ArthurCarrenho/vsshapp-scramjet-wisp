@@ -3,6 +3,7 @@
 
 #include "curl/curl.h"
 #include "mbedtls/base64.h"
+#include "mbedtls/x509_crt.h"
 
 #include "cacert.h"
 
@@ -58,4 +59,20 @@ void init_curl() {
   cacert_blob.data = cacert_pem;
   cacert_blob.len = cacert_pem_len;
   cacert_blob.flags = CURL_BLOB_NOCOPY;
+}
+//vssh fork: as raízes do CA bundle como cadeia do mbedtls, para o http_get_info conferir o
+//certificado de um site contra as mesmas raízes que o curl usa. Lidas uma vez, na primeira
+//conferência, e guardadas: são ~150 certificados, e a página só pede quando alguém abre a folha.
+static mbedtls_x509_crt ca_chain;
+static int ca_chain_ready = 0;
+
+const mbedtls_x509_crt* get_ca_chain() {
+  if (!ca_chain_ready) {
+    mbedtls_x509_crt_init(&ca_chain);
+    for (int i = 0; i < _cert_count; i++) {
+      mbedtls_x509_crt_parse_der(&ca_chain, _certs[i], _cert_lengths[i]);
+    }
+    ca_chain_ready = 1;
+  }
+  return &ca_chain;
 }
