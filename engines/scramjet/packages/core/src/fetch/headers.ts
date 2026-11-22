@@ -142,7 +142,17 @@ export function rewriteRequestHeaders(
 		rawOriginUrl &&
 		rawOriginUrl.pathname.startsWith(handler.context.prefix.pathname)
 	) {
-		headers.set("Origin", originUrl.origin);
+		// vssh fork: `Origin` como o Fetch o manda (https://fetch.spec.whatwg.org/#append-a-request-origin-header):
+		// num pedido CORS a outra origem e num método que não é GET nem HEAD. Uma imagem, um
+		// script ou um fetch GET da própria origem saem sem ele no Chrome, e um `Origin` em todo
+		// pedido é um sinal de proxy que um desafio anti-robô lê. O WebSocket põe o dele em
+		// `client/shared/requests/websocket.ts`.
+		const metodoSimples = request.method === "GET" || request.method === "HEAD";
+		const corsDeFora =
+			computeFetchMode(request, parsed) === "cors" &&
+			originUrl.origin !== parsed.url.origin;
+		if (!metodoSimples || corsDeFora) headers.set("Origin", originUrl.origin);
+		else headers.delete("Origin");
 
 		const referer = createReferrerString(
 			originUrl,
@@ -163,9 +173,37 @@ export function rewriteRequestHeaders(
 		headers.set("Cookie", cookies);
 	}
 
+	// vssh fork: o Chrome acrescenta `Accept-Language` depois do service worker, e o pedido que sai
+	// do transporte iria sem ele. O valor sai dos idiomas do navegador, na forma do Chrome.
+	if (!headers.has("accept-language")) {
+		const idiomas = acceptLanguage(self.navigator?.languages);
+		if (idiomas) headers.set("Accept-Language", idiomas);
+	}
+
 	applyFetchMetadataHeaders(headers, request, parsed, handler);
 
 	return headers;
+}
+
+/**
+ * vssh fork: `Accept-Language` como o Chrome o monta a partir de `navigator.languages`: cada
+ * idioma com região seguido do idioma base, quando a lista não o traz, e o peso descendo de 0,1 em
+ * 0,1 depois do primeiro (`pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7`).
+ */
+export function acceptLanguage(idiomas: readonly string[] | undefined): string {
+	const lista: string[] = [];
+	const todos = (idiomas || []).map((l) => String(l).trim()).filter(Boolean);
+	for (let i = 0; i < todos.length; i++) {
+		const tag = todos[i];
+		if (!lista.includes(tag)) lista.push(tag);
+		const base = tag.split("-")[0];
+		const outroDoMesmoBase = todos.slice(i + 1).some((l) => l.split("-")[0] === base);
+		if (base !== tag && !todos.includes(base) && !outroDoMesmoBase && !lista.includes(base))
+			lista.push(base);
+	}
+	return lista
+		.map((l, i) => (i === 0 ? l : `${l};q=${Math.max(0.1, 1 - i / 10).toFixed(1)}`))
+		.join(",");
 }
 
 /**
@@ -246,9 +284,16 @@ function applyFetchMetadataHeaders(
 		parsed.destination === "frame" ||
 		parsed.destination === "embed" ||
 		parsed.destination === "object";
+	// vssh fork: a navegação de nível de cima sem iniciador (`Sec-Fetch-Site: none`) é a que a
+	// pessoa pediu pela barra de endereço, um favorito ou o recarregar, e o Chrome a marca como
+	// ativada por ela. No motor ela nasce de `frame.go()`, sem gesto do lado da página.
+	const topoDigitado =
+		site === "none" &&
+		(parsed.destination === "document" ||
+			(parsed.destination === "iframe" && !parsed.isIframe));
 	if (
 		isNavigationDestination &&
-		request.initialHeaders.get("sec-fetch-user") === "?1"
+		(request.initialHeaders.get("sec-fetch-user") === "?1" || topoDigitado)
 	) {
 		headers.set("Sec-Fetch-User", "?1");
 	}
