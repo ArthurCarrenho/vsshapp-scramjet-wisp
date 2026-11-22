@@ -149,6 +149,11 @@ window.AppLauncher = {
     : async () => ({ url: location.origin + '/s/proxy/app/scramjet-wisp/', ready: true, lastCode: 200 }),
   appsEmCache:      () => [],
 };
+// O catálogo de textos do shell: a bancada fica com o texto de reserva de cada chave.
+window.VsshI18n = {
+  t: (chave, reserva, vars) => String(reserva ?? chave).replace(/\\{(\\w+)\\}/g, (m, n) => (vars && n in vars ? vars[n] : m)),
+  idioma: () => 'pt-BR',
+};
 window.Atividade = {
   _itens: [],
   set(chave, item) { this._itens.push(['set', chave, item]); return true; },

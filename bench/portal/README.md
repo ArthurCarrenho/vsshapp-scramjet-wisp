@@ -67,6 +67,7 @@ node certificado-por-host.mjs  # aceitar o certificado de um site abre só ele?
 node mudanca-de-url.mjs     # o shell sabe se a página empilhou ou trocou a URL?
 node reino-dos-nos.mjs      # o elemento da página é objeto da página, ou do shell?
 node turnstile.mjs          # o Turnstile entrega o token pelo motor? (sai para a internet)
+node cabecalhos.mjs         # o site recebe do motor os cabeçalhos que receberia do Chrome?
 ```
 
 Cada script termina com `=== veredito ===` e um `process.exitCode`, no mesmo vocabulário da bancada
@@ -90,6 +91,7 @@ irmã: **controle** é o mesmo cenário sem o gatilho, **direto** é sem o proxy
 | `mudanca-de-url.mjs` | o `pushState` chega ao shell como `push` e o `replaceState` como `replace`? | `/spa`: três `pushState` e trinta `replaceState` |
 | `reino-dos-nos.mjs` | o `<script async>` vê a própria URL, e o elemento tem os protótipos da página, e não os do shell? | doze cargas de uma página com um script que se anota no instante em que roda |
 | `turnstile.mjs` | o Cloudflare Turnstile entrega o token nos três modos do widget? `BENCH_DIRETO=1` é a coluna sem o motor | as demonstrações do peet.ws, com clique na caixinha do modo `managed`; com `HTTPS_PROXY`, o wisp sai por túnel CONNECT |
+| `cabecalhos.mjs` | o site recebe pelo motor os cabeçalhos de identidade que recebe do Chrome (`User-Agent`, `Accept-Language`, `Sec-CH-UA*`, `Sec-Fetch-*`), e o `certificadoDe` do shell devolve a cadeia com o motivo da recusa? | um site HTTPS autoassinado que ecoa os cabeçalhos do documento, de um `fetch`, de uma imagem e de um script; o lado direto é o mesmo eco em `http://localhost`, que o Chrome trata como origem confiável |
 
 ## O que ela ACHOU
 
