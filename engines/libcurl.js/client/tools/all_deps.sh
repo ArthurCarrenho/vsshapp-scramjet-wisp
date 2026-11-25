@@ -5,15 +5,23 @@
 set -e
 mkdir -p build
 
-MBEDTLS_PREFIX=$(realpath build/mbedtls-wasm)
+IMPERSONATE_DIR=$(realpath build/curl-impersonate)
+BORINGSSL_PREFIX=$(realpath build/boringssl-wasm)
+ZSTD_PREFIX=$(realpath build/zstd-wasm)
 CJSON_PREFIX=$(realpath build/cjson-wasm)
 CURL_PREFIX=$(realpath build/curl-wasm)
 ZLIB_PREFIX=$(realpath build/zlib-wasm)
 BROTLI_PREFIX=$(realpath build/brotli-wasm)
 NGHTTP2_PREFIX=$(realpath build/nghttp2-wasm)
 
-if [ ! -d $MBEDTLS_PREFIX ]; then
-  tools/mbedtls.sh
+if [ ! -d $IMPERSONATE_DIR ]; then
+  tools/curl-impersonate.sh
+fi
+if [ ! -d $BORINGSSL_PREFIX ]; then
+  tools/boringssl.sh
+fi
+if [ ! -d $ZSTD_PREFIX ]; then
+  tools/zstd.sh
 fi
 if [ ! -d $CJSON_PREFIX ]; then
   tools/cjson.sh
@@ -31,7 +39,8 @@ if [ ! -d $CURL_PREFIX ]; then
   tools/curl.sh
 fi
 
-cp -r $MBEDTLS_PREFIX/* $CURL_PREFIX
+cp -r $BORINGSSL_PREFIX/* $CURL_PREFIX
+cp -r $ZSTD_PREFIX/* $CURL_PREFIX
 cp -r $CJSON_PREFIX/* $CURL_PREFIX
 cp -r $ZLIB_PREFIX/* $CURL_PREFIX
 cp -r $BROTLI_PREFIX/* $CURL_PREFIX

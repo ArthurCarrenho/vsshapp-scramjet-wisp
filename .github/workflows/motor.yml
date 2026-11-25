@@ -249,9 +249,9 @@ jobs:
       - name: Dependências de sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y make cmake autoconf automake libtool pkg-config wget xxd jq
+          sudo apt-get install -y make cmake autoconf automake libtool pkg-config wget xxd jq ninja-build
 
-      # As seis bibliotecas C (curl, mbedtls, brotli, nghttp2, zlib, cJSON) são compiladas com
+      # As sete bibliotecas C (curl, BoringSSL, zstd, brotli, nghttp2, zlib, cJSON) são compiladas com
       # emscripten, DUAS vezes (`release` e `single_file`). Sem cache isso é o build mais caro dos
       # três: 7 minutos, a cada push, sempre. A chave são os scripts que fixam as versões das libs,
       # os patches que o `curl.sh` aplica e a versão do emsdk, e nada mais muda o conteúdo de

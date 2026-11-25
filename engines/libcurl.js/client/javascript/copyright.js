@@ -2,7 +2,9 @@ const copyright_notice = `libcurl.js is licensed under the GNU LGPL v3. You can 
 
 Several C libraries are used, and their licenses are listed below:
 - libcurl: curl License (https://curl.se/docs/copyright.html)
-- mbedtls: Apache License 2.0 (https://github.com/Mbed-TLS/mbedtls/blob/development/LICENSE)
+- curl-impersonate: MIT License (https://github.com/lexiforest/curl-impersonate/blob/main/LICENSE)
+- boringssl: Apache License 2.0 and ISC License (https://boringssl.googlesource.com/boringssl/+/HEAD/LICENSE)
+- zstd: BSD License (https://github.com/facebook/zstd/blob/dev/LICENSE)
 - cjson: MIT License (https://github.com/DaveGamble/cJSON/blob/master/LICENSE)
 - zlib: zlib License (https://www.zlib.net/zlib_license.html)
 - brotli: MIT License (https://github.com/google/brotli/blob/master/LICENSE)

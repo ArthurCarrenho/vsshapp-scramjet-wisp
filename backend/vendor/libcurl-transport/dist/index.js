@@ -23,6 +23,7 @@ var main_exports = {};
 __export(main_exports, {
   LibcurlClient: () => LibcurlClient,
   WISP_REASONS: () => WISP_REASONS,
+  browserProfile: () => browserProfile,
   default: () => LibcurlClient
 });
 module.exports = __toCommonJS(main_exports);
@@ -458,10 +459,10 @@ var libcurl = function() {
     function receiveInstance(instance, module2) {
       var exports2 = instance.exports;
       Module["asm"] = exports2;
-      wasmMemory = Module["asm"]["W"];
+      wasmMemory = Module["asm"]["_"];
       updateGlobalBufferAndViews(wasmMemory.buffer);
-      wasmTable = Module["asm"]["Da"];
-      addOnInit(Module["asm"]["X"]);
+      wasmTable = Module["asm"]["Ha"];
+      addOnInit(Module["asm"]["$"]);
       removeRunDependency("wasm-instantiate");
     }
     addRunDependency("wasm-instantiate");
@@ -542,6 +543,67 @@ var libcurl = function() {
   }
   function ___call_sighandler(fp, sig) {
     getWasmTableEntry(fp)(sig);
+  }
+  function ___cxa_allocate_exception(size) {
+    return _malloc(size + 16) + 16;
+  }
+  function ExceptionInfo(excPtr) {
+    this.excPtr = excPtr;
+    this.ptr = excPtr - 16;
+    this.set_type = function(type) {
+      HEAP32[this.ptr + 4 >> 2] = type;
+    };
+    this.get_type = function() {
+      return HEAP32[this.ptr + 4 >> 2];
+    };
+    this.set_destructor = function(destructor) {
+      HEAP32[this.ptr + 8 >> 2] = destructor;
+    };
+    this.get_destructor = function() {
+      return HEAP32[this.ptr + 8 >> 2];
+    };
+    this.set_refcount = function(refcount) {
+      HEAP32[this.ptr >> 2] = refcount;
+    };
+    this.set_caught = function(caught) {
+      caught = caught ? 1 : 0;
+      HEAP8[this.ptr + 12 >> 0] = caught;
+    };
+    this.get_caught = function() {
+      return HEAP8[this.ptr + 12 >> 0] != 0;
+    };
+    this.set_rethrown = function(rethrown) {
+      rethrown = rethrown ? 1 : 0;
+      HEAP8[this.ptr + 13 >> 0] = rethrown;
+    };
+    this.get_rethrown = function() {
+      return HEAP8[this.ptr + 13 >> 0] != 0;
+    };
+    this.init = function(type, destructor) {
+      this.set_type(type);
+      this.set_destructor(destructor);
+      this.set_refcount(0);
+      this.set_caught(false);
+      this.set_rethrown(false);
+    };
+    this.add_ref = function() {
+      var value = HEAP32[this.ptr >> 2];
+      HEAP32[this.ptr >> 2] = value + 1;
+    };
+    this.release_ref = function() {
+      var prev = HEAP32[this.ptr >> 2];
+      HEAP32[this.ptr >> 2] = prev - 1;
+      return prev === 1;
+    };
+  }
+  var exceptionLast = 0;
+  var uncaughtExceptionCount = 0;
+  function ___cxa_throw(ptr, type, destructor) {
+    var info = new ExceptionInfo(ptr);
+    info.init(type, destructor);
+    exceptionLast = ptr;
+    uncaughtExceptionCount++;
+    throw ptr;
   }
   var PATH = { splitPath: function(filename) {
     var splitPathRe = /^(\/?|)([\s\S]*?)((?:\.{1,2}|[^\/]+?|)(\.[^.\/]*|))(?:[\/]*)$/;
@@ -3070,11 +3132,30 @@ var libcurl = function() {
       return -e.errno;
     }
   }
+  function ___syscall_chmod(path, mode) {
+    try {
+      path = SYSCALLS.getStr(path);
+      FS.chmod(path, mode);
+      return 0;
+    } catch (e) {
+      if (typeof FS == "undefined" || !(e instanceof FS.ErrnoError)) throw e;
+      return -e.errno;
+    }
+  }
   function ___syscall_connect(fd, addr, addrlen) {
     try {
       var sock = getSocketFromFD(fd);
       var info = getSocketAddress(addr, addrlen);
       sock.sock_ops.connect(sock, info.addr, info.port);
+      return 0;
+    } catch (e) {
+      if (typeof FS == "undefined" || !(e instanceof FS.ErrnoError)) throw e;
+      return -e.errno;
+    }
+  }
+  function ___syscall_fchmod(fd, mode) {
+    try {
+      FS.fchmod(fd, mode);
       return 0;
     } catch (e) {
       if (typeof FS == "undefined" || !(e instanceof FS.ErrnoError)) throw e;
@@ -3163,53 +3244,6 @@ var libcurl = function() {
       if (typeof FS == "undefined" || !(e instanceof FS.ErrnoError)) throw e;
       return -e.errno;
     }
-  }
-  function ___syscall_getdents64(fd, dirp, count) {
-    try {
-      var stream = SYSCALLS.getStreamFromFD(fd);
-      if (!stream.getdents) {
-        stream.getdents = FS.readdir(stream.path);
-      }
-      var struct_size = 280;
-      var pos = 0;
-      var off = FS.llseek(stream, 0, 1);
-      var idx = Math.floor(off / struct_size);
-      while (idx < stream.getdents.length && pos + struct_size <= count) {
-        var id;
-        var type;
-        var name = stream.getdents[idx];
-        if (name === ".") {
-          id = stream.node.id;
-          type = 4;
-        } else if (name === "..") {
-          var lookup = FS.lookupPath(stream.path, { parent: true });
-          id = lookup.node.id;
-          type = 4;
-        } else {
-          var child = FS.lookupNode(stream.node, name);
-          id = child.id;
-          type = FS.isChrdev(child.mode) ? 2 : FS.isDir(child.mode) ? 4 : FS.isLink(child.mode) ? 10 : 8;
-        }
-        tempI64 = [id >>> 0, (tempDouble = id, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0)], HEAP32[dirp + pos >> 2] = tempI64[0], HEAP32[dirp + pos + 4 >> 2] = tempI64[1];
-        tempI64 = [(idx + 1) * struct_size >>> 0, (tempDouble = (idx + 1) * struct_size, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0)], HEAP32[dirp + pos + 8 >> 2] = tempI64[0], HEAP32[dirp + pos + 12 >> 2] = tempI64[1];
-        HEAP16[dirp + pos + 16 >> 1] = 280;
-        HEAP8[dirp + pos + 18 >> 0] = type;
-        stringToUTF8(name, dirp + pos + 19, 256);
-        pos += struct_size;
-        idx += 1;
-      }
-      FS.llseek(stream, idx * struct_size, 0);
-      return pos;
-    } catch (e) {
-      if (typeof FS == "undefined" || !(e instanceof FS.ErrnoError)) throw e;
-      return -e.errno;
-    }
-  }
-  function ___syscall_getegid32() {
-    return 0;
-  }
-  function ___syscall_geteuid32() {
-    return ___syscall_getegid32();
   }
   function writeSockaddr(sa, family, addr, port, addrlen) {
     switch (family) {
@@ -3545,16 +3579,6 @@ var libcurl = function() {
       return -e.errno;
     }
   }
-  function ___syscall_rmdir(path) {
-    try {
-      path = SYSCALLS.getStr(path);
-      FS.rmdir(path);
-      return 0;
-    } catch (e) {
-      if (typeof FS == "undefined" || !(e instanceof FS.ErrnoError)) throw e;
-      return -e.errno;
-    }
-  }
   function ___syscall_sendto(fd, message, length, flags, addr, addr_len) {
     try {
       var sock = getSocketFromFD(fd);
@@ -3642,6 +3666,9 @@ var libcurl = function() {
     if (__tzset_js.called) return;
     __tzset_js.called = true;
     _tzset_impl(timezone, daylight, tzname);
+  }
+  function _abort() {
+    abort("");
   }
   function callUserCallback(func, synchronous) {
     if (runtimeExited || ABORT) {
@@ -3755,6 +3782,17 @@ var libcurl = function() {
     try {
       var stream = SYSCALLS.getStreamFromFD(fd);
       FS.close(stream);
+      return 0;
+    } catch (e) {
+      if (typeof FS == "undefined" || !(e instanceof FS.ErrnoError)) throw e;
+      return e.errno;
+    }
+  }
+  function _fd_fdstat_get(fd, pbuf) {
+    try {
+      var stream = SYSCALLS.getStreamFromFD(fd);
+      var type = stream.tty ? 2 : FS.isDir(stream.mode) ? 3 : FS.isLink(stream.mode) ? 7 : 4;
+      HEAP8[pbuf >> 0] = type;
       return 0;
     } catch (e) {
       if (typeof FS == "undefined" || !(e instanceof FS.ErrnoError)) throw e;
@@ -3933,6 +3971,15 @@ var libcurl = function() {
     }
     ai = allocaddrinfo(family, type, proto, null, addr, port);
     HEAP32[out2 >> 2] = ai;
+    return 0;
+  }
+  function _getentropy(buffer2, size) {
+    if (!_getentropy.randomDevice) {
+      _getentropy.randomDevice = getRandomDevice();
+    }
+    for (var i = 0; i < size; i++) {
+      HEAP8[buffer2 + i >> 0] = _getentropy.randomDevice();
+    }
     return 0;
   }
   function _gettimeofday(ptr) {
@@ -4206,143 +4253,143 @@ var libcurl = function() {
     if (dontAddNull) u8array.length = numBytesWritten;
     return u8array;
   }
-  var asmLibraryArg = { "a": ___assert_fail, "s": ___call_sighandler, "A": ___syscall__newselect, "y": ___syscall_bind, "x": ___syscall_connect, "e": ___syscall_fcntl64, "P": ___syscall_fstat64, "L": ___syscall_fstatat64, "D": ___syscall_getcwd, "F": ___syscall_getdents64, "I": ___syscall_geteuid32, "w": ___syscall_getsockname, "v": ___syscall_getsockopt, "U": ___syscall_ioctl, "M": ___syscall_lstat64, "m": ___syscall_open, "H": ___syscall_pipe, "G": ___syscall_poll, "E": ___syscall_readlink, "u": ___syscall_recvfrom, "B": ___syscall_rename, "C": ___syscall_rmdir, "t": ___syscall_sendto, "k": ___syscall_socket, "N": ___syscall_stat64, "l": ___syscall_unlink, "z": __emscripten_throw_longjmp, "Q": __gmtime_js, "R": __tzset_js, "o": _alarm, "h": _clock_gettime, "i": _emscripten_resize_heap, "J": _environ_get, "K": _environ_sizes_get, "f": _fd_close, "T": _fd_read, "p": _fd_seek, "S": _fd_write, "d": _getTempRet0, "V": _getaddrinfo, "n": _gettimeofday, "g": invoke_ii, "r": invoke_iiiiiijiii, "q": invoke_jii, "j": invoke_viii, "c": _setTempRet0, "O": _strftime, "b": _time };
+  var asmLibraryArg = { "b": ___assert_fail, "u": ___call_sighandler, "p": ___cxa_allocate_exception, "o": ___cxa_throw, "E": ___syscall__newselect, "A": ___syscall_bind, "Q": ___syscall_chmod, "z": ___syscall_connect, "R": ___syscall_fchmod, "f": ___syscall_fcntl64, "P": ___syscall_fstat64, "M": ___syscall_fstatat64, "G": ___syscall_getcwd, "y": ___syscall_getsockname, "x": ___syscall_getsockopt, "X": ___syscall_ioctl, "N": ___syscall_lstat64, "n": ___syscall_open, "J": ___syscall_pipe, "I": ___syscall_poll, "H": ___syscall_readlink, "w": ___syscall_recvfrom, "F": ___syscall_rename, "v": ___syscall_sendto, "m": ___syscall_socket, "O": ___syscall_stat64, "D": ___syscall_unlink, "B": __emscripten_throw_longjmp, "S": __gmtime_js, "T": __tzset_js, "a": _abort, "q": _alarm, "i": _clock_gettime, "j": _emscripten_resize_heap, "K": _environ_get, "L": _environ_sizes_get, "h": _fd_close, "C": _fd_fdstat_get, "W": _fd_read, "r": _fd_seek, "V": _fd_write, "e": _getTempRet0, "Z": _getaddrinfo, "Y": _getentropy, "l": _gettimeofday, "g": invoke_ii, "t": invoke_iiiiiijiii, "s": invoke_jiii, "k": invoke_viii, "d": _setTempRet0, "U": _strftime, "c": _time };
   if (wasmBinaryFile && isDataURI(wasmBinaryFile)) var asm = createWasm();
   else var asm = null;
   var ___wasm_call_ctors = Module["___wasm_call_ctors"] = function() {
-    return (___wasm_call_ctors = Module["___wasm_call_ctors"] = Module["asm"]["X"]).apply(null, arguments);
+    return (___wasm_call_ctors = Module["___wasm_call_ctors"] = Module["asm"]["$"]).apply(null, arguments);
   };
   var _get_cacert = Module["_get_cacert"] = function() {
-    return (_get_cacert = Module["_get_cacert"] = Module["asm"]["Y"]).apply(null, arguments);
+    return (_get_cacert = Module["_get_cacert"] = Module["asm"]["aa"]).apply(null, arguments);
   };
   var _malloc = Module["_malloc"] = function() {
-    return (_malloc = Module["_malloc"] = Module["asm"]["Z"]).apply(null, arguments);
+    return (_malloc = Module["_malloc"] = Module["asm"]["ba"]).apply(null, arguments);
   };
   var _init_curl = Module["_init_curl"] = function() {
-    return (_init_curl = Module["_init_curl"] = Module["asm"]["_"]).apply(null, arguments);
+    return (_init_curl = Module["_init_curl"] = Module["asm"]["ca"]).apply(null, arguments);
   };
   var _http_set_options = Module["_http_set_options"] = function() {
-    return (_http_set_options = Module["_http_set_options"] = Module["asm"]["$"]).apply(null, arguments);
+    return (_http_set_options = Module["_http_set_options"] = Module["asm"]["da"]).apply(null, arguments);
   };
   var _free = Module["_free"] = function() {
-    return (_free = Module["_free"] = Module["asm"]["aa"]).apply(null, arguments);
+    return (_free = Module["_free"] = Module["asm"]["ea"]).apply(null, arguments);
   };
   var _http_set_cookie_jar = Module["_http_set_cookie_jar"] = function() {
-    return (_http_set_cookie_jar = Module["_http_set_cookie_jar"] = Module["asm"]["ba"]).apply(null, arguments);
+    return (_http_set_cookie_jar = Module["_http_set_cookie_jar"] = Module["asm"]["fa"]).apply(null, arguments);
   };
   var _http_get_info = Module["_http_get_info"] = function() {
-    return (_http_get_info = Module["_http_get_info"] = Module["asm"]["ca"]).apply(null, arguments);
+    return (_http_get_info = Module["_http_get_info"] = Module["asm"]["ga"]).apply(null, arguments);
   };
   var _create_request = Module["_create_request"] = function() {
-    return (_create_request = Module["_create_request"] = Module["asm"]["da"]).apply(null, arguments);
+    return (_create_request = Module["_create_request"] = Module["asm"]["ha"]).apply(null, arguments);
   };
   var _request_cleanup = Module["_request_cleanup"] = function() {
-    return (_request_cleanup = Module["_request_cleanup"] = Module["asm"]["ea"]).apply(null, arguments);
+    return (_request_cleanup = Module["_request_cleanup"] = Module["asm"]["ia"]).apply(null, arguments);
   };
   var _request_get_error_detail = Module["_request_get_error_detail"] = function() {
-    return (_request_get_error_detail = Module["_request_get_error_detail"] = Module["asm"]["fa"]).apply(null, arguments);
+    return (_request_get_error_detail = Module["_request_get_error_detail"] = Module["asm"]["ja"]).apply(null, arguments);
   };
   var _request_set_proxy = Module["_request_set_proxy"] = function() {
-    return (_request_set_proxy = Module["_request_set_proxy"] = Module["asm"]["ga"]).apply(null, arguments);
+    return (_request_set_proxy = Module["_request_set_proxy"] = Module["asm"]["ka"]).apply(null, arguments);
   };
   var _session_create = Module["_session_create"] = function() {
-    return (_session_create = Module["_session_create"] = Module["asm"]["ha"]).apply(null, arguments);
+    return (_session_create = Module["_session_create"] = Module["asm"]["la"]).apply(null, arguments);
   };
   var _session_perform = Module["_session_perform"] = function() {
-    return (_session_perform = Module["_session_perform"] = Module["asm"]["ia"]).apply(null, arguments);
+    return (_session_perform = Module["_session_perform"] = Module["asm"]["ma"]).apply(null, arguments);
   };
   var _session_set_options = Module["_session_set_options"] = function() {
-    return (_session_set_options = Module["_session_set_options"] = Module["asm"]["ja"]).apply(null, arguments);
+    return (_session_set_options = Module["_session_set_options"] = Module["asm"]["na"]).apply(null, arguments);
   };
   var _session_add_request = Module["_session_add_request"] = function() {
-    return (_session_add_request = Module["_session_add_request"] = Module["asm"]["ka"]).apply(null, arguments);
+    return (_session_add_request = Module["_session_add_request"] = Module["asm"]["oa"]).apply(null, arguments);
   };
   var _session_get_active = Module["_session_get_active"] = function() {
-    return (_session_get_active = Module["_session_get_active"] = Module["asm"]["la"]).apply(null, arguments);
+    return (_session_get_active = Module["_session_get_active"] = Module["asm"]["pa"]).apply(null, arguments);
   };
   var _session_remove_request = Module["_session_remove_request"] = function() {
-    return (_session_remove_request = Module["_session_remove_request"] = Module["asm"]["ma"]).apply(null, arguments);
+    return (_session_remove_request = Module["_session_remove_request"] = Module["asm"]["qa"]).apply(null, arguments);
   };
   var _session_cleanup = Module["_session_cleanup"] = function() {
-    return (_session_cleanup = Module["_session_cleanup"] = Module["asm"]["na"]).apply(null, arguments);
+    return (_session_cleanup = Module["_session_cleanup"] = Module["asm"]["ra"]).apply(null, arguments);
   };
   var _recv_from_socket = Module["_recv_from_socket"] = function() {
-    return (_recv_from_socket = Module["_recv_from_socket"] = Module["asm"]["oa"]).apply(null, arguments);
+    return (_recv_from_socket = Module["_recv_from_socket"] = Module["asm"]["sa"]).apply(null, arguments);
   };
   var _send_to_socket = Module["_send_to_socket"] = function() {
-    return (_send_to_socket = Module["_send_to_socket"] = Module["asm"]["pa"]).apply(null, arguments);
+    return (_send_to_socket = Module["_send_to_socket"] = Module["asm"]["ta"]).apply(null, arguments);
   };
   var _tls_socket_set_options = Module["_tls_socket_set_options"] = function() {
-    return (_tls_socket_set_options = Module["_tls_socket_set_options"] = Module["asm"]["qa"]).apply(null, arguments);
+    return (_tls_socket_set_options = Module["_tls_socket_set_options"] = Module["asm"]["ua"]).apply(null, arguments);
   };
   var _get_version = Module["_get_version"] = function() {
-    return (_get_version = Module["_get_version"] = Module["asm"]["ra"]).apply(null, arguments);
+    return (_get_version = Module["_get_version"] = Module["asm"]["va"]).apply(null, arguments);
   };
   var _get_error_str = Module["_get_error_str"] = function() {
-    return (_get_error_str = Module["_get_error_str"] = Module["asm"]["sa"]).apply(null, arguments);
+    return (_get_error_str = Module["_get_error_str"] = Module["asm"]["wa"]).apply(null, arguments);
   };
   var _recv_from_websocket = Module["_recv_from_websocket"] = function() {
-    return (_recv_from_websocket = Module["_recv_from_websocket"] = Module["asm"]["ta"]).apply(null, arguments);
+    return (_recv_from_websocket = Module["_recv_from_websocket"] = Module["asm"]["xa"]).apply(null, arguments);
   };
   var _send_to_websocket = Module["_send_to_websocket"] = function() {
-    return (_send_to_websocket = Module["_send_to_websocket"] = Module["asm"]["ua"]).apply(null, arguments);
+    return (_send_to_websocket = Module["_send_to_websocket"] = Module["asm"]["ya"]).apply(null, arguments);
   };
   var _close_websocket = Module["_close_websocket"] = function() {
-    return (_close_websocket = Module["_close_websocket"] = Module["asm"]["va"]).apply(null, arguments);
+    return (_close_websocket = Module["_close_websocket"] = Module["asm"]["za"]).apply(null, arguments);
   };
   var _websocket_set_options = Module["_websocket_set_options"] = function() {
-    return (_websocket_set_options = Module["_websocket_set_options"] = Module["asm"]["wa"]).apply(null, arguments);
+    return (_websocket_set_options = Module["_websocket_set_options"] = Module["asm"]["Aa"]).apply(null, arguments);
   };
   var _get_result_size = Module["_get_result_size"] = function() {
-    return (_get_result_size = Module["_get_result_size"] = Module["asm"]["xa"]).apply(null, arguments);
+    return (_get_result_size = Module["_get_result_size"] = Module["asm"]["Ba"]).apply(null, arguments);
   };
   var _get_result_buffer = Module["_get_result_buffer"] = function() {
-    return (_get_result_buffer = Module["_get_result_buffer"] = Module["asm"]["ya"]).apply(null, arguments);
+    return (_get_result_buffer = Module["_get_result_buffer"] = Module["asm"]["Ca"]).apply(null, arguments);
   };
   var _get_result_code = Module["_get_result_code"] = function() {
-    return (_get_result_code = Module["_get_result_code"] = Module["asm"]["za"]).apply(null, arguments);
+    return (_get_result_code = Module["_get_result_code"] = Module["asm"]["Da"]).apply(null, arguments);
   };
   var _get_result_closed = Module["_get_result_closed"] = function() {
-    return (_get_result_closed = Module["_get_result_closed"] = Module["asm"]["Aa"]).apply(null, arguments);
+    return (_get_result_closed = Module["_get_result_closed"] = Module["asm"]["Ea"]).apply(null, arguments);
   };
   var _get_result_bytes_left = Module["_get_result_bytes_left"] = function() {
-    return (_get_result_bytes_left = Module["_get_result_bytes_left"] = Module["asm"]["Ba"]).apply(null, arguments);
+    return (_get_result_bytes_left = Module["_get_result_bytes_left"] = Module["asm"]["Fa"]).apply(null, arguments);
   };
   var _get_result_is_text = Module["_get_result_is_text"] = function() {
-    return (_get_result_is_text = Module["_get_result_is_text"] = Module["asm"]["Ca"]).apply(null, arguments);
-  };
-  var _htons = Module["_htons"] = function() {
-    return (_htons = Module["_htons"] = Module["asm"]["Ea"]).apply(null, arguments);
+    return (_get_result_is_text = Module["_get_result_is_text"] = Module["asm"]["Ga"]).apply(null, arguments);
   };
   var ___errno_location = Module["___errno_location"] = function() {
-    return (___errno_location = Module["___errno_location"] = Module["asm"]["Fa"]).apply(null, arguments);
+    return (___errno_location = Module["___errno_location"] = Module["asm"]["Ia"]).apply(null, arguments);
+  };
+  var _htons = Module["_htons"] = function() {
+    return (_htons = Module["_htons"] = Module["asm"]["Ja"]).apply(null, arguments);
   };
   var _ntohs = Module["_ntohs"] = function() {
-    return (_ntohs = Module["_ntohs"] = Module["asm"]["Ga"]).apply(null, arguments);
+    return (_ntohs = Module["_ntohs"] = Module["asm"]["Ka"]).apply(null, arguments);
   };
   var _htonl = Module["_htonl"] = function() {
-    return (_htonl = Module["_htonl"] = Module["asm"]["Ha"]).apply(null, arguments);
+    return (_htonl = Module["_htonl"] = Module["asm"]["La"]).apply(null, arguments);
   };
   var _raise = Module["_raise"] = function() {
-    return (_raise = Module["_raise"] = Module["asm"]["Ia"]).apply(null, arguments);
+    return (_raise = Module["_raise"] = Module["asm"]["Ma"]).apply(null, arguments);
   };
   var _setThrew = Module["_setThrew"] = function() {
-    return (_setThrew = Module["_setThrew"] = Module["asm"]["Ja"]).apply(null, arguments);
+    return (_setThrew = Module["_setThrew"] = Module["asm"]["Na"]).apply(null, arguments);
   };
   var stackSave = Module["stackSave"] = function() {
-    return (stackSave = Module["stackSave"] = Module["asm"]["Ka"]).apply(null, arguments);
+    return (stackSave = Module["stackSave"] = Module["asm"]["Oa"]).apply(null, arguments);
   };
   var stackRestore = Module["stackRestore"] = function() {
-    return (stackRestore = Module["stackRestore"] = Module["asm"]["La"]).apply(null, arguments);
+    return (stackRestore = Module["stackRestore"] = Module["asm"]["Pa"]).apply(null, arguments);
   };
   var stackAlloc = Module["stackAlloc"] = function() {
-    return (stackAlloc = Module["stackAlloc"] = Module["asm"]["Ma"]).apply(null, arguments);
-  };
-  var dynCall_jii = Module["dynCall_jii"] = function() {
-    return (dynCall_jii = Module["dynCall_jii"] = Module["asm"]["Na"]).apply(null, arguments);
+    return (stackAlloc = Module["stackAlloc"] = Module["asm"]["Qa"]).apply(null, arguments);
   };
   var dynCall_iiiiiijiii = Module["dynCall_iiiiiijiii"] = function() {
-    return (dynCall_iiiiiijiii = Module["dynCall_iiiiiijiii"] = Module["asm"]["Oa"]).apply(null, arguments);
+    return (dynCall_iiiiiijiii = Module["dynCall_iiiiiijiii"] = Module["asm"]["Ra"]).apply(null, arguments);
+  };
+  var dynCall_jiii = Module["dynCall_jiii"] = function() {
+    return (dynCall_jiii = Module["dynCall_jiii"] = Module["asm"]["Sa"]).apply(null, arguments);
   };
   function invoke_viii(index, a1, a2, a3) {
     var sp = stackSave();
@@ -4374,10 +4421,10 @@ var libcurl = function() {
       _setThrew(1, 0);
     }
   }
-  function invoke_jii(index, a1, a2) {
+  function invoke_jiii(index, a1, a2, a3) {
     var sp = stackSave();
     try {
-      return dynCall_jii(index, a1, a2);
+      return dynCall_jiii(index, a1, a2, a3);
     } catch (e) {
       stackRestore(sp);
       if (e !== e + 0) throw e;
@@ -4937,7 +4984,9 @@ var libcurl = function() {
 
 Several C libraries are used, and their licenses are listed below:
 - libcurl: curl License (https://curl.se/docs/copyright.html)
-- mbedtls: Apache License 2.0 (https://github.com/Mbed-TLS/mbedtls/blob/development/LICENSE)
+- curl-impersonate: MIT License (https://github.com/lexiforest/curl-impersonate/blob/main/LICENSE)
+- boringssl: Apache License 2.0 and ISC License (https://boringssl.googlesource.com/boringssl/+/HEAD/LICENSE)
+- zstd: BSD License (https://github.com/facebook/zstd/blob/dev/LICENSE)
 - cjson: MIT License (https://github.com/DaveGamble/cJSON/blob/master/LICENSE)
 - zlib: zlib License (https://www.zlib.net/zlib_license.html)
 - brotli: MIT License (https://github.com/google/brotli/blob/master/LICENSE)
@@ -5360,6 +5409,9 @@ Several C libraries are used, and their licenses are listed below:
       if (this.options.insecure) {
         request_options.insecure = true;
       }
+      if (this.options.impersonate) {
+        request_options._vssh_impersonate = this.options.impersonate;
+      }
       this.http_handle = this.create_request(this.url, data_callback, finish_callback, headers_callback);
       c_func(_http_set_options, [this.http_handle, JSON.stringify(request_options), null, 0]);
       _websocket_set_options(this.http_handle);
@@ -5779,6 +5831,26 @@ var WISP_REASONS = {
   97: "dns_no_response",
   144: "wisp_closed"
 };
+function browserProfile(userAgent) {
+  const ua = userAgent || "";
+  if (/Firefox\//.test(ua)) return "firefox155";
+  if (/Chrome\/|Chromium\/|CriOS\/|Edg\//.test(ua)) return /Android/.test(ua) ? "chrome131_android" : "chrome152";
+  if (/Safari\//.test(ua) && /Version\//.test(ua)) return /iPhone|iPad|iPod/.test(ua) ? "safari270_ios" : "safari270";
+  return void 0;
+}
+function headerOf(headers, name) {
+  for (const k in headers) if (k.toLowerCase() === name) return headers[k];
+  return void 0;
+}
+function userAgentOf(headers) {
+  return headerOf(headers, "user-agent");
+}
+function withNavigationPriority(headers) {
+  const destino = headerOf(headers, "sec-fetch-dest");
+  if ((destino === "document" || destino === "iframe") && headerOf(headers, "priority") === void 0)
+    return { ...headers, priority: "u=0, i" };
+  return headers;
+}
 var LibcurlClient = class {
   session;
   wisp;
@@ -5981,6 +6053,8 @@ var LibcurlClient = class {
     for (let [key, value] of headers) {
       headersObj[key] = value;
     }
+    const perfil = browserProfile(userAgentOf(headersObj));
+    if (perfil) headersObj = withNavigationPriority(headersObj);
     const inicio = Date.now();
     let payload;
     try {
@@ -5991,6 +6065,7 @@ var LibcurlClient = class {
         redirect: "manual",
         signal,
         insecure: this.insecure || this.insecureHosts.has(remote.host.toLowerCase()),
+        _vssh_impersonate: perfil,
         ...this.connectTimeoutMs ? { _vssh_connect_timeout_ms: this.connectTimeoutMs } : {}
       });
     } catch (e) {
@@ -6017,7 +6092,8 @@ var LibcurlClient = class {
     }
     let socket = new libcurl.WebSocket(url.toString(), protocols, {
       headers: headersObj,
-      insecure: this.insecure || this.insecureHosts.has(url.host.toLowerCase())
+      insecure: this.insecure || this.insecureHosts.has(url.host.toLowerCase()),
+      impersonate: browserProfile(userAgentOf(headersObj))
     });
     socket.binaryType = "arraybuffer";
     socket.onopen = (event) => {
