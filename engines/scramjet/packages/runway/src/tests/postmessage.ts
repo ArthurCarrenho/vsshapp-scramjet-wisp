@@ -146,6 +146,31 @@ export default [
 		},
 	}),
 	multiFrameTest({
+		// vssh fork: só strings nos argumentos, de um iframe de outra origem para o pai, como o
+		// iframe do DataDome manda o cookie do captcha aprovado. Sem objeto de quem chama, o envelope
+		// achava o realm do alvo e dizia a origem do PAI; o `c.js` da página recusava a mensagem e
+		// voltava ao desafio. O filho manda a própria origem como dado, e o pai a confere no evento.
+		name: "postmessage-cross-string-only-origin",
+		root: {
+			js: () => `
+                addEventListener("message", (event) => {
+                    assertEqual(event.origin, event.data, "a string-only message must carry the sender's origin");
+                    assertEqual(event.origin === location.origin, false, "and not the receiver's");
+                    pass();
+                });
+            `,
+			subframes: [
+				{
+					originid: "cross",
+					id: "child",
+					js: () => `
+                        parent.postMessage(location.origin, "*");
+                    `,
+				},
+			],
+		},
+	}),
+	multiFrameTest({
 		name: "postmessage-multi-frame-sanity-cross",
 		root: {
 			js: () => `
