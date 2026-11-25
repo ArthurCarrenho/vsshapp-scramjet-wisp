@@ -12,17 +12,24 @@
 //     processo a gigabytes;
 //   - o prazo de inatividade: um socket sem tráfego em nenhum sentido por `ociosoMs` fecha. O
 //     libcurl do navegador fecha uma conexão parada no cache dele em ~2 min e as páginas mandam
-//     ping nos WebSockets, então o prazo só alcança stream abandonada.
+//     ping nos WebSockets, então o prazo só alcança stream abandonada;
+//   - o prazo de conexão: um destino que não responde ao SYN em `conectarMs` desiste com o motivo
+//     "sem resposta". O kernel tentaria por uns dois minutos, e o libcurl do navegador desiste da
+//     fase de conexão inteira antes disso, sem saber por quê;
+//   - o motivo: cada falha anota em `this.motivo` o código wisp do que aconteceu (`motivos.js`), e
+//     o servidor fecha a stream com ele em vez do "erro de rede" genérico do wisp-js.
 //
 // O wisp-js chama `pause()` antes de cada envio pelo WebSocket e `resume()` depois. Os dois são
 // vazios aqui: quem decide pausar é a fila.
 
 import net from 'node:net';
 import { decidirDestino } from './rede.js';
+import { MOTIVO, motivoDoErro, nomeDoMotivo } from './motivos.js';
 
 export class DestinoRecusado extends Error {
   constructor(hostname, porta, motivo) {
     super(`destino recusado pela régua de rede: ${hostname}:${porta} (${motivo})`);
+    this.name = 'DestinoRecusado';
     this.motivo = motivo;
   }
 }
@@ -35,10 +42,12 @@ export class DestinoRecusado extends Error {
  * @param {Function} opcoes.resolver       `hostname => Promise<ip>` (o `dns_method` da política)
  * @param {Function} [opcoes.decidir]      a régua (`decidirDestino`); injetável na bancada
  * @param {Function} [opcoes.aoRecusar]    `({ hostname, porta, ip, classe, motivo }) => void`
- * @param {Function} [opcoes.aoDesfecho]   `(desfecho) => void`, uma vez por stream: `conectou`, `recusado`
- *                                         (a régua) ou `falhou` (a resolução ou a conexão)
+ * @param {Function} [opcoes.aoDesfecho]   `(desfecho, motivo) => void`, uma vez por stream: `conectou`,
+ *                                         `recusado` (a régua) ou `falhou` (a resolução ou a conexão),
+ *                                         com o nome do motivo wisp na falha (`nomeDoMotivo`)
  * @param {number}   [opcoes.limiteDaFila] pedaços na fila antes de pausar a origem
  * @param {number}   [opcoes.ociosoMs]     prazo de inatividade do socket
+ * @param {number}   [opcoes.conectarMs]   prazo para o destino aceitar a conexão
  * @param {Function} [opcoes.conectar]     `net.connect` (injetável)
  */
 export function criarSocketTcp({
@@ -49,9 +58,12 @@ export function criarSocketTcp({
   aoDesfecho,
   limiteDaFila = 16,
   ociosoMs = 10 * 60_000,
+  conectarMs = 10_000,
   conectar = (destino) => net.connect(destino),
 } = {}) {
-  const desfecho = (d) => { try { aoDesfecho?.(d); } catch { /* medir não muda a conexão */ } };
+  const desfecho = (d, motivo) => {
+    try { aoDesfecho?.(d, motivo === undefined ? undefined : nomeDoMotivo(motivo)); } catch { /* medir não muda a conexão */ }
+  };
   return class SocketTcpDoMotor {
     constructor(hostname, port) {
       this.hostname = hostname;
@@ -69,7 +81,8 @@ export function criarSocketTcp({
       try {
         ip = net.isIP(this.hostname) ? this.hostname : await resolver(this.hostname);
       } catch (erro) {
-        desfecho('falhou');
+        this.motivo = motivoDoErro(erro);
+        desfecho('falhou', this.motivo);
         throw erro;
       }
       const decisao = decidir({ ip, porta: this.port, nivel });
@@ -77,26 +90,48 @@ export function criarSocketTcp({
         try {
           aoRecusar?.({ hostname: this.hostname, porta: this.port, ip, classe: decisao.classe, motivo: decisao.motivo });
         } catch { /* diagnóstico não muda a decisão */ }
-        desfecho('recusado');
+        this.motivo = MOTIVO.HostBlocked;
+        desfecho('recusado', this.motivo);
         throw new DestinoRecusado(this.hostname, this.port, decisao.motivo);
       }
 
       await new Promise((resolve, reject) => {
         const socket = conectar({ host: ip, port: this.port });
         this.socket = socket;
+        let erroDaConexao = null;
         socket.setNoDelay(true);
-        socket.setTimeout(ociosoMs, () => socket.destroy());
-        socket.on('connect', () => { this.connected = true; desfecho('conectou'); resolve(); });
+        // O prazo de conexão corre até o `connect`; depois dele vale o de inatividade.
+        const prazo = setTimeout(() => {
+          erroDaConexao = Object.assign(new Error('sem resposta'), { code: 'ECONNTIMEOUT' });
+          socket.destroy();
+        }, conectarMs);
+        socket.on('connect', () => {
+          clearTimeout(prazo);
+          this.connected = true;
+          socket.setTimeout(ociosoMs, () => {
+            this.motivo = MOTIVO.TransferTimeout;
+            socket.destroy();
+          });
+          desfecho('conectou');
+          resolve();
+        });
         socket.on('data', (pedaco) => this._receber(pedaco));
         socket.on('close', () => {
+          clearTimeout(prazo);
           if (!this.connected) {
-            desfecho('falhou');
-            reject(new Error(`a conexão a ${this.hostname}:${this.port} não abriu`));
+            this.motivo = motivoDoErro(erroDaConexao);
+            desfecho('falhou', this.motivo);
+            reject(erroDaConexao || new Error(`a conexão a ${this.hostname}:${this.port} não abriu`));
           }
           this._encerrar();
         });
-        // O `close` vem logo depois, e é ele que encerra; sem ouvinte, o `error` derrubaria o processo.
-        socket.on('error', () => {});
+        // O `close` vem logo depois, e é ele que encerra; sem ouvinte, o `error` derrubaria o
+        // processo. Depois de conectada, um erro (o RST do outro lado, a rota que sumiu) é a
+        // conexão caindo no meio, e o fechamento sai com "erro de rede" em vez do fim normal.
+        socket.on('error', (erro) => {
+          if (!this.connected) erroDaConexao ??= erro;
+          else this.motivo ??= MOTIVO.NetworkError;
+        });
         // O wisp não tem meio-fechamento: o fim do lado de lá encerra a stream.
         socket.on('end', () => socket.destroy());
       });

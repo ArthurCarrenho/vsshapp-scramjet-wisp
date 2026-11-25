@@ -60,23 +60,104 @@ export const LITERAL_IPV6 = /:/;
 // antes de conferir o teto (`connection.mjs`), então o valor configurado é o teto mais 1.
 export const TETO_DE_STREAMS = 128;
 
+// ─── O cache de nomes ────────────────────────────────────────────────────────────────────────
+//
+// O `dns.lookup` do Node chama o `getaddrinfo` da libc numa das quatro threads do libuv, e o
+// resultado não fica guardado em lugar nenhum do processo: cada stream resolve de novo. Uma página
+// abre de dez a cinquenta conexões, muitas para o mesmo nome, e a bancada do link degradado contou
+// 56 resoluções para duas cargas de uma página de treze hosts.
+//
+// Com o link perdendo pacotes, cada consulta UDP que se perde segura uma das quatro threads pelos
+// 5 s do `timeout` da glibc, e quatro presas param a resolução de todos os nomes e todo o `fs` do
+// processo. O cache resolve as três coisas que pesam aí:
+//
+//   - consultas em voo para o mesmo nome viram uma só;
+//   - um nome resolvido vale por `validadeMs`, e o `getaddrinfo` não é chamado de novo nesse tempo;
+//   - um nome vencido há menos de `velhoMs` espera a resolução nova por 1,5 s e então segue com o
+//     endereço anterior, e o mesmo vale quando a resolução nova falha por falta de resposta (o
+//     link, e não o nome). Um nome que não existe (`ENOTFOUND`) fica guardado como
+//     falha por `negativoMs`, para a página que insiste não ocupar as threads.
+//
+// A validade é fixa porque o `getaddrinfo` não devolve o TTL do registro. Um minuto é curto para
+// um CDN que troca de endereço reagir, e longo para uma página inteira caber nele.
+
+const FALHA_DE_LINK = new Set(['EAI_AGAIN', 'ETIMEOUT', 'ESERVFAIL', 'ECONNREFUSED']);
+
 /**
- * Resolvedor de nomes só por IPv4: um nome sem registro A falha aqui.
+ * Resolvedor de nomes só por IPv4, com cache: um nome sem registro A falha aqui.
  *
  * @param {object}   [opcoes]
- * @param {Function} [opcoes.lookup]   `dns.lookup` (injetável: a bancada não toca a rede)
- * @param {Function} [opcoes.aoFalhar] chamado com (hostname, erro) quando a resolução falha
+ * @param {Function} [opcoes.lookup]      `dns.lookup` (injetável: a bancada não toca a rede)
+ * @param {Function} [opcoes.aoFalhar]    chamado com (hostname, erro) quando a resolução falha
+ * @param {Function} [opcoes.aoServirVelho] chamado com (hostname, erro) quando o endereço vencido serve
+ * @param {number}   [opcoes.validadeMs]  quanto um endereço resolvido vale
+ * @param {number}   [opcoes.velhoMs]     quanto um endereço vencido ainda serve se a resolução falhar pelo link
+ * @param {number}   [opcoes.negativoMs]  quanto um nome inexistente fica guardado como falha
+ * @param {number}   [opcoes.esperaDoVelhoMs] quanto a stream espera a resolução nova antes de usar o vencido
+ * @param {number}   [opcoes.teto]        quantos nomes o cache guarda
+ * @param {Function} [opcoes.agora]       relógio (injetável)
  * @returns {(hostname: string) => Promise<string>}
  */
-export function criarResolvedorIPv4({ lookup = dns.lookup, aoFalhar } = {}) {
-  return async function resolverPorIPv4(hostname) {
+export function criarResolvedorIPv4({
+  lookup = dns.lookup,
+  aoFalhar,
+  aoServirVelho,
+  validadeMs = 60_000,
+  velhoMs = 10 * 60_000,
+  negativoMs = 10_000,
+  esperaDoVelhoMs = 1500,
+  teto = 2000,
+  agora = Date.now,
+} = {}) {
+  const cache = new Map();   // nome -> { endereco?, erro?, em }
+  const emVoo = new Map();   // nome -> Promise<string>
+
+  const guardar = (nome, entrada) => {
+    cache.delete(nome);
+    cache.set(nome, entrada);
+    if (cache.size > teto) cache.delete(cache.keys().next().value);
+  };
+
+  async function resolverDeVerdade(hostname) {
     try {
       const { address } = await lookup(hostname, { family: 4 });
+      guardar(hostname, { endereco: address, em: agora() });
       return address;
     } catch (erro) {
       try { aoFalhar?.(hostname, erro); } catch { /* diagnóstico não derruba resolução */ }
+      const anterior = cache.get(hostname);
+      if (FALHA_DE_LINK.has(erro?.code) && anterior?.endereco && agora() - anterior.em < velhoMs) {
+        try { aoServirVelho?.(hostname, erro); } catch { /* idem */ }
+        return anterior.endereco;
+      }
+      if (!FALHA_DE_LINK.has(erro?.code)) guardar(hostname, { erro, em: agora() });
       throw erro;
     }
+  }
+
+  return async function resolverPorIPv4(hostname) {
+    const nome = String(hostname).toLowerCase();
+    const entrada = cache.get(nome);
+    if (entrada) {
+      const idade = agora() - entrada.em;
+      if (entrada.endereco && idade < validadeMs) return entrada.endereco;
+      if (entrada.erro && idade < negativoMs) throw entrada.erro;
+    }
+    let voo = emVoo.get(nome);
+    if (!voo) {
+      voo = resolverDeVerdade(nome).finally(() => emVoo.delete(nome));
+      emVoo.set(nome, voo);
+    }
+    // Com um endereço vencido à mão, a stream espera a resolução nova só até `esperaDoVelhoMs` e
+    // então segue com o vencido, enquanto a nova continua por trás (RFC 8767). Com o resolvedor
+    // respondendo, a nova chega antes do prazo e nada muda.
+    if (entrada?.endereco && agora() - entrada.em < velhoMs) {
+      let timer;
+      const velho = new Promise((ok) => { timer = setTimeout(() => ok(entrada.endereco), esperaDoVelhoMs); });
+      voo.catch(() => {});
+      return Promise.race([voo, velho]).finally(() => clearTimeout(timer));
+    }
+    return voo;
   };
 }
 
@@ -243,10 +324,10 @@ export function decidirDestino({ ip, porta, nivel, uid = process.getuid?.(), soc
  * da porta, do dono e do nível, então as duas chaves ficam abertas e a decisão acontece no socket
  * (`tcp.js`), sobre o endereço resolvido.
  */
-export function aplicarPolitica(wisp, { lookup, aoFalhar } = {}) {
+export function aplicarPolitica(wisp, { lookup, aoFalhar, aoServirVelho } = {}) {
   const opcoes = wisp.options;
 
-  opcoes.dns_method = criarResolvedorIPv4({ lookup, aoFalhar });
+  opcoes.dns_method = criarResolvedorIPv4({ lookup, aoFalhar, aoServirVelho });
 
   // Recusa literal IPv6 como destino digitado; o resolvedor não entrega IPv6.
   opcoes.hostname_blacklist = [LITERAL_IPV6];

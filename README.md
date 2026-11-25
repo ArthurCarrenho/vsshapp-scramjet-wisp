@@ -69,8 +69,18 @@ justamente quando você precisa lê-lo.
 
 O motor declara `recursos.metricas`, e o portal mostra as contas dele no `/metrics` como
 `vssh_app_events_total{app="scramjet-wisp", event=…}`: `conexoes_wisp` por nível de rede,
-`streams` pelo desfecho (`conectou`, `recusado` pela régua, `falhou` na resolução ou na conexão),
-`dns_falhas` pelo código do erro e `upgrades_recusados` pelo motivo (`token` ou `caminho`). A
+`streams` pelo desfecho (`conectou`, `recusado` pela régua, `falhou` na resolução ou na conexão)
+e pelo motivo wisp da falha (`dns`, `dns_sem_resposta`, `sem_resposta`, `recusada`, `bloqueada`,
+`rede`), `dns_falhas` pelo código do erro, `dns_vencido_serviu` quando o resolvedor da estação não
+respondeu e o cache serviu o endereço vencido, e `upgrades_recusados` pelo motivo (`token` ou
+`caminho`).
+
+O motivo wisp também vai ao navegador. O wisp-js fecha toda stream que não abriu com `0x03`, e o
+`backend/motivos.js` troca esse código pelo que o socket anotou: `0x42` para o nome que não existe,
+`0x61` para o resolvedor que não respondeu, `0x43` para o destino mudo além de 10 s, `0x44` para o
+que recusou e `0x48` para o que a régua de rede barrou. O cliente wisp do libcurl.js deste
+repositório guarda o motivo, o transporte o anexa ao erro (`[wisp 0x42]`), e o controller escolhe
+a causa da página de erro por ele. A
 bancada é `backend/tests/metricas.test.js`, com um portal de mentira recebendo o envio.
 
 > Testes de ponta a ponta (navegação real num site, reescrita de código) só fazem sentido contra um servidor VSSH real, onde o navegador embutido do ambiente pede o motor ao portal.

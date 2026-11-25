@@ -274,3 +274,82 @@ test('o dono lido do /proc desta máquina é esta conta, para um listener deste 
     servidor.close();
   }
 });
+
+// ─── O cache de nomes ──────────────────────────────────────────────────────────────────────────
+
+function lookupContado(respostas) {
+  const chamadas = [];
+  const lookup = async (hostname) => {
+    chamadas.push(hostname);
+    const r = respostas.shift();
+    if (typeof r === 'function') return r();
+    if (r instanceof Error) throw r;
+    return { address: r, family: 4 };
+  };
+  return { lookup, chamadas };
+}
+const erroDe = (code) => Object.assign(new Error(code), { code });
+
+test('resoluções simultâneas do mesmo nome viram uma consulta só, e a seguinte vem do cache', async () => {
+  let soltar;
+  const { lookup, chamadas } = lookupContado([() => new Promise((ok) => { soltar = () => ok({ address: '203.0.113.7', family: 4 }); })]);
+  const resolver = criarResolvedorIPv4({ lookup });
+  const vinte = Array.from({ length: 20 }, () => resolver('cdn.exemplo.com'));
+  await new Promise((r) => setImmediate(r));
+  soltar();
+  assert.deepEqual(new Set(await Promise.all(vinte)), new Set(['203.0.113.7']));
+  assert.equal(await resolver('CDN.exemplo.com'), '203.0.113.7');
+  assert.equal(chamadas.length, 1);
+});
+
+test('vencida a validade, o nome resolve de novo', async () => {
+  let t = 0;
+  const { lookup, chamadas } = lookupContado(['203.0.113.7', '203.0.113.8']);
+  const resolver = criarResolvedorIPv4({ lookup, agora: () => t, validadeMs: 1000 });
+  assert.equal(await resolver('a.exemplo.com'), '203.0.113.7');
+  t = 999;
+  assert.equal(await resolver('a.exemplo.com'), '203.0.113.7');
+  t = 1001;
+  assert.equal(await resolver('a.exemplo.com'), '203.0.113.8');
+  assert.equal(chamadas.length, 2);
+});
+
+test('o resolvedor que não responde não derruba um nome já conhecido: o endereço vencido serve', async () => {
+  let t = 0;
+  const velhos = [];
+  const { lookup } = lookupContado(['203.0.113.7', erroDe('EAI_AGAIN')]);
+  const resolver = criarResolvedorIPv4({ lookup, agora: () => t, validadeMs: 1000, aoServirVelho: (h) => velhos.push(h) });
+  await resolver('a.exemplo.com');
+  t = 5000;
+  assert.equal(await resolver('a.exemplo.com'), '203.0.113.7');
+  assert.deepEqual(velhos, ['a.exemplo.com']);
+});
+
+test('o vencido também serve quando a resolução nova demora, e a nova entra no cache quando chega', async () => {
+  let t = 0;
+  let soltar;
+  const { lookup, chamadas } = lookupContado(['203.0.113.7', () => new Promise((ok) => { soltar = () => ok({ address: '203.0.113.9', family: 4 }); })]);
+  const resolver = criarResolvedorIPv4({ lookup, agora: () => t, validadeMs: 1000, esperaDoVelhoMs: 50 });
+  await resolver('a.exemplo.com');
+  t = 5000;
+  const inicio = Date.now();
+  assert.equal(await resolver('a.exemplo.com'), '203.0.113.7');
+  assert.ok(Date.now() - inicio < 1000);
+  soltar();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(await resolver('a.exemplo.com'), '203.0.113.9');
+  assert.equal(chamadas.length, 2);
+});
+
+test('um nome que não existe fica guardado como falha por pouco tempo; uma falha do link, não', async () => {
+  let t = 0;
+  const { lookup, chamadas } = lookupContado([erroDe('ENOTFOUND'), erroDe('EAI_AGAIN'), erroDe('EAI_AGAIN'), '203.0.113.7']);
+  const resolver = criarResolvedorIPv4({ lookup, agora: () => t, negativoMs: 1000 });
+  await assert.rejects(resolver('nao.existe'), { code: 'ENOTFOUND' });
+  await assert.rejects(resolver('nao.existe'), { code: 'ENOTFOUND' });
+  assert.equal(chamadas.length, 1);
+  await assert.rejects(resolver('lento.exemplo.com'), { code: 'EAI_AGAIN' });
+  await assert.rejects(resolver('lento.exemplo.com'), { code: 'EAI_AGAIN' });
+  assert.equal(await resolver('lento.exemplo.com'), '203.0.113.7');
+  assert.equal(chamadas.length, 4);
+});
