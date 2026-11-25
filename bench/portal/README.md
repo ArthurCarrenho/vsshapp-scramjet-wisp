@@ -68,6 +68,7 @@ node mudanca-de-url.mjs     # o shell sabe se a página empilhou ou trocou a URL
 node reino-dos-nos.mjs      # o elemento da página é objeto da página, ou do shell?
 node turnstile.mjs          # o Turnstile entrega o token pelo motor? (sai para a internet)
 node cabecalhos.mjs         # o site recebe do motor os cabeçalhos que receberia do Chrome?
+node link-degradado.mjs     # com o link da estação perdendo pacotes, a navegação termina, e em quanto tempo?
 ```
 
 Cada script termina com `=== veredito ===` e um `process.exitCode`, no mesmo vocabulário da bancada
@@ -92,6 +93,7 @@ irmã: **controle** é o mesmo cenário sem o gatilho, **direto** é sem o proxy
 | `reino-dos-nos.mjs` | o `<script async>` vê a própria URL, e o elemento tem os protótipos da página, e não os do shell? | doze cargas de uma página com um script que se anota no instante em que roda |
 | `turnstile.mjs` | o Cloudflare Turnstile entrega o token nos três modos do widget? `BENCH_DIRETO=1` é a coluna sem o motor | as demonstrações do peet.ws, com clique na caixinha do modo `managed`; com `HTTPS_PROXY`, o wisp sai por túnel CONNECT |
 | `cabecalhos.mjs` | o site recebe pelo motor os cabeçalhos de identidade que recebe do Chrome (`User-Agent`, `Accept-Language`, `Sec-CH-UA*`, `Sec-Fetch-*`), e o `certificadoDe` do shell devolve a cadeia com o motivo da recusa? | um site HTTPS autoassinado que ecoa os cabeçalhos do documento, de um `fetch`, de uma imagem e de um script; o lado direto é o mesmo eco em `http://localhost`, que o Chrome trata como origem confiável |
+| `link-degradado.mjs` | com 0, 10, 25 e 40% dos segmentos TCP perdidos e o DNS da estação perdendo consultas, quantas navegações terminam, em quanto tempo, e quantas o shell recupera, reconecta ou abandona? `BENCH_PERDAS`, `BENCH_N`, `BENCH_PAGINA` (`muitos-hosts` ou `pesada`), `BENCH_DNS`, `BENCH_VAGAS` e `BENCH_JSON` escolhem | o `iptables -m statistic` derrubando segmentos nas portas do portal e dos sites, dentro de um `unshare -rn` que o script abre sozinho; o DNS com perda é um `lookup` de mentira com o prazo de 5 s e as duas tentativas da glibc |
 
 ## O que ela ACHOU
 

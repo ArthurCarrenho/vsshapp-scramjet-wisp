@@ -261,6 +261,59 @@ export async function subirSites({ porta = 0 } = {}) {
 				</script>`));
 		}
 
+		// ── O link degradado (`link-degradado.mjs`) ──────────────────────────────────────────
+		//
+		// `/fluxo` é uma conexão longa e viva: 1 KB a cada 250 ms por `?s=` segundos. Ela faz o papel
+		// do vídeo tocando ou do long-poll de chat numa aba de fundo, e quem a mede é `/fluxo-pagina`,
+		// que conta os bytes e as quebras. Uma sessão de transporte recriada no meio a corta, e é
+		// isso que a sonda conta.
+		if (u.pathname === "/fluxo") {
+			const fim = Date.now() + Number(u.searchParams.get("s") || 600) * 1000;
+			res.writeHead(200, { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" });
+			const pedaco = Buffer.alloc(1024, 97);
+			const t = setInterval(() => {
+				if (Date.now() > fim || res.destroyed) { clearInterval(t); return res.end(); }
+				res.write(pedaco);
+			}, 250);
+			res.on("close", () => clearInterval(t));
+			return;
+		}
+		if (u.pathname === "/fluxo-pagina") {
+			return html(res, pagina("fluxo", `<script>
+				window.__fluxo = { bytes: 0, quebras: 0, erros: [] };
+				(async function ler() {
+				  for (;;) {
+				    try {
+				      const r = await fetch('/fluxo?s=600&t=' + Date.now(), { cache: 'no-store' });
+				      const leitor = r.body.getReader();
+				      for (;;) {
+				        const { done, value } = await leitor.read();
+				        if (done) break;
+				        window.__fluxo.bytes += value.length;
+				      }
+				    } catch (e) {
+				      window.__fluxo.quebras += 1;
+				      window.__fluxo.erros.push(String(e && e.message || e).slice(0, 120));
+				      await new Promise((r) => setTimeout(r, 500));
+				    }
+				  }
+				})();
+			</script>`));
+		}
+		// Uma página que toca muitos nomes, como um site de verdade com CDN, fontes e anúncios: o
+		// documento, quatro scripts e doze imagens em doze hosts. Cada host novo é uma resolução de
+		// nome no servidor do motor e uma conexão nova. `?n=` faz cada carga ser um documento novo,
+		// e os hosts mudam com ele (`h<n>-<i>.teste`), para o DNS ser frio a cada volta quando se
+		// quer medi-lo frio; `?hosts=fixos` repete os mesmos doze.
+		if (u.pathname === "/muitos-hosts/") {
+			const n = u.searchParams.get("n") || "0";
+			const fixos = u.searchParams.get("hosts") === "fixos";
+			const h = (i) => `${fixos ? "cdn" : "h" + n}-${i}.teste`;
+			const scripts = Array.from({ length: 4 }, (_, i) => `<script src="http://${h(i)}:${P}/pesada/s${i}.js?n=${n}"></script>`).join("");
+			const imagens = Array.from({ length: 12 }, (_, i) => `<img src="http://${h(i)}:${P}/pixel.gif?i=${i}&n=${n}" width="1" height="1">`).join("");
+			return html(res, pagina("muitos-hosts", `${scripts}${imagens}`));
+		}
+
 		if (u.pathname === "/spa") {
 			return html(res, pagina("spa", `
 				<script>

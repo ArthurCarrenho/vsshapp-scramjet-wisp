@@ -93,6 +93,46 @@
       return { id, estado, ...window.__bancada.olhar(id) };
     },
 
+    /**
+     * Navega uma aba e mede até ela assentar, para a sonda do link degradado. Diferente de `ir`,
+     * não para no primeiro `load`: com perda de pacotes a navegação passa por recuperações, e cada
+     * uma dispara o seu. Assenta quando o documento esperado está na tela (`marca`), quando a aba
+     * mostra uma página de erro marcada e nenhuma recuperação está em voo, ou quando o motor
+     * desiste e chama o `onErro` do frame. O resultado diz qual dos três, o tempo, e a causa.
+     */
+    async navegarMedindo(id, url, marcaEsperada, prazoMs = 90000) {
+      const f = frames.get(id);
+      if (!f.__erros) { f.__erros = []; f.onErro?.((e) => f.__erros.push(e)); }
+      const errosAntes = f.__erros.length;
+      const inicio = performance.now();
+      let primeiro = null;
+      f.go(url);
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 100));
+        const ms = Math.round(performance.now() - inicio);
+        if (f.__erros.length > errosAntes) return { desfecho: 'desistiu', ms, erro: f.__erros[f.__erros.length - 1] };
+        let doc = null;
+        try { doc = f.el.contentDocument; } catch {}
+        // O documento da tela só conta quando é o desta navegação, e a página de erro também: a
+        // da navegação anterior fica na tela até a nova chegar. A página anterior pode ter a
+        // mesma marca, e sem conferir a URL a medida assentaria antes de a navegação começar.
+        let atual = '';
+        try { atual = f.getCurrentUrl() || ''; } catch {}
+        const marca = atual === url ? doc?.body?.getAttribute?.('data-marca') : null;
+        if (marca === marcaEsperada && primeiro == null) primeiro = ms;
+        if (marca === marcaEsperada && doc.readyState === 'complete') return { desfecho: 'ok', ms, primeiro };
+        let erro = null;
+        try {
+          const el = doc?.getElementById?.('vssh-erro-de-navegacao');
+          if (el) erro = JSON.parse(el.textContent || 'null');
+        } catch {}
+        if (erro && erro.url === url && erro.causa !== 'lacuna' && doc.readyState === 'complete' && motor().getStatus() !== 'recuperando') {
+          return { desfecho: 'erro', ms, erro };
+        }
+        if (ms > prazoMs) return { desfecho: 'pendurada', ms, estado: motor().getStatus() };
+      }
+    },
+
     /** Navega uma aba já aberta. */
     async ir(id, url, esperaMs = 15000) {
       const f = frames.get(id);
