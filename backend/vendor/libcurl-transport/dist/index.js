@@ -22,6 +22,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var main_exports = {};
 __export(main_exports, {
   LibcurlClient: () => LibcurlClient,
+  WISP_REASONS: () => WISP_REASONS,
   default: () => LibcurlClient
 });
 module.exports = __toCommonJS(main_exports);
@@ -459,7 +460,7 @@ var libcurl = function() {
       Module["asm"] = exports2;
       wasmMemory = Module["asm"]["W"];
       updateGlobalBufferAndViews(wasmMemory.buffer);
-      wasmTable = Module["asm"]["Ca"];
+      wasmTable = Module["asm"]["Da"];
       addOnInit(Module["asm"]["X"]);
       removeRunDependency("wasm-instantiate");
     }
@@ -4238,107 +4239,110 @@ var libcurl = function() {
   var _request_cleanup = Module["_request_cleanup"] = function() {
     return (_request_cleanup = Module["_request_cleanup"] = Module["asm"]["ea"]).apply(null, arguments);
   };
+  var _request_get_error_detail = Module["_request_get_error_detail"] = function() {
+    return (_request_get_error_detail = Module["_request_get_error_detail"] = Module["asm"]["fa"]).apply(null, arguments);
+  };
   var _request_set_proxy = Module["_request_set_proxy"] = function() {
-    return (_request_set_proxy = Module["_request_set_proxy"] = Module["asm"]["fa"]).apply(null, arguments);
+    return (_request_set_proxy = Module["_request_set_proxy"] = Module["asm"]["ga"]).apply(null, arguments);
   };
   var _session_create = Module["_session_create"] = function() {
-    return (_session_create = Module["_session_create"] = Module["asm"]["ga"]).apply(null, arguments);
+    return (_session_create = Module["_session_create"] = Module["asm"]["ha"]).apply(null, arguments);
   };
   var _session_perform = Module["_session_perform"] = function() {
-    return (_session_perform = Module["_session_perform"] = Module["asm"]["ha"]).apply(null, arguments);
+    return (_session_perform = Module["_session_perform"] = Module["asm"]["ia"]).apply(null, arguments);
   };
   var _session_set_options = Module["_session_set_options"] = function() {
-    return (_session_set_options = Module["_session_set_options"] = Module["asm"]["ia"]).apply(null, arguments);
+    return (_session_set_options = Module["_session_set_options"] = Module["asm"]["ja"]).apply(null, arguments);
   };
   var _session_add_request = Module["_session_add_request"] = function() {
-    return (_session_add_request = Module["_session_add_request"] = Module["asm"]["ja"]).apply(null, arguments);
+    return (_session_add_request = Module["_session_add_request"] = Module["asm"]["ka"]).apply(null, arguments);
   };
   var _session_get_active = Module["_session_get_active"] = function() {
-    return (_session_get_active = Module["_session_get_active"] = Module["asm"]["ka"]).apply(null, arguments);
+    return (_session_get_active = Module["_session_get_active"] = Module["asm"]["la"]).apply(null, arguments);
   };
   var _session_remove_request = Module["_session_remove_request"] = function() {
-    return (_session_remove_request = Module["_session_remove_request"] = Module["asm"]["la"]).apply(null, arguments);
+    return (_session_remove_request = Module["_session_remove_request"] = Module["asm"]["ma"]).apply(null, arguments);
   };
   var _session_cleanup = Module["_session_cleanup"] = function() {
-    return (_session_cleanup = Module["_session_cleanup"] = Module["asm"]["ma"]).apply(null, arguments);
+    return (_session_cleanup = Module["_session_cleanup"] = Module["asm"]["na"]).apply(null, arguments);
   };
   var _recv_from_socket = Module["_recv_from_socket"] = function() {
-    return (_recv_from_socket = Module["_recv_from_socket"] = Module["asm"]["na"]).apply(null, arguments);
+    return (_recv_from_socket = Module["_recv_from_socket"] = Module["asm"]["oa"]).apply(null, arguments);
   };
   var _send_to_socket = Module["_send_to_socket"] = function() {
-    return (_send_to_socket = Module["_send_to_socket"] = Module["asm"]["oa"]).apply(null, arguments);
+    return (_send_to_socket = Module["_send_to_socket"] = Module["asm"]["pa"]).apply(null, arguments);
   };
   var _tls_socket_set_options = Module["_tls_socket_set_options"] = function() {
-    return (_tls_socket_set_options = Module["_tls_socket_set_options"] = Module["asm"]["pa"]).apply(null, arguments);
+    return (_tls_socket_set_options = Module["_tls_socket_set_options"] = Module["asm"]["qa"]).apply(null, arguments);
   };
   var _get_version = Module["_get_version"] = function() {
-    return (_get_version = Module["_get_version"] = Module["asm"]["qa"]).apply(null, arguments);
+    return (_get_version = Module["_get_version"] = Module["asm"]["ra"]).apply(null, arguments);
   };
   var _get_error_str = Module["_get_error_str"] = function() {
-    return (_get_error_str = Module["_get_error_str"] = Module["asm"]["ra"]).apply(null, arguments);
+    return (_get_error_str = Module["_get_error_str"] = Module["asm"]["sa"]).apply(null, arguments);
   };
   var _recv_from_websocket = Module["_recv_from_websocket"] = function() {
-    return (_recv_from_websocket = Module["_recv_from_websocket"] = Module["asm"]["sa"]).apply(null, arguments);
+    return (_recv_from_websocket = Module["_recv_from_websocket"] = Module["asm"]["ta"]).apply(null, arguments);
   };
   var _send_to_websocket = Module["_send_to_websocket"] = function() {
-    return (_send_to_websocket = Module["_send_to_websocket"] = Module["asm"]["ta"]).apply(null, arguments);
+    return (_send_to_websocket = Module["_send_to_websocket"] = Module["asm"]["ua"]).apply(null, arguments);
   };
   var _close_websocket = Module["_close_websocket"] = function() {
-    return (_close_websocket = Module["_close_websocket"] = Module["asm"]["ua"]).apply(null, arguments);
+    return (_close_websocket = Module["_close_websocket"] = Module["asm"]["va"]).apply(null, arguments);
   };
   var _websocket_set_options = Module["_websocket_set_options"] = function() {
-    return (_websocket_set_options = Module["_websocket_set_options"] = Module["asm"]["va"]).apply(null, arguments);
+    return (_websocket_set_options = Module["_websocket_set_options"] = Module["asm"]["wa"]).apply(null, arguments);
   };
   var _get_result_size = Module["_get_result_size"] = function() {
-    return (_get_result_size = Module["_get_result_size"] = Module["asm"]["wa"]).apply(null, arguments);
+    return (_get_result_size = Module["_get_result_size"] = Module["asm"]["xa"]).apply(null, arguments);
   };
   var _get_result_buffer = Module["_get_result_buffer"] = function() {
-    return (_get_result_buffer = Module["_get_result_buffer"] = Module["asm"]["xa"]).apply(null, arguments);
+    return (_get_result_buffer = Module["_get_result_buffer"] = Module["asm"]["ya"]).apply(null, arguments);
   };
   var _get_result_code = Module["_get_result_code"] = function() {
-    return (_get_result_code = Module["_get_result_code"] = Module["asm"]["ya"]).apply(null, arguments);
+    return (_get_result_code = Module["_get_result_code"] = Module["asm"]["za"]).apply(null, arguments);
   };
   var _get_result_closed = Module["_get_result_closed"] = function() {
-    return (_get_result_closed = Module["_get_result_closed"] = Module["asm"]["za"]).apply(null, arguments);
+    return (_get_result_closed = Module["_get_result_closed"] = Module["asm"]["Aa"]).apply(null, arguments);
   };
   var _get_result_bytes_left = Module["_get_result_bytes_left"] = function() {
-    return (_get_result_bytes_left = Module["_get_result_bytes_left"] = Module["asm"]["Aa"]).apply(null, arguments);
+    return (_get_result_bytes_left = Module["_get_result_bytes_left"] = Module["asm"]["Ba"]).apply(null, arguments);
   };
   var _get_result_is_text = Module["_get_result_is_text"] = function() {
-    return (_get_result_is_text = Module["_get_result_is_text"] = Module["asm"]["Ba"]).apply(null, arguments);
+    return (_get_result_is_text = Module["_get_result_is_text"] = Module["asm"]["Ca"]).apply(null, arguments);
   };
   var _htons = Module["_htons"] = function() {
-    return (_htons = Module["_htons"] = Module["asm"]["Da"]).apply(null, arguments);
+    return (_htons = Module["_htons"] = Module["asm"]["Ea"]).apply(null, arguments);
   };
   var ___errno_location = Module["___errno_location"] = function() {
-    return (___errno_location = Module["___errno_location"] = Module["asm"]["Ea"]).apply(null, arguments);
+    return (___errno_location = Module["___errno_location"] = Module["asm"]["Fa"]).apply(null, arguments);
   };
   var _ntohs = Module["_ntohs"] = function() {
-    return (_ntohs = Module["_ntohs"] = Module["asm"]["Fa"]).apply(null, arguments);
+    return (_ntohs = Module["_ntohs"] = Module["asm"]["Ga"]).apply(null, arguments);
   };
   var _htonl = Module["_htonl"] = function() {
-    return (_htonl = Module["_htonl"] = Module["asm"]["Ga"]).apply(null, arguments);
+    return (_htonl = Module["_htonl"] = Module["asm"]["Ha"]).apply(null, arguments);
   };
   var _raise = Module["_raise"] = function() {
-    return (_raise = Module["_raise"] = Module["asm"]["Ha"]).apply(null, arguments);
+    return (_raise = Module["_raise"] = Module["asm"]["Ia"]).apply(null, arguments);
   };
   var _setThrew = Module["_setThrew"] = function() {
-    return (_setThrew = Module["_setThrew"] = Module["asm"]["Ia"]).apply(null, arguments);
+    return (_setThrew = Module["_setThrew"] = Module["asm"]["Ja"]).apply(null, arguments);
   };
   var stackSave = Module["stackSave"] = function() {
-    return (stackSave = Module["stackSave"] = Module["asm"]["Ja"]).apply(null, arguments);
+    return (stackSave = Module["stackSave"] = Module["asm"]["Ka"]).apply(null, arguments);
   };
   var stackRestore = Module["stackRestore"] = function() {
-    return (stackRestore = Module["stackRestore"] = Module["asm"]["Ka"]).apply(null, arguments);
+    return (stackRestore = Module["stackRestore"] = Module["asm"]["La"]).apply(null, arguments);
   };
   var stackAlloc = Module["stackAlloc"] = function() {
-    return (stackAlloc = Module["stackAlloc"] = Module["asm"]["La"]).apply(null, arguments);
+    return (stackAlloc = Module["stackAlloc"] = Module["asm"]["Ma"]).apply(null, arguments);
   };
   var dynCall_jii = Module["dynCall_jii"] = function() {
-    return (dynCall_jii = Module["dynCall_jii"] = Module["asm"]["Ma"]).apply(null, arguments);
+    return (dynCall_jii = Module["dynCall_jii"] = Module["asm"]["Na"]).apply(null, arguments);
   };
   var dynCall_iiiiiijiii = Module["dynCall_iiiiiijiii"] = function() {
-    return (dynCall_iiiiiijiii = Module["dynCall_iiiiiijiii"] = Module["asm"]["Na"]).apply(null, arguments);
+    return (dynCall_iiiiiijiii = Module["dynCall_iiiiiijiii"] = Module["asm"]["Oa"]).apply(null, arguments);
   };
   function invoke_viii(index, a1, a2, a3) {
     var sp = stackSave();
@@ -4473,6 +4477,17 @@ var libcurl = function() {
     let packet = concat_uint8array(packet_type_array, stream_id_array, payload);
     return packet;
   }
+  const _motivos_de_fechamento = /* @__PURE__ */ new Map();
+  function guardar_motivo(hostname, port, reason) {
+    const chave = `${String(hostname).toLowerCase()}:${port}`;
+    _motivos_de_fechamento.delete(chave);
+    _motivos_de_fechamento.set(chave, { reason, at: Date.now() });
+    if (_motivos_de_fechamento.size > 256) _motivos_de_fechamento.delete(_motivos_de_fechamento.keys().next().value);
+  }
+  function reason_of(hostname, port, since = 0) {
+    const r = _motivos_de_fechamento.get(`${String(hostname).toLowerCase()}:${port}`);
+    return r && r.at >= since ? r.reason : null;
+  }
   class WispStream extends EventTarget {
     constructor(hostname, port, websocket, buffer_size, stream_id, connection, stream_type) {
       super();
@@ -4521,6 +4536,7 @@ var libcurl = function() {
       this.connected = false;
       this.connecting = false;
       this.next_stream_id = 1;
+      this.last_packet_at = 0;
       if (!this.wisp_url.endsWith("/")) {
         throw "wisp endpoints must end with a trailing forward slash";
       }
@@ -4551,6 +4567,7 @@ var libcurl = function() {
       });
     }
     close_stream(stream, reason) {
+      if (reason !== 2 && !stream.received_data) guardar_motivo(stream.hostname, stream.port, reason);
       let close_event = new CloseEvent("close", { code: reason });
       stream.open = false;
       stream.dispatchEvent(close_event);
@@ -4560,7 +4577,7 @@ var libcurl = function() {
       this.connected = false;
       this.connecting = false;
       for (let stream_id of Object.keys(this.active_streams)) {
-        this.close_stream(this.active_streams[stream_id], 3);
+        this.close_stream(this.active_streams[stream_id], 144);
       }
     }
     create_stream(hostname, port, type = "tcp") {
@@ -4584,6 +4601,7 @@ var libcurl = function() {
         warn_msg(`wisp client warning: received a packet which is too short`);
         return;
       }
+      this.last_packet_at = performance.now();
       let packet_type = packet[0];
       let stream_id = uint_from_array(packet.slice(1, 5));
       let payload = packet.slice(5);
@@ -4593,6 +4611,7 @@ var libcurl = function() {
         return;
       }
       if (packet_type === packet_types.DATA) {
+        stream.received_data = true;
         let msg_event = new MessageEvent("message", { data: payload });
         stream.dispatchEvent(msg_event);
       } else if (packet_type === packet_types.CONTINUE && stream_id == 0) {
@@ -5090,7 +5109,11 @@ Several C libraries are used, and their licenses are listed below:
           headers_callback(stream);
         }
         try {
-          stream_controller.close();
+          if (error > 0 && headers_received) {
+            stream_controller.error(new TypeError(`Request failed with error code ${error}: ${get_error_str(error)}`));
+          } else {
+            stream_controller.close();
+          }
         } catch {
         }
         end_callback(error);
@@ -5155,9 +5178,15 @@ Several C libraries are used, and their licenses are listed below:
             return;
           }
           if (error > 0) {
+            let detalhe = "";
+            try {
+              detalhe = UTF8ToString(_request_get_error_detail(http_handle));
+            } catch (e) {
+            }
+            const frase = `Request failed with error code ${error}: ${get_error_str(error)}` + (detalhe ? ` (${detalhe})` : "");
             if (globalThis.__VSSH_WISP_VERBOSE)
-              error_msg(`Request "${url}" failed with error code ${error}: ${get_error_str(error)}`);
-            reject(new TypeError(`Request failed with error code ${error}: ${get_error_str(error)}`));
+              error_msg(`Request "${url}": ${frase}`);
+            reject(new TypeError(frase));
           } else if (error === -1) {
             reject(new DOMException("The operation was aborted."));
           } else if (error === -2) {
@@ -5679,6 +5708,7 @@ Several C libraries are used, and their licenses are listed below:
     get_error_string: get_error_str,
     wisp: {
       wisp_connections: _wisp_connections,
+      reason_of,
       WispConnection,
       WispWebSocket
     },
@@ -5738,6 +5768,17 @@ var WASM_PADRAO = (() => {
   }
 })();
 var carga = null;
+var WISP_REASONS = {
+  3: "network",
+  66: "dns",
+  67: "no_response",
+  68: "refused",
+  71: "idle",
+  72: "blocked",
+  73: "throttled",
+  97: "dns_no_response",
+  144: "wisp_closed"
+};
 var LibcurlClient = class {
   session;
   wisp;
@@ -5751,6 +5792,10 @@ var LibcurlClient = class {
   // request, and curl only reuses a connection whose TLS settings match, so a connection
   // opened without verification never carries a request to another host.
   insecureHosts = /* @__PURE__ */ new Set();
+  connectTimeoutMs;
+  // vssh fork: the samples behind health(), newest last. Each one is a request that got its
+  // headers on a NEW connection (a reused one has no handshake to measure), or a failure.
+  amostras = [];
   constructor(options) {
     this.wisp = options.wisp ?? options.websocket;
     this.transport = options.transport;
@@ -5758,6 +5803,7 @@ var LibcurlClient = class {
     this.connections = options.connections;
     this.insecure = options.insecure;
     this.wasmUrl = options.wasm ?? WASM_PADRAO;
+    this.connectTimeoutMs = options.connectTimeoutMs;
     if (!this.wisp.endsWith("/")) {
       throw new TypeError(
         "The Websocket URL must end with a trailing forward slash."
@@ -5844,6 +5890,21 @@ var LibcurlClient = class {
   setInsecureHosts(hosts) {
     this.insecureHosts = new Set(Array.from(hosts, (h) => String(h).toLowerCase()));
   }
+  // vssh fork: a failed request carries the reason the wisp server gave for the connection, when
+  // one closed for this host and port since the request started. The reason travels in the
+  // message, as "[wisp 0x42]", because the error crosses to the service worker as text; the page
+  // of error reads it there. Timeouts and failures for lack of an answer also count for health().
+  comMotivo(e, remote, desde) {
+    if (!(e instanceof Error) || !/error code (\d+)/.test(e.message)) return e;
+    const codigo = Number(/error code (\d+)/.exec(e.message)[1]);
+    const porta = Number(remote.port) || (remote.protocol === "https:" || remote.protocol === "wss:" ? 443 : 80);
+    const motivo = libcurl.wisp?.reason_of?.(remote.hostname, porta, desde);
+    if (codigo === 28 || motivo === 67 || motivo === 97 || motivo === 144) this.anotar({ falha: true });
+    if (!motivo) return e;
+    const novo = new TypeError(`${e.message} [wisp 0x${motivo.toString(16).padStart(2, "0")}]`);
+    novo.wispReason = motivo;
+    return novo;
+  }
   // vssh fork: the certificate of a site, read by the same libcurl, CA bundle and wisp exit that
   // carry its pages: a GET on a new connection and a new TLS session, since libcurl only fills the
   // chain while the certificates are exchanged, aborted as soon as the headers arrive. A HEAD would
@@ -5868,19 +5929,80 @@ var LibcurlClient = class {
       tls: { version: r?.tls?.version, cipher: r?.tls?.cipher }
     };
   }
+  // vssh fork: changes the connection-phase ceiling of the requests that start from now on.
+  // `undefined` goes back to the one compiled into libcurl.
+  setConnectTimeout(ms) {
+    this.connectTimeoutMs = Number.isFinite(ms) && ms > 0 ? Math.round(ms) : void 0;
+  }
+  // vssh fork: the wisp connection this transport uses, read from what it already received. A
+  // connection that got a packet a moment ago is alive, and asking it something to find out would
+  // only add a request to a link that may already be slow.
+  wispState() {
+    const connections = libcurl.wisp?.wisp_connections;
+    let estado = { connected: false, lastPacketAgoMs: null, openStreams: 0 };
+    if (!connections) return estado;
+    for (const [url, c] of Object.entries(connections)) {
+      if (!url.startsWith(this.wisp)) continue;
+      const ultimo = Number(c.last_packet_at) || 0;
+      estado = {
+        connected: !!c.connected,
+        lastPacketAgoMs: ultimo ? Math.max(0, Math.round(performance.now() - ultimo)) : null,
+        openStreams: Object.keys(c.active_streams || {}).length
+      };
+    }
+    return estado;
+  }
+  // vssh fork: the link health measured on the last two minutes of this transport's requests.
+  health() {
+    const agora = performance.now();
+    this.amostras = this.amostras.filter((a) => agora - a.em < 12e4).slice(-40);
+    const mediana = (v) => {
+      if (!v.length) return null;
+      const o = [...v].sort((a, b) => a - b);
+      const m = o.length >> 1;
+      return o.length % 2 ? o[m] : Math.round((o[m - 1] + o[m]) / 2);
+    };
+    const handshakes = this.amostras.filter((a) => a.handshakeMs != null).slice(-10).map((a) => a.handshakeMs);
+    const ttfbs = this.amostras.filter((a) => a.ttfbMs != null).slice(-10).map((a) => a.ttfbMs);
+    const falhas = this.amostras.filter((a) => a.falha && agora - a.em < 6e4).length;
+    const handshakeMs = mediana(handshakes);
+    const samples = handshakes.length + falhas;
+    let state = "unknown";
+    if (falhas >= 2 || handshakes.length >= 3 && handshakeMs > 3e3) state = "degraded";
+    else if (handshakes.length >= 3) state = "ok";
+    return { state, handshakeMs, ttfbMs: mediana(ttfbs), failures: falhas, samples };
+  }
+  anotar(amostra) {
+    this.amostras.push({ em: performance.now(), ...amostra });
+    if (this.amostras.length > 80) this.amostras.splice(0, this.amostras.length - 40);
+  }
   async request(remote, method, body, headers, signal) {
     let headersObj = {};
     for (let [key, value] of headers) {
       headersObj[key] = value;
     }
-    let payload = await this.session.fetch(remote.href, {
-      method,
-      headers: headersObj,
-      body,
-      redirect: "manual",
-      signal,
-      insecure: this.insecure || this.insecureHosts.has(remote.host.toLowerCase())
-    });
+    const inicio = Date.now();
+    let payload;
+    try {
+      payload = await this.session.fetch(remote.href, {
+        method,
+        headers: headersObj,
+        body,
+        redirect: "manual",
+        signal,
+        insecure: this.insecure || this.insecureHosts.has(remote.host.toLowerCase()),
+        ...this.connectTimeoutMs ? { _vssh_connect_timeout_ms: this.connectTimeoutMs } : {}
+      });
+    } catch (e) {
+      throw this.comMotivo(e, remote, inicio);
+    }
+    const t = payload?.timing;
+    if (t && !t.reused && t.tls_us > 0) {
+      this.anotar({
+        handshakeMs: Math.round((t.tls_us - t.connect_us) / 1e3),
+        ttfbMs: Math.round((t.ttfb_us - t.tls_us) / 1e3)
+      });
+    }
     return {
       body: payload.body,
       headers: payload.raw_headers,

@@ -105,6 +105,13 @@ void http_set_options(CURL* http_handle, const char* json_params, const char* bo
   cJSON_ArrayForEach(item, request_json) {
     char* key = item->string;
 
+    //vssh fork: o teto da fase de conexão deste pedido, no lugar dos 15 s acima. O transporte o
+    //sobe quando mede o link até a estação degradado: lá o handshake TLS passa por retransmissões,
+    //e 15 s viram a página de erro de um site que só estava devagar.
+    if (strcmp(key, "_vssh_connect_timeout_ms") == 0 && cJSON_IsNumber(item) && item->valuedouble > 0) {
+      curl_easy_setopt(http_handle, CURLOPT_CONNECTTIMEOUT_MS, (long) item->valuedouble);
+    }
+
     if (strcmp(key, "_libcurl_verbose") == 0) {
       curl_easy_setopt(http_handle, CURLOPT_VERBOSE, 1L);
     }
@@ -224,6 +231,23 @@ char* http_get_info(CURL* http_handle) {
     prev_header = header;
   }
   cJSON_AddItemToObject(response_json, "headers", headers_item);
+
+  //vssh fork: os tempos do pedido até os cabeçalhos, em microssegundos desde o início dele, e se a
+  //conexão foi reaproveitada. Numa conexão nova, `tls_us - connect_us` é o handshake TLS, que custa
+  //uma ida e volta até o site mais o trecho do wisp; é a medida com que o transporte percebe o link
+  //até a estação perdendo pacotes, no tráfego que já passa, sem sonda.
+  curl_off_t t_connect = 0, t_tls = 0, t_ttfb = 0;
+  long num_connects = 0;
+  curl_easy_getinfo(http_handle, CURLINFO_CONNECT_TIME_T, &t_connect);
+  curl_easy_getinfo(http_handle, CURLINFO_APPCONNECT_TIME_T, &t_tls);
+  curl_easy_getinfo(http_handle, CURLINFO_STARTTRANSFER_TIME_T, &t_ttfb);
+  curl_easy_getinfo(http_handle, CURLINFO_NUM_CONNECTS, &num_connects);
+  cJSON* timing_item = cJSON_CreateObject();
+  cJSON_AddItemToObject(timing_item, "connect_us", cJSON_CreateNumber((double) t_connect));
+  cJSON_AddItemToObject(timing_item, "tls_us", cJSON_CreateNumber((double) t_tls));
+  cJSON_AddItemToObject(timing_item, "ttfb_us", cJSON_CreateNumber((double) t_ttfb));
+  cJSON_AddItemToObject(timing_item, "reused", cJSON_CreateBool(num_connects == 0));
+  cJSON_AddItemToObject(response_json, "timing", timing_item);
 
   long redirect_count;
   curl_easy_getinfo(http_handle, CURLINFO_REDIRECT_COUNT, &redirect_count);

@@ -119,6 +119,7 @@ api = {
 
   wisp: {
     wisp_connections: _wisp_connections,
+    reason_of: reason_of,
     WispConnection: WispConnection,
     WispWebSocket: WispWebSocket  
   },
