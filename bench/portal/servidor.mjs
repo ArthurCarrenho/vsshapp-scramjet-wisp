@@ -72,6 +72,17 @@ function lookupDaBancada(hostname, opcoes) {
 
 aplicarPolitica(wisp, { lookup: lookupDaBancada, aoFalhar: () => {} });
 
+/**
+ * Troca o `lookup` do wisp. A sonda do link degradado modela aqui o DNS de um servidor com perda de
+ * pacotes; `null` volta ao da bancada.
+ */
+export function trocarLookup(lookup) {
+	aplicarPolitica(wisp, { lookup: lookup || lookupDaBancada, aoFalhar: () => {} });
+}
+
+/** O wisp da bancada, para quem precisa montar o socket de produção com o resolvedor dele. */
+export { wisp };
+
 // ─── Os assets do motor, do vendor ───────────────────────────────────────────────────────────
 // Tudo o que o portal serve em nome do app mora sob este prefixo — e é nesta granularidade que
 // ele recusa: quando o caminho de `/proxy/app/<id>/` está fechado, está fechado para a raiz e para
@@ -177,6 +188,10 @@ for (const nivel of ['warn', 'error']) {
     orig(...a);
   };
 }
+// Os eventos que o motor relata (\`_evento\` no ScramjetEngine): recuperações, reconexões,
+// navegações penduradas, desistências. Em produção vão ao portal pelo relator de erros.
+window.__eventos = [];
+window.RelatorDeErros = { relatarDoMotor(evento, opcoes) { window.__eventos.push([Math.round(performance.now()), evento, opcoes || {}]); } };
 window.__rejeicoes = [];
 addEventListener('unhandledrejection', (e) => window.__rejeicoes.push(String(e.reason)));
 </script>
