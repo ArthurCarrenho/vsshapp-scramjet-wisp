@@ -1,7 +1,7 @@
 {
   "pacote": "libcurl-transport",
   "versao": "2.1.0",
-  "origem": "bd180cb3f65d41f25e5d680498497c7285a06c8d",
+  "origem": "863e43ee0697aba2d7c45a9a16f623e1c462056e",
   "fork": "engines/libcurl-transport",
-  "fonte": "550c23ead1ddabe5ab392804280b281d60e9aa8a"
+  "fonte": "ed986bad9d8c98c382993ea2e189f9a4820d2921"
 }
