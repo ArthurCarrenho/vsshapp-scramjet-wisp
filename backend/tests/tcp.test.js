@@ -14,7 +14,7 @@ import { conectarWisp } from './cliente-wisp.js';
 import { criarSocketTcp } from '../tcp.js';
 
 const TOKEN = 'token-da-bancada';
-const NETWORK_ERROR = 0x03;
+const HOST_BLOCKED = 0x48;
 const CONN_THROTTLED = 0x49;
 
 const pulo = runtimeAusente() || false;
@@ -65,7 +65,8 @@ test('o metadata da nuvem e o 0.0.0.0 fecham na hora, em qualquer nível, sem te
       const st = cliente.abrir(host, porta);
       // Sem a régua, o SYN para o metadata pendura até o prazo de conexão do sistema, em minutos.
       await st.esperar(() => st.motivoDoFechamento() !== null, 5000);
-      assert.equal(st.motivoDoFechamento(), NETWORK_ERROR, host);
+      // O motivo é o do protocolo para destino barrado, e não o "erro de rede" genérico.
+      assert.equal(st.motivoDoFechamento(), HOST_BLOCKED, host);
       assert.ok(Date.now() - inicio < 3000, `${host} levou ${Date.now() - inicio} ms`);
     }
   } finally {
@@ -89,7 +90,7 @@ test('a rede privada abre com o nível 2 do portal, e fecha sem ele', { skip: pu
     for (const nivel of [undefined, 0, 1]) {
       const cliente = await conectar(nivel);
       const st = await ecoa(cliente, privado.address, porta);
-      assert.equal(st.motivoDoFechamento(), NETWORK_ERROR, `nível ${nivel}`);
+      assert.equal(st.motivoDoFechamento(), HOST_BLOCKED, `nível ${nivel}`);
       cliente.fechar();
     }
     const cliente = await conectar(2);
@@ -197,4 +198,70 @@ test('cada stream diz o desfecho uma vez: conectou, recusado pela régua, ou fal
   assert.equal(await abrir('nao-resolve.invalid', 80), null);
   assert.equal(await abrir('localhost', portaFechada), null);
   assert.deepEqual(desfechos, ['conectou', 'recusado', 'falhou', 'falhou']);
+});
+
+// ─── O motivo de cada falha ────────────────────────────────────────────────────────────────────
+//
+// Os casos abaixo usam o socket direto, com a régua aberta: a pergunta é que motivo ele anota para
+// cada desfecho de verdade da rede, e o caso do metadata lá em cima já prova que o servidor manda o
+// anotado no pacote CLOSE.
+
+const permitir = () => ({ permitido: true });
+
+async function falhaDe(Socket, host, porta) {
+  const s = new Socket(host, porta);
+  const inicio = Date.now();
+  await assert.rejects(s.connect());
+  return { motivo: s.motivo, ms: Date.now() - inicio };
+}
+
+test('uma porta fechada fecha com "recusada", e não com o erro genérico', async () => {
+  const livre = net.createServer().listen(0, '127.0.0.1');
+  await new Promise((ok) => livre.once('listening', ok));
+  const porta = livre.address().port;
+  await new Promise((ok) => livre.close(ok));
+  const Socket = criarSocketTcp({ resolver: async () => '127.0.0.1', decidir: permitir });
+  assert.equal((await falhaDe(Socket, 'fechada.teste', porta)).motivo, 0x44);
+});
+
+test('o nome que não existe e o resolvedor que não responde têm motivos diferentes', async () => {
+  const comErro = (code) => criarSocketTcp({ resolver: async () => { throw Object.assign(new Error(code), { code }); }, decidir: permitir });
+  assert.equal((await falhaDe(comErro('ENOTFOUND'), 'nao-existe.teste', 80)).motivo, 0x42);
+  assert.equal((await falhaDe(comErro('EAI_AGAIN'), 'lento.teste', 80)).motivo, 0x61);
+});
+
+test('o destino que não responde ao SYN desiste no prazo do servidor, com "sem resposta"', async () => {
+  // Um socket que nunca conecta nem falha: é o SYN perdido, sem depender de um endereço que não
+  // responda nesta rede.
+  const mudo = () => {
+    const s = new net.Socket();
+    s.setNoDelay = () => s;
+    return s;
+  };
+  const Socket = criarSocketTcp({ resolver: async () => '192.0.2.1', decidir: permitir, conectar: mudo, conectarMs: 300 });
+  const { motivo, ms } = await falhaDe(Socket, 'mudo.teste', 80);
+  assert.equal(motivo, 0x43);
+  assert.ok(ms >= 250 && ms < 2000, `levou ${ms} ms`);
+});
+
+test('a conexão que cai no meio fecha com erro de rede, e o fim normal não anota nada', async () => {
+  let doServidor;
+  const srvRst = net.createServer((s) => { doServidor = s; }).listen(0, '127.0.0.1');
+  await new Promise((ok) => srvRst.once('listening', ok));
+  try {
+    const Socket = criarSocketTcp({ resolver: async () => '127.0.0.1', decidir: permitir });
+    const caiu = new Socket('rst.teste', srvRst.address().port);
+    await caiu.connect();
+    doServidor.resetAndDestroy();
+    assert.equal(await caiu.recv(), null);
+    assert.equal(caiu.motivo, 0x03);
+
+    const terminou = new Socket('fim.teste', srvRst.address().port);
+    await terminou.connect();
+    doServidor.end();
+    assert.equal(await terminou.recv(), null);
+    assert.equal(terminou.motivo, undefined);
+  } finally {
+    srvRst.close();
+  }
 });

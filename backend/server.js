@@ -9,6 +9,7 @@
 // Roda como qualquer outro vssh-app: escuta no socket unix de $VSSH_APP_SOCKET pelo runtime
 // `vssh`, e o portal o sobe sob demanda (é `kind: service`, sem janela para abrir).
 
+import './fios.js'; // antes de tudo: o tamanho do pool do libuv
 import { createServer } from 'node:http';
 import { createReadStream, existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -18,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { server as wisp, logging } from '@mercuryworkshop/wisp-js/server';
 import { aplicarPolitica, nivelDoPedido } from './rede.js';
 import { criarSocketTcp } from './tcp.js';
+import { instalarMotivos } from './motivos.js';
 import { conferirVersoes, resumirVersoes, conferirMotor, resumirMotor, hashDoMotor } from './versoes.js';
 
 // O runtime de backend que o portal instala em `/opt/vssh/sdk/node` e que o `vssh-app-run` expõe
@@ -55,7 +57,15 @@ aplicarPolitica(wisp, {
     log('dns_falhou', { hostname, erro: erro?.code || String(erro) });
     metricas.contar('dns_falhas', 1, { erro: /^[A-Z_]{1,32}$/.test(erro?.code || '') ? erro.code : 'outro' });
   },
+  // O endereço vencido serviu porque o resolvedor não respondeu: é o link do servidor, e a conta
+  // separa isso de um nome que não existe.
+  aoServirVelho: (hostname, erro) => {
+    log('dns_vencido_serviu', { hostname, erro: erro?.code || String(erro) });
+    metricas.contar('dns_vencido_serviu', 1);
+  },
 });
+// O fechamento de cada stream leva o motivo que o socket anotou (ver `motivos.js`).
+instalarMotivos(wisp);
 
 const TOKEN = process.env.VSSH_APP_TOKEN || null;
 
@@ -301,10 +311,12 @@ server.on('upgrade', (req, socket, head) => {
     wisp.routeRequest(req, socket, head, {
       TCPSocket: criarSocketTcp({
         nivel,
-        resolver: wisp.options.dns_method,
+        // Lido a cada stream, e não guardado: é o resolvedor com o cache que `aplicarPolitica`
+        // instalou, e uma troca da política vale para as conexões que já estão abertas.
+        resolver: (hostname) => wisp.options.dns_method(hostname),
         aoRecusar: ({ hostname, porta, ip, classe, motivo }) =>
           log('destino-recusado', { hostname, porta, ip, classe, motivo, nivel }),
-        aoDesfecho: (desfecho) => metricas.contar('streams', 1, { desfecho }),
+        aoDesfecho: (desfecho, motivo) => metricas.contar('streams', 1, motivo ? { desfecho, motivo } : { desfecho }),
       }),
     });
   } else {
