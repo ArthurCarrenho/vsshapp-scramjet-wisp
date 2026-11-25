@@ -3,9 +3,10 @@ From: ading2210 <ading2019@gmail.com>
 Date: Tue, 6 Oct 2026 03:13:20 +0000
 Subject: [PATCH 2/2] add CURLOPT_IGNORE_ONION
 
-Rebased onto curl 8.22.0 for vsshapp-scramjet-wisp: the .onion check moved to
-lib/vdns/hostip.c, and option number 329 now belongs to
-CURLOPT_HTTPSIG_ALGORITHM, so the option takes 333.
+Rebased for vsshapp-scramjet-wisp onto curl 8.23.0 with the curl-impersonate
+patch applied first: the .onion check lives in lib/vdns/hostip.c, and the
+option takes 1100, after the curl-impersonate options (1000 and up), so that
+no number of upstream or of curl-impersonate is reused.
 
 ---
  include/curl/curl.h | 3 +++
@@ -16,36 +17,36 @@ CURLOPT_HTTPSIG_ALGORITHM, so the option takes 333.
  5 files changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/include/curl/curl.h b/include/curl/curl.h
-index a3e54a4..88edbff 100644
+index dc0a876..6d76f46 100644
 --- a/include/curl/curl.h
 +++ b/include/curl/curl.h
-@@ -2288,6 +2288,9 @@ typedef enum {
-   /* Space-separated list of components to sign for HTTP Message Signatures */
-   CURLOPT(CURLOPT_HTTPSIG_HEADERS, CURLOPTTYPE_STRINGPOINT, 332),
+@@ -2458,6 +2458,9 @@ typedef enum {
+    * randomized distribution; non-negative values select a fixed number. */
+   CURLOPT(CURLOPT_QUIC_INITIAL_PACKET_NUMBER, CURLOPTTYPE_LONG, 1041),
  
 +  /* allow resolution of .onion urls */
-+  CURLOPT(CURLOPT_IGNORE_ONION, CURLOPTTYPE_LONG, 333),
++  CURLOPT(CURLOPT_IGNORE_ONION, CURLOPTTYPE_LONG, 1100),
 +
    CURLOPT_LASTENTRY /* the last unused */
  } CURLoption;
  
 diff --git a/lib/easyoptions.c b/lib/easyoptions.c
-index 1643ec3..060697a 100644
+index 78a0f2e..264623e 100644
 --- a/lib/easyoptions.c
 +++ b/lib/easyoptions.c
-@@ -149,6 +149,7 @@ const struct curl_easyoption Curl_easyopts[] = {
+@@ -170,6 +170,7 @@ const struct curl_easyoption Curl_easyopts[] = {
      CURLOT_LONG, 0 },
    { "HTTP_VERSION", CURLOPT_HTTP_VERSION, CURLOT_VALUES, 0 },
    { "IGNORE_CONTENT_LENGTH", CURLOPT_IGNORE_CONTENT_LENGTH, CURLOT_LONG, 0 },
 +  { "IGNORE_ONION", CURLOPT_IGNORE_ONION, CURLOT_LONG, 0 },
+   { "IMPERSONATE", CURLOPT_IMPERSONATE, CURLOT_STRING, 0 },
    { "INFILE", CURLOPT_READDATA, CURLOT_CBPTR, CURLOT_FLAG_ALIAS },
    { "INFILESIZE", CURLOPT_INFILESIZE, CURLOT_LONG, 0 },
-   { "INFILESIZE_LARGE", CURLOPT_INFILESIZE_LARGE, CURLOT_OFF_T, 0 },
 diff --git a/lib/setopt.c b/lib/setopt.c
-index 0e15980..2681830 100644
+index 987b518..4bbecec 100644
 --- a/lib/setopt.c
 +++ b/lib/setopt.c
-@@ -697,6 +697,9 @@ static CURLcode setopt_long_bool(struct Curl_easy *data, CURLoption option,
+@@ -785,6 +785,9 @@ static CURLcode setopt_long_bool(struct Curl_easy *data, CURLoption option,
    case CURLOPT_IGNORE_CONTENT_LENGTH:
      s->ignorecl = enabled;
      break;
@@ -53,13 +54,13 @@ index 0e15980..2681830 100644
 +    s->ignore_onion = enabled;
 +    break;
    case CURLOPT_SSL_SESSIONID_CACHE:
-     s->ssl.primary.cache_session = enabled;
+     s->ssl.cache_session = enabled;
  #ifndef CURL_DISABLE_PROXY
 diff --git a/lib/urldata.h b/lib/urldata.h
-index 1c01018..1609f95 100644
+index 9c755bd..826de1a 100644
 --- a/lib/urldata.h
 +++ b/lib/urldata.h
-@@ -1090,6 +1090,7 @@ struct UserDefined {
+@@ -1154,6 +1154,7 @@ struct UserDefined {
    BIT(no_signal);      /* do not use any signal/alarm handler */
    BIT(tcp_nodelay);    /* whether to enable TCP_NODELAY or not */
    BIT(ignorecl);       /* ignore content length */
@@ -68,7 +69,7 @@ index 1c01018..1609f95 100644
                            transfer-encoded (chunked, compressed) */
    BIT(http_ce_skip);   /* pass the raw body data to the user, even when
 diff --git a/lib/vdns/hostip.c b/lib/vdns/hostip.c
-index 8464bd2..af220c4 100644
+index 222e86b..72de895 100644
 --- a/lib/vdns/hostip.c
 +++ b/lib/vdns/hostip.c
 @@ -727,7 +727,7 @@ static CURLcode hostip_resolv(struct Curl_easy *data,
@@ -80,6 +81,3 @@ index 8464bd2..af220c4 100644
       (curl_strequal(&peer->hostname[hostname_len - 6], ".onion") ||
        curl_strequal(&peer->hostname[hostname_len - 7], ".onion."))) {
      failf(data, "Not resolving .onion address (RFC 7686)");
--- 
-2.43.0
-

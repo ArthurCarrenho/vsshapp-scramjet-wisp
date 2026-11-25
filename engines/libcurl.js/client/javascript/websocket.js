@@ -62,6 +62,10 @@ class CurlWebSocket extends CurlSession {
     if (this.options.insecure) {
       request_options.insecure = true;
     }
+    //vssh fork: the curl-impersonate profile, the same key http_set_options reads for HTTP.
+    if (this.options.impersonate) {
+      request_options._vssh_impersonate = this.options.impersonate;
+    }
 
     this.http_handle = this.create_request(this.url, data_callback, finish_callback, headers_callback);
     c_func(_http_set_options, [this.http_handle, JSON.stringify(request_options), null, 0]);

@@ -16,6 +16,7 @@ struct RequestInfo {
   unsigned int tls_verify_flags;
   const char* tls_version;
   const char* tls_cipher;
+  char tls_cipher_buf[96];
   //vssh fork: a frase do curl sobre a falha do pedido (CURLOPT_ERRORBUFFER), que diz a fase em que
   //ele parou ("Failed to connect ... after 15002 ms", "SSL connection timeout") e o código só nomeia
   char error_buffer[CURL_ERROR_SIZE];

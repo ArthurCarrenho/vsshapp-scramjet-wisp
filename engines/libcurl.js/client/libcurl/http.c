@@ -4,7 +4,9 @@
 
 #include "cjson/cJSON.h"
 #include "curl/curl.h"
-#include "mbedtls/ssl.h"
+#include <stdio.h>
+#include "openssl/ssl.h"
+#include "openssl/x509.h"
 
 #include "types.h"
 #include "util.h"
@@ -12,42 +14,78 @@
 //vssh fork: a sessão TLS de um pedido que lê o certificado, guardada no RequestInfo. O curl chama esta
 //função com a conexão pronta e antes de mandar o pedido, e é o único momento garantido em que ela
 //ainda está presa ao pedido: uma resposta pequena termina antes de o JS ler os cabeçalhos, e aí o
-//CURLINFO_TLS_SSL_PTR já não tem sessão. A conferência é a do curl: o perfil `next` do mbedtls (o
-//que o curl configura), as raízes do CA bundle e o nome do host, que o mbedtls casa com os nomes
-//alternativos e os IPs.
+//CURLINFO_TLS_SSL_PTR já não tem sessão. A conferência repete a do curl com o BoringSSL: as raízes do
+//CA bundle, a cadeia que o servidor mandou e o nome do host (ou o IP). O resultado sai nas marcas
+//MBEDTLS_X509_BADCERT_* que o transporte e o shell já leem: 0x01 expirado, 0x02 revogado, 0x04 nome
+//que não casa, 0x08 sem raiz confiável, 0x200 ainda não válido.
+static unsigned int marcas_do_x509(int erro) {
+  switch (erro) {
+    case X509_V_OK: return 0;
+    case X509_V_ERR_CERT_HAS_EXPIRED: return 0x01;
+    case X509_V_ERR_CERT_NOT_YET_VALID: return 0x200;
+    case X509_V_ERR_CERT_REVOKED: return 0x02;
+    case X509_V_ERR_HOSTNAME_MISMATCH:
+    case X509_V_ERR_IP_ADDRESS_MISMATCH: return 0x04;
+    default: return 0x08;
+  }
+}
+
+//O nome da cifra na forma do mbedTLS, que o shell converte para a do Chrome:
+//TLS_AES_128_GCM_SHA256 vira TLS1-3-AES-128-GCM-SHA256, e
+//TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 vira TLS-ECDHE-RSA-WITH-AES-128-GCM-SHA256.
+static void nome_da_cifra(const char* padrao, int tls13, char* saida, size_t tamanho) {
+  const char* resto = strncmp(padrao, "TLS_", 4) == 0 ? padrao + 4 : padrao;
+  snprintf(saida, tamanho, "%s%s", tls13 ? "TLS1-3-" : "TLS-", resto);
+  for (char* c = saida; *c; c++) if (*c == '_') *c = '-';
+}
+
 static int certinfo_prereq(void* clientp, char* primary_ip, char* local_ip, int primary_port, int local_port) {
   CURL* http_handle = (CURL*) clientp;
   struct RequestInfo* request_info = get_request_info(http_handle);
   const struct curl_tlssessioninfo* tls_info = NULL;
   curl_easy_getinfo(http_handle, CURLINFO_TLS_SSL_PTR, &tls_info);
-  if (tls_info == NULL || tls_info->backend != CURLSSLBACKEND_MBEDTLS || tls_info->internals == NULL) {
+  if (tls_info == NULL || tls_info->internals == NULL
+      || (tls_info->backend != CURLSSLBACKEND_OPENSSL && tls_info->backend != CURLSSLBACKEND_BORINGSSL)) {
     return CURL_PREREQFUNC_OK;
   }
-  const mbedtls_ssl_context* ssl = (const mbedtls_ssl_context*) tls_info->internals;
+  SSL* ssl = (SSL*) tls_info->internals;
   request_info->tls_seen = 1;
-  request_info->tls_version = mbedtls_ssl_get_version(ssl);
-  request_info->tls_cipher = mbedtls_ssl_get_ciphersuite(ssl);
+  request_info->tls_version = SSL_get_version(ssl);
+  const SSL_CIPHER* cifra = SSL_get_current_cipher(ssl);
+  if (cifra != NULL) {
+    nome_da_cifra(SSL_CIPHER_standard_name(cifra), SSL_version(ssl) == TLS1_3_VERSION,
+      request_info->tls_cipher_buf, sizeof(request_info->tls_cipher_buf));
+    request_info->tls_cipher = request_info->tls_cipher_buf;
+  }
   request_info->tls_verify_flags = 0xffffffff;
 
-  const mbedtls_x509_crt* peer = mbedtls_ssl_get_peer_cert(ssl);
+  STACK_OF(X509)* cadeia = SSL_get_peer_cert_chain(ssl);
+  X509* folha = cadeia != NULL && sk_X509_num(cadeia) > 0 ? sk_X509_value(cadeia, 0) : NULL;
   char* url = NULL;
   curl_easy_getinfo(http_handle, CURLINFO_EFFECTIVE_URL, &url);
   CURLU* url_handle = curl_url();
   char* host = NULL;
-  if (peer != NULL && url != NULL && url_handle != NULL
+  if (folha != NULL && url != NULL && url_handle != NULL
       && curl_url_set(url_handle, CURLUPART_URL, url, 0) == CURLUE_OK
       && curl_url_get(url_handle, CURLUPART_HOST, &host, 0) == CURLUE_OK) {
-    //um IPv6 vem entre colchetes, e o mbedtls o quer sem eles
+    //um IPv6 vem entre colchetes, e a conferência o quer sem eles
     char* name = host;
     size_t name_len = strlen(name);
     if (name_len > 2 && name[0] == '[' && name[name_len - 1] == ']') {
       name[name_len - 1] = '\0';
       name++;
     }
-    uint32_t flags = 0;
-    mbedtls_x509_crt_verify_with_profile((mbedtls_x509_crt*) peer, (mbedtls_x509_crt*) get_ca_chain(),
-      NULL, &mbedtls_x509_crt_profile_next, name, &flags, NULL, NULL);
-    request_info->tls_verify_flags = flags;
+    X509_STORE_CTX* ctx = X509_STORE_CTX_new();
+    if (ctx != NULL && X509_STORE_CTX_init(ctx, get_ca_store(), folha, cadeia)) {
+      X509_VERIFY_PARAM* param = X509_STORE_CTX_get0_param(ctx);
+      X509_VERIFY_PARAM_set_purpose(param, X509_PURPOSE_SSL_SERVER);
+      if (X509_VERIFY_PARAM_set1_ip_asc(param, name) != 1) {
+        X509_VERIFY_PARAM_set1_host(param, name, strlen(name));
+      }
+      int ok = X509_verify_cert(ctx);
+      request_info->tls_verify_flags = ok == 1 ? 0 : marcas_do_x509(X509_STORE_CTX_get_error(ctx));
+    }
+    X509_STORE_CTX_free(ctx);
   }
   curl_free(host);
   curl_url_cleanup(url_handle);
@@ -57,12 +95,30 @@ static int certinfo_prereq(void* clientp, char* primary_ip, char* local_ip, int 
 void http_set_options(CURL* http_handle, const char* json_params, const char* body, int body_length) {
   struct RequestInfo *request_info = get_request_info(http_handle);
 
+  //vssh fork: a conexão com a cara do navegador que a página diz ser. O curl-impersonate monta o
+  //ClientHello (as cifras, o GREASE, as extensões permutadas, as curvas), os SETTINGS e a janela do
+  //HTTP/2, a ordem dos pseudo-cabeçalhos e a ordem dos cabeçalhos. Com default_headers 0 ele não
+  //acrescenta cabeçalho nenhum: os valores são os da página, e só a ordem é a do navegador. Um site
+  //atrás da Cloudflare compara o user agent com essa impressão, e a diferença entre as duas é o
+  //desafio que volta depois de resolvido. Vem antes dos padrões abaixo, porque o perfil também
+  //escreve o Accept-Encoding e a versão HTTP, e os nossos valem sobre os dele.
+  cJSON* request_json = cJSON_Parse(json_params);
+  cJSON* perfil = cJSON_GetObjectItemCaseSensitive(request_json, "_vssh_impersonate");
+  if (cJSON_IsString(perfil) && perfil->valuestring[0]) {
+    //O curl_easy_impersonate aplica o perfil opção por opção e para na primeira que o build não
+    //tem, deixando as seguintes de fora em silêncio. O aviso no console é o que separa "o perfil
+    //está de pé" de "metade dele está".
+    CURLcode r = curl_easy_impersonate(http_handle, perfil->valuestring, 0);
+    if (r != CURLE_OK) {
+      fprintf(stderr, "libcurl.js: o perfil %s não foi aplicado inteiro: %s\n", perfil->valuestring, curl_easy_strerror(r));
+    }
+  }
+
   //some default options
   curl_easy_setopt(http_handle, CURLOPT_FOLLOWLOCATION, 1);
   //vssh fork: as codificações que o wasm decodifica, na ordem em que o Chrome as anuncia. O "" do
-  //upstream deixa o curl montar a lista, que sai como "deflate, gzip, br", uma ordem que nenhum
-  //navegador manda. O zstd do Chrome fica de fora porque o wasm não o decodifica.
-  curl_easy_setopt(http_handle, CURLOPT_ACCEPT_ENCODING, "gzip, deflate, br");
+  //upstream deixa o curl montar a lista numa ordem que nenhum navegador manda.
+  curl_easy_setopt(http_handle, CURLOPT_ACCEPT_ENCODING, "gzip, deflate, br, zstd");
   //vssh fork: CURL_HTTP_VERSION_2TLS (h2 for HTTPS, HTTP/1.1 for cleartext) instead of
   //CURL_HTTP_VERSION_2_0. Forcing 2_0 on http:// makes curl attempt an h2c upgrade
   //(Upgrade: h2c header). Node http servers (e.g. Vite/Astro dev) route any request with an
@@ -98,7 +154,6 @@ void http_set_options(CURL* http_handle, const char* json_params, const char* bo
   curl_easy_setopt(http_handle, CURLOPT_CONNECTTIMEOUT_MS, 15000L);
 
   //parse json options
-  cJSON* request_json = cJSON_Parse(json_params);
   cJSON* item = NULL;
   struct curl_slist* headers_list = NULL;
 

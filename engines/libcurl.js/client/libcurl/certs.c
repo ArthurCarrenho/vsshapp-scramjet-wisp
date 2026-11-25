@@ -2,8 +2,8 @@
 #include <string.h>
 
 #include "curl/curl.h"
-#include "mbedtls/base64.h"
-#include "mbedtls/x509_crt.h"
+#include "openssl/base64.h"
+#include "openssl/x509.h"
 
 #include "cacert.h"
 
@@ -41,8 +41,7 @@ void generate_pem() {
     strcpy((char*) (cacert_pem + offset), begin_cert_str);
     offset += begin_cert_len;
 
-    size_t olen;
-    mbedtls_base64_encode(cacert_pem + offset, b64_len+1, &olen, cert, cert_len);
+    EVP_EncodeBlock(cacert_pem + offset, cert, cert_len);
     offset += b64_len;
 
     strcpy((char*) (cacert_pem + offset), end_cert_str);
@@ -60,19 +59,21 @@ void init_curl() {
   cacert_blob.len = cacert_pem_len;
   cacert_blob.flags = CURL_BLOB_NOCOPY;
 }
-//vssh fork: as raízes do CA bundle como cadeia do mbedtls, para o http_get_info conferir o
-//certificado de um site contra as mesmas raízes que o curl usa. Lidas uma vez, na primeira
-//conferência, e guardadas: são ~150 certificados, e a página só pede quando alguém abre a folha.
-static mbedtls_x509_crt ca_chain;
-static int ca_chain_ready = 0;
+//vssh fork: as raízes do CA bundle como um X509_STORE, para o http_get_info conferir o certificado de
+//um site contra as mesmas raízes que o curl usa. Lidas uma vez, na primeira conferência, e guardadas:
+//são ~150 certificados, e a página só pede quando alguém abre a folha.
+static X509_STORE* ca_store = NULL;
 
-const mbedtls_x509_crt* get_ca_chain() {
-  if (!ca_chain_ready) {
-    mbedtls_x509_crt_init(&ca_chain);
+X509_STORE* get_ca_store() {
+  if (ca_store == NULL) {
+    ca_store = X509_STORE_new();
     for (int i = 0; i < _cert_count; i++) {
-      mbedtls_x509_crt_parse_der(&ca_chain, _certs[i], _cert_lengths[i]);
+      const unsigned char* der = _certs[i];
+      X509* cert = d2i_X509(NULL, &der, _cert_lengths[i]);
+      if (cert == NULL) continue;
+      X509_STORE_add_cert(ca_store, cert);
+      X509_free(cert);
     }
-    ca_chain_ready = 1;
   }
-  return &ca_chain;
+  return ca_store;
 }

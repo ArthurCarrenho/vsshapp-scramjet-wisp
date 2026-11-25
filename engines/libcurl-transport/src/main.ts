@@ -83,14 +83,48 @@ export const WISP_REASONS: Record<number, string> = {
 };
 
 // vssh fork: what certificateOf() answers. `certs` are the PEMs the server sent, from the leaf on;
-// `verifyFlags` are mbedtls' MBEDTLS_X509_BADCERT_* flags for that chain against the CA bundle and
-// the host name, and 0 means it verifies.
+// `verifyFlags` are the MBEDTLS_X509_BADCERT_* bits (libcurl.js maps BoringSSL's verify result onto
+// them, since the shell reads these bits) for that chain against the CA bundle and the host name,
+// and 0 means it verifies.
 export type CertificateReport = {
   verified: boolean;
   verifyFlags: number;
   certs: string[];
   tls: { version?: string; cipher?: string };
 };
+// vssh fork: the curl-impersonate profile for the browser a request says it comes from. Cloudflare
+// and the other bot screens compare the User-Agent with the TLS ClientHello and the HTTP/2 frames,
+// and a Chrome User-Agent over a connection that looks like curl is the challenge that comes back
+// after it is solved. The profile gives the connection the shape of that browser family; the header
+// values stay the page's own. An agent none of these match keeps curl's own connection.
+export function browserProfile(userAgent: string | undefined): string | undefined {
+  const ua = userAgent || "";
+  if (/Firefox\//.test(ua)) return "firefox155";
+  if (/Chrome\/|Chromium\/|CriOS\/|Edg\//.test(ua)) return /Android/.test(ua) ? "chrome131_android" : "chrome152";
+  if (/Safari\//.test(ua) && /Version\//.test(ua)) return /iPhone|iPad|iPod/.test(ua) ? "safari270_ios" : "safari270";
+  return undefined;
+}
+
+function headerOf(headers: Record<string, string>, name: string): string | undefined {
+  for (const k in headers) if (k.toLowerCase() === name) return headers[k];
+  return undefined;
+}
+
+function userAgentOf(headers: Record<string, string>): string | undefined {
+  return headerOf(headers, "user-agent");
+}
+
+// vssh fork: the `priority` header a browser sends on a navigation. The page never sees it (the
+// browser adds it below fetch), so it does not reach the transport, and a navigation without it
+// is one more mark of a client that is not the browser it claims to be. The value is the one
+// Chrome, Firefox and Safari send for a top-level document or a frame.
+function withNavigationPriority(headers: Record<string, string>): Record<string, string> {
+  const destino = headerOf(headers, "sec-fetch-dest");
+  if ((destino === "document" || destino === "iframe") && headerOf(headers, "priority") === undefined)
+    return { ...headers, priority: "u=0, i" };
+  return headers;
+}
+
 export default class LibcurlClient implements ProxyTransport {
   session: any;
   wisp: string;
@@ -307,6 +341,8 @@ export default class LibcurlClient implements ProxyTransport {
     for (let [key, value] of headers) {
       headersObj[key] = value;
     }
+    const perfil = browserProfile(userAgentOf(headersObj));
+    if (perfil) headersObj = withNavigationPriority(headersObj);
     const inicio = Date.now();
     let payload;
     try {
@@ -317,6 +353,7 @@ export default class LibcurlClient implements ProxyTransport {
         redirect: "manual",
         signal: signal,
         insecure: this.insecure || this.insecureHosts.has(remote.host.toLowerCase()),
+        _vssh_impersonate: perfil,
         ...(this.connectTimeoutMs ? { _vssh_connect_timeout_ms: this.connectTimeoutMs } : {}),
       });
     } catch (e: any) {
@@ -358,6 +395,7 @@ export default class LibcurlClient implements ProxyTransport {
     let socket = new libcurl.WebSocket(url.toString(), protocols, {
       headers: headersObj,
       insecure: this.insecure || this.insecureHosts.has(url.host.toLowerCase()),
+      impersonate: browserProfile(userAgentOf(headersObj)),
     });
 
     socket.binaryType = "arraybuffer";
