@@ -72,8 +72,14 @@ test('o metadata da nuvem e o 0.0.0.0 fecham na hora, em qualquer nível, sem te
   } finally {
     cliente.fechar();
   }
-  const eventos = readFileSync(`${srv.dados}/app.log`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  const recusa = eventos.find((e) => Object.values(e).includes('destino-recusado') && e.ip === '169.254.169.254');
+  // O fechamento chega ao cliente pelo WebSocket, e a linha do log é gravada pelo outro processo, no
+  // tempo dele: o fechamento pode chegar antes dela.
+  let eventos = [];
+  let recusa;
+  for (const fim = Date.now() + 3000; !recusa && Date.now() < fim; await new Promise((ok) => setTimeout(ok, 50))) {
+    eventos = readFileSync(`${srv.dados}/app.log`, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    recusa = eventos.find((e) => Object.values(e).includes('destino-recusado') && e.ip === '169.254.169.254');
+  }
   assert.equal(recusa?.motivo, 'endereco_proibido', JSON.stringify(eventos));
 });
 
