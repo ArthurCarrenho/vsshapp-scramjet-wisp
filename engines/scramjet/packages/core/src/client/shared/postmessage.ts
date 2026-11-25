@@ -151,11 +151,45 @@ export default function (client: ScramjetClient, self: Self) {
 			};
 		},
 	});
+	// vssh fork: o rewriter troca `x.postMessage(...)` por `$wrappostmessage(x).postMessage(...)`,
+	// e esta função roda no realm de quem chama. O `postMessage` do alvo é o do realm dele, e com
+	// os argumentos todos strings o envelope acima não tem objeto de quem chama para achar o realm:
+	// cai no `{}` do próprio envelope e manda a origem do ALVO. O iframe do DataDome manda o cookie
+	// aprovado assim, `parent.postMessage(JSON.stringify(...), "*")`; a página o recebia com a
+	// origem dela mesma, o `c.js` recusava a origem, e o captcha aprovado voltava ao desafio.
+	//
+	// O objeto deste realm vai no alvo como o `POLLUTANT` durante a chamada, e sai em seguida: um
+	// `postMessage` chamado depois sem passar por aqui não herda o realm de quem chamou antes.
 	Object_defineProperty(self, client.config.globals.wrappostmessagefn, {
 		value: function (obj: any) {
 			if (!obj || typeof obj.postMessage !== "function") return obj;
+			const doRealm = {};
 			return {
-				postMessage: obj.postMessage.bind(obj),
+				postMessage(...args: any[]) {
+					let marcou = false;
+					try {
+						Object_defineProperty(obj, POLLUTANT, {
+							value: doRealm,
+							writable: false,
+							configurable: true,
+							enumerable: false,
+						});
+						marcou = true;
+					} catch {
+						// um alvo que não aceita a propriedade fica com a origem que o envelope achar
+					}
+					try {
+						return obj.postMessage(...args);
+					} finally {
+						if (marcou) {
+							try {
+								delete obj[POLLUTANT];
+							} catch {
+								// idem
+							}
+						}
+					}
+				},
 			};
 		},
 		configurable: false,
