@@ -13,8 +13,22 @@ function makeId(): string {
 // no tema do ambiente, com a ação de cada causa. O resto do documento é para quem o abrir sem esse
 // shell: português, fundo escuro e o detalhe técnico num `<details>`.
 //
-// A causa sai do código do libcurl (CURLE_*), que o transporte põe na mensagem ("error code N").
-// Um erro sem código, que não é de rede, é do próprio motor.
+// A causa sai do motivo com que o servidor wisp fechou a conexão, quando o transporte o anexa à
+// mensagem ("[wisp 0x42]"), e senão do código do libcurl (CURLE_*), que o transporte põe na
+// mensagem ("error code N"). O motivo vem primeiro porque é o servidor quem sabe por que a conexão
+// não abriu: para o libcurl um nome que não resolveu, um destino barrado pela régua e um servidor
+// mudo são todos o código 7. Um erro sem código, que não é de rede, é do próprio motor.
+const CAUSA_DO_MOTIVO_WISP: Record<number, string> = {
+	0x03: "rede",
+	0x42: "dns",
+	0x43: "tempo",
+	0x44: "recusa",
+	0x48: "rede_bloqueada",
+	0x49: "limite",
+	0x61: "link",
+	0x90: "rede",
+};
+
 const CAUSA_DO_CODIGO: Record<number, string> = {
 	5: "dns", 6: "dns",
 	7: "recusa",
@@ -29,6 +43,9 @@ const TEXTO_DA_CAUSA: Record<string, (host: string) => { titulo: string; frase: 
 	tempo: (h) => ({ titulo: `${h} não respondeu a tempo`, frase: "O servidor demorou demais para responder." }),
 	tls: (h) => ({ titulo: `Certificado inválido em ${h}`, frase: "O certificado do site não pôde ser validado." }),
 	rede: (h) => ({ titulo: `A conexão com ${h} caiu`, frase: "A conexão foi interrompida antes de a página chegar." }),
+	link: (h) => ({ titulo: `${h} não abriu: a conexão do ambiente está instável`, frase: "O servidor do ambiente está perdendo pacotes. Tente de novo em instantes." }),
+	rede_bloqueada: (h) => ({ titulo: `${h} fica fora da rede deste ambiente`, frase: "O servidor do ambiente não abre conexões para este endereço." }),
+	limite: (h) => ({ titulo: `Conexões demais abertas para abrir ${h}`, frase: "Feche abas que não estão em uso e tente de novo." }),
 	motor: (h) => ({ titulo: `O motor de navegação não abriu ${h}`, frase: "O motor falhou ao processar o pedido." }),
 };
 
@@ -53,14 +70,17 @@ function renderErrorPage(error: Error, rawUrl: string, prefixo: string, deRede: 
 	const message = error?.message || String(error ?? "");
 	const codeMatch = /error code (\d+)/i.exec(message);
 	const codigo = codeMatch ? parseInt(codeMatch[1], 10) : null;
-	const causa = (codigo !== null && CAUSA_DO_CODIGO[codigo]) || (deRede ? "rede" : "motor");
+	const wispMatch = /\[wisp 0x([0-9a-f]{2})\]/i.exec(message);
+	const wisp = wispMatch ? parseInt(wispMatch[1], 16) : null;
+	const causa = (wisp !== null && CAUSA_DO_MOTIVO_WISP[wisp])
+		|| (codigo !== null && CAUSA_DO_CODIGO[codigo]) || (deRede ? "rede" : "motor");
 
 	const url = urlRealDe(rawUrl, prefixo);
 	let host = "";
 	try { host = url ? new URL(url).host : ""; } catch { /* sem host */ }
 	const { titulo, frase } = TEXTO_DA_CAUSA[causa](host || "o site");
 
-	const dado = { vsshErroDeNavegacao: 1, causa, url, host, codigo, detalhe: message };
+	const dado = { vsshErroDeNavegacao: 1, causa, url, host, codigo, ...(wisp !== null ? { wisp } : {}), detalhe: message };
 	// `<` vira `\u003c` dentro do JSON: um `</script>` no detalhe fecharia o bloco.
 	const json = JSON.stringify(dado).replace(/</g, "\\u003c");
 	const esc = (s: string) =>
