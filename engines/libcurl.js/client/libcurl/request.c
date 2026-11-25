@@ -43,8 +43,10 @@ CURL* create_request(const char* url, int request_id, DataCallback data_callback
   request_info->tls_verify_flags = 0;
   request_info->tls_version = NULL;
   request_info->tls_cipher = NULL;
+  request_info->error_buffer[0] = '\0';
 
   curl_easy_setopt(http_handle, CURLOPT_PRIVATE, request_info);
+  curl_easy_setopt(http_handle, CURLOPT_ERRORBUFFER, request_info->error_buffer);
   curl_easy_setopt(http_handle, CURLOPT_URL, url);
   curl_easy_setopt(http_handle, CURLOPT_CAINFO_BLOB, cacert_blob);
 
@@ -94,6 +96,13 @@ void finish_request(CURLMsg *curl_msg) {
     curl_slist_free_all(request_info->headers_list);
   }
   (*request_info->end_callback)(request_info->request_id, error);
+}
+
+//vssh fork: a frase do curl sobre a falha, viva até o request_cleanup. O JS a lê com UTF8ToString e
+//não a libera: ela mora no RequestInfo.
+const char* request_get_error_detail(CURL* http_handle) {
+  struct RequestInfo *request_info = get_request_info(http_handle);
+  return request_info->error_buffer;
 }
 
 void request_set_proxy(CURL* http_handle, const char* proxy_url) {

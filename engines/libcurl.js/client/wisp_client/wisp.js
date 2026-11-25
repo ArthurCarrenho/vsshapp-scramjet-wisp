@@ -47,6 +47,21 @@ function create_packet(packet_type, stream_id, payload) {
   return packet;
 }
 
+//vssh fork: o último motivo de fechamento com erro por "host:porta", com a hora. É pequeno de
+//propósito: o transporte só pergunta pelo pedido que acabou de falhar.
+const _motivos_de_fechamento = new Map();
+function guardar_motivo(hostname, port, reason) {
+  const chave = `${String(hostname).toLowerCase()}:${port}`;
+  _motivos_de_fechamento.delete(chave);
+  _motivos_de_fechamento.set(chave, { reason, at: Date.now() });
+  if (_motivos_de_fechamento.size > 256) _motivos_de_fechamento.delete(_motivos_de_fechamento.keys().next().value);
+}
+//o motivo guardado para host e porta desde `since` (Date.now()), ou null
+function reason_of(hostname, port, since = 0) {
+  const r = _motivos_de_fechamento.get(`${String(hostname).toLowerCase()}:${port}`);
+  return r && r.at >= since ? r.reason : null;
+}
+
 class WispStream extends EventTarget {
   constructor(hostname, port, websocket, buffer_size, stream_id, connection, stream_type) {
     super();
@@ -103,6 +118,9 @@ class WispConnection extends EventTarget {
     this.connected = false;
     this.connecting = false;
     this.next_stream_id = 1;
+    // vssh fork: quando chegou o último pacote, em performance.now(). Um WebSocket que entregou há
+    // pouco está vivo, e quem quer saber não precisa mandar nada por um link que pode estar lento.
+    this.last_packet_at = 0;
 
     if (!this.wisp_url.endsWith("/")) {
       throw "wisp endpoints must end with a trailing forward slash";
@@ -138,6 +156,11 @@ class WispConnection extends EventTarget {
   }
 
   close_stream(stream, reason) {
+    // vssh fork: o motivo de uma stream que fechou com erro antes de receber dados fica guardado
+    // por host e porta, para o transporte o anexar à falha do pedido (`reason_of`). 0x02 é o fim
+    // normal; uma stream que já recebeu dados terminou o que veio buscar ou caiu no meio, e aí o
+    // pedido falha pelo corpo, e não pela conexão.
+    if (reason !== 0x02 && !stream.received_data) guardar_motivo(stream.hostname, stream.port, reason);
     let close_event = new CloseEvent("close", { code: reason });
     stream.open = false;
     stream.dispatchEvent(close_event);
@@ -147,8 +170,11 @@ class WispConnection extends EventTarget {
   on_ws_close() {
     this.connected = false;
     this.connecting = false;
+    // vssh fork: 0x90 é deste cliente, e diz que a stream caiu porque o WebSocket do wisp fechou
+    // debaixo dela. O servidor não chegou a dizer nada, e o transporte separa isso de um 0x03 que o
+    // servidor mandou.
     for (let stream_id of Object.keys(this.active_streams)) {
-      this.close_stream(this.active_streams[stream_id], 0x03);
+      this.close_stream(this.active_streams[stream_id], 0x90);
     }
   }
 
@@ -179,6 +205,7 @@ class WispConnection extends EventTarget {
       return;
     }
 
+    this.last_packet_at = performance.now();
     let packet_type = packet[0];
     let stream_id = uint_from_array(packet.slice(1, 5));
     let payload = packet.slice(5);
@@ -190,6 +217,7 @@ class WispConnection extends EventTarget {
     }
 
     if (packet_type === packet_types.DATA) { //DATA packets
+      stream.received_data = true;
       let msg_event = new MessageEvent("message", { data: payload });
       stream.dispatchEvent(msg_event);
     }

@@ -71,9 +71,16 @@ class HTTPSession extends CurlSession {
           // fetch() de um navegador de verdade (a promise rejeita, sem log de framework). Uma URL
           // morta/host bloqueado é normal e não deve poluir o console. Ligue globalThis.
           // __VSSH_WISP_VERBOSE para ver a falha crua do libcurl aqui ao depurar.
+          // vssh fork: a frase do curl vai junto, entre parênteses, quando ele a escreveu. Ela diz
+          // a fase em que o pedido parou, que o código não diz: o 28 de uma conexão que não subiu
+          // ("Failed to connect ... after 15002 ms") e o de um handshake TLS que não terminou
+          // ("SSL connection timeout") são o mesmo número.
+          let detalhe = "";
+          try { detalhe = UTF8ToString(_request_get_error_detail(http_handle)); } catch (e) {}
+          const frase = `Request failed with error code ${error}: ${get_error_str(error)}` + (detalhe ? ` (${detalhe})` : "");
           if (globalThis.__VSSH_WISP_VERBOSE)
-            error_msg(`Request "${url}" failed with error code ${error}: ${get_error_str(error)}`);
-          reject(new TypeError(`Request failed with error code ${error}: ${get_error_str(error)}`));
+            error_msg(`Request "${url}": ${frase}`);
+          reject(new TypeError(frase));
         }
         else if (error === -1) {
           reject(new DOMException("The operation was aborted."));

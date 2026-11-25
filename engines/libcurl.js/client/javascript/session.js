@@ -196,8 +196,18 @@ class CurlSession {
         headers_callback(stream);
       }
 
+      // vssh fork: um pedido que falha depois dos cabeçalhos (a conexão que cai no meio do corpo,
+      // o prazo que estoura) erra o corpo, como o fetch de um navegador. Fechá-lo normalmente
+      // entregava à página um corpo cortado como se estivesse inteiro: um script truncado que
+      // quebra em silêncio, uma imagem pela metade, um download menor que o arquivo, e o cache de
+      // páginas guardando a metade como a resposta.
       try {
-        stream_controller.close();
+        if (error > 0 && headers_received) {
+          stream_controller.error(new TypeError(`Request failed with error code ${error}: ${get_error_str(error)}`));
+        }
+        else {
+          stream_controller.close();
+        }
       }
       catch {}
       end_callback(error);
