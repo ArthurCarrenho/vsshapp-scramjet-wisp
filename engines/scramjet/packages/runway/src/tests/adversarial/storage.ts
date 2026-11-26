@@ -138,7 +138,7 @@ export default [
 
 	// ------------------------------------------------------------------
 	storageTest(
-		// KNOWN FAILURE: key(i) returns the stored *value* instead of the key.
+		// key(i) returns the key, and null past the end.
 		// `for (let i = 0; i < localStorage.length; i++) localStorage.key(i)` is
 		// the canonical way to enumerate storage.
 		"storage-key-by-index",
@@ -154,7 +154,7 @@ export default [
 		`
 	),
 	storageTest(
-		// KNOWN FAILURE: `delete storage.foo` does not remove the entry.
+		// `delete storage.foo` removes the entry.
 		"storage-delete-property",
 		"sd:",
 		`
@@ -165,9 +165,8 @@ export default [
 		`
 	),
 	basicTest({
-		// KNOWN FAILURE: clear() is a no-op - length, getItem, key(i) and
-		// Object.keys all still report every entry afterwards. Logout and
-		// "reset my settings" flows depend on it.
+		// clear() empties the area: length, getItem and Object.keys agree.
+		// Logout and "reset my settings" flows depend on it.
 		name: "storage-clear",
 		js: `
 			localStorage.setItem("clear-a", "1");
@@ -180,9 +179,7 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: a missing key read as a property yields null instead of
-		// undefined, so `storage.foo === undefined` and `typeof storage.foo`
-		// checks take the wrong branch.
+		// A missing key read as a property is undefined, and getItem answers null.
 		name: "storage-missing-property-is-undefined",
 		js: `
 			assertEqual(localStorage["definitely-absent-key"], undefined, "a missing property is undefined");
@@ -202,9 +199,8 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: no storage event is delivered to other same-origin
-		// documents at all. Tabs and frames use it to stay in sync - propagating
-		// a logout, an auth-token refresh, a theme change - and none of that fires.
+		// A storage event reaches the other same-origin documents. Tabs and frames
+		// use it to stay in sync: a logout, an auth-token refresh, a theme change.
 		name: "storage-event-child-frame",
 		js: `
 			const f = document.createElement("iframe");
@@ -223,7 +219,7 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: same in the other direction.
+		// The same in the other direction.
 		name: "storage-event-parent-listens",
 		js: `
 			const f = document.createElement("iframe");

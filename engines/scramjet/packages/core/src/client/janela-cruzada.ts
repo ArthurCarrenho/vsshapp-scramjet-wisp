@@ -27,7 +27,7 @@ const vistasPorCliente = new _WeakMap<ScramjetClient, WeakMap<object, any>>();
 const reais = new _WeakMap<object, Window>();
 
 /** A origem que o site vê numa janela do motor, ou `null` quando ela ainda não tem cliente. */
-function origemDe(janela: any): string | null {
+export function origemDe(janela: any): string | null {
 	let atual = janela;
 	for (let i = 0; i < 32 && atual; i++) {
 		let cliente: ScramjetClient | undefined;
