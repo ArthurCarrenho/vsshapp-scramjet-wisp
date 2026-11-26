@@ -369,6 +369,7 @@ export class Controller {
 					referrer: data.referrer,
 					body: data.body,
 					cache: data.cache,
+					credentials: data.credentials,
 					clientId: data.clientId,
 				});
 

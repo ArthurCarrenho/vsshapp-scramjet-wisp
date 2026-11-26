@@ -23,6 +23,12 @@ export interface ScramjetFetchRequest {
 	method: string;
 	body: BodyType | null;
 	cache: RequestCache;
+	/**
+	 * O modo de credenciais do pedido como a página o pediu: o atributo `crossorigin` de um elemento
+	 * ou o `credentials` de um fetch. O endereço reescrito é da mesma origem do motor, e o valor só
+	 * diz o modo.
+	 */
+	credentials?: RequestCredentials;
 
 	initialHeaders: ScramjetHeaders;
 
@@ -101,6 +107,8 @@ export type TrackedHistoryState = {
 };
 export class ScramjetFetchTrackedClient {
 	history: TrackedHistoryState[] = [];
+	/** vssh fork: o site de cima do documento, `esquema//domínio registrável` (ver `fetch/headers.ts`). */
+	sitioDoTopo?: string;
 	constructor(public clientId: string) {}
 }
 

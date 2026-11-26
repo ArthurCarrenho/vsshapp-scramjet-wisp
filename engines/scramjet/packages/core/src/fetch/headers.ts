@@ -335,11 +335,17 @@ export function rewriteRequestHeaders(
 		if (!metodoSimples || corsDeFora) headers.set("Origin", originUrl.origin);
 		else headers.delete("Origin");
 
-		const referer = createReferrerString(
-			originUrl,
-			parsed.url,
-			parsed.referrerPolicy ?? null
-		);
+		// vssh fork: um pedido que a página fez sem referenciador (`referrerPolicy: "no-referrer"`,
+		// `referrer: ""`) chega ao service worker com `referrer` vazio, e sai sem `Referer`. O de um
+		// worker de blob: ou de um documento de blob: ou data: também, porque um endereço de
+		// esquema local não vira referenciador (https://w3c.github.io/webappsec-referrer-policy/#determine-requests-referrer).
+		const semReferenciador =
+			(parsed.referrerSourceUrl === undefined && request.referrer === "") ||
+			originUrl.protocol === "blob:" ||
+			originUrl.protocol === "data:";
+		const referer = semReferenciador
+			? null
+			: createReferrerString(originUrl, parsed.url, parsed.referrerPolicy ?? null);
 		if (referer) headers.set("Referer", referer);
 	}
 
@@ -350,7 +356,11 @@ export function rewriteRequestHeaders(
 		sameSiteContext
 	);
 
-	if (cookies.length) {
+	// vssh fork: os cookies vão só quando o modo de credenciais do pedido os leva: `include`, ou
+	// `same-origin` para a mesma origem de quem pede. Um `<script crossorigin>` de outro site ou um
+	// `fetch` com `credentials: "omit"` sai sem eles, como no Chrome.
+	headers.delete("Cookie");
+	if (cookies.length && levaCredenciais(request, parsed, originUrl)) {
 		headers.set("Cookie", cookies);
 	}
 
@@ -371,11 +381,45 @@ export function rewriteRequestHeaders(
 		originUrl ? originUrl.origin : null
 	);
 
+	// vssh fork: o `Cache-Control` e o `Pragma` que o Chrome escreve a partir do modo de cache do
+	// pedido, na pilha de rede, depois do service worker: `no-cache` e `max-age=0` numa leitura que
+	// revalida (o `cache: "no-cache"` de um fetch, o envio de um formulário), e `no-cache` nos dois
+	// quando o cache fica de fora. O `Cache-Control` vai na frente dos outros, como no Chrome.
+	if (!headers.has("cache-control")) {
+		let controle: string | null = null;
+		if (request.cache === "no-store" || request.cache === "reload") {
+			controle = "no-cache";
+			if (!headers.has("pragma")) headers.set("Pragma", "no-cache");
+		} else if (
+			request.cache === "no-cache" ||
+			(request.method === "POST" && computeFetchMode(request, parsed) === "navigate")
+		) {
+			controle = "max-age=0";
+		}
+		if (controle) headers.headers = { "cache-control": controle, ...headers.headers };
+	}
+
 	const prioridade = prioridadeDe(parsed);
 	headers.delete("priority");
 	if (prioridade && parsed.url.protocol === "https:") headers.set("Priority", prioridade);
 
 	return headers;
+}
+
+function levaCredenciais(
+	request: ScramjetFetchRequest,
+	parsed: ScramjetFetchParsed,
+	originUrl: URL | undefined
+): boolean {
+	if (parsed.fetchCredentialsInclude) return true;
+	switch (request.credentials) {
+		case "omit":
+			return false;
+		case "same-origin":
+			return !originUrl || originUrl.origin === parsed.url.origin;
+		default:
+			return true;
+	}
 }
 
 /**
@@ -518,18 +562,47 @@ function applyFetchMetadataHeaders(
 		headers.set("Sec-Fetch-User", "?1");
 	}
 
-	// Sec-Fetch-Storage-Access: per https://privacycg.github.io/storage-access-headers/.
-	// Sent on cross-site credentialed requests so the destination knows whether
-	// unpartitioned storage access has been granted. We never grant storage
-	// access through the proxy, so the value is always "none" when sent.
+	// Sec-Fetch-Storage-Access (https://privacycg.github.io/storage-access-headers/) vai num pedido
+	// com credenciais a outro site. `event.request.credentials` no service worker não é confiável, e
+	// o motor decide pelo `sj$cred` que a página marca e pelo padrão de cada destino. Ele manda os
+	// cookies sem partição, como o Chrome com os cookies de terceiros liberados, que é o padrão dele
+	// no desktop, e o valor é o do Chrome nesse caso: `active`.
 	//
-	// `event.request.credentials` inside a service worker isn't reliable, so we
-	// rely on signals propagated from the page (the `sj$cred` URL param set by
-	// the client-side fetch proxy) plus destination-based defaults for request
-	// types that always include credentials.
-	if (site === "cross-site" && requestIncludesCredentials(request, parsed)) {
-		headers.set("Sec-Fetch-Storage-Access", "none");
+	// O contexto é o do site de cima: um pedido de um quadro de outro site à própria origem leva o
+	// cabeçalho também. O site de cima de cada documento fica guardado no cliente dele quando a
+	// navegação passa por aqui; quando o motor não o conhece, vale a relação com quem pede.
+	const topo = sitioDoTopo(parsed, initiatorUrl);
+	const deTerceiro =
+		topo !== null
+			? topo !== `${parsed.url.protocol}//${registrableDomain(parsed.url.hostname)}`
+			: site === "cross-site";
+	if (deTerceiro && requestIncludesCredentials(request, parsed)) {
+		headers.set("Sec-Fetch-Storage-Access", "active");
 	}
+}
+
+/**
+ * vssh fork: o site de cima do documento que faz o pedido, `esquema//domínio registrável`. Uma
+ * navegação de nível de cima é o próprio site; a de um quadro herda o do documento que o abre, e
+ * na falta dele o site desse documento.
+ */
+function sitioDoTopo(parsed: ScramjetFetchParsed, iniciador: URL | undefined): string | null {
+	const sitio = (u: URL) => `${u.protocol}//${registrableDomain(u.hostname)}`;
+	const cliente = parsed.trackedClient;
+	if (parsed.destination === "document" || (parsed.destination === "iframe" && !parsed.isIframe)) {
+		const topo = sitio(parsed.url);
+		if (cliente) cliente.sitioDoTopo = topo;
+
+		return topo;
+	}
+	if (parsed.destination === "iframe" || parsed.destination === "frame") {
+		const topo = iniciador ? sitio(iniciador) : null;
+		if (cliente && topo) cliente.sitioDoTopo = topo;
+
+		return topo;
+	}
+
+	return cliente?.sitioDoTopo ?? null;
 }
 
 /**
@@ -552,6 +625,7 @@ function requestIncludesCredentials(
 	parsed: ScramjetFetchParsed
 ): boolean {
 	if (parsed.fetchCredentialsInclude) return true;
+	if (request.credentials) return request.credentials === "include";
 	const dest = parsed.destination;
 	// fetch(): destination is "" (empty). XHR / report: destination is
 	// "report". Both default to credentials="same-origin", so cross-site
