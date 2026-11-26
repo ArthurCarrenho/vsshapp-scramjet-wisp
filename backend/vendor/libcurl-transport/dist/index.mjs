@@ -5813,7 +5813,7 @@ function headerOf(headers, name) {
   return void 0;
 }
 function userAgentOf(headers) {
-  return headerOf(headers, "user-agent");
+  return headerOf(headers, "user-agent") ?? globalThis.navigator?.userAgent;
 }
 function withNavigationPriority(headers) {
   const destino = headerOf(headers, "sec-fetch-dest");

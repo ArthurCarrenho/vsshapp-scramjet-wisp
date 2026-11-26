@@ -110,8 +110,13 @@ function headerOf(headers: Record<string, string>, name: string): string | undef
   return undefined;
 }
 
+// The User-Agent the request will leave with. A service worker never sees the browser's own
+// User-Agent among a request's headers (the network layer adds it below fetch), so most requests
+// reach the transport without one, and libcurl.js fills in navigator.userAgent on its own side. The
+// profile has to follow the same value, or those requests would leave with curl's ClientHello under
+// a Chrome User-Agent.
 function userAgentOf(headers: Record<string, string>): string | undefined {
-  return headerOf(headers, "user-agent");
+  return headerOf(headers, "user-agent") ?? (globalThis as any).navigator?.userAgent;
 }
 
 // vssh fork: the `priority` header a browser sends on a navigation. The page never sees it (the
