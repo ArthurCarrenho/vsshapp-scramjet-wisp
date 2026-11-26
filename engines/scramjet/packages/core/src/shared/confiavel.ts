@@ -20,38 +20,53 @@ export const POLITICA_DO_MOTOR = "scramjet";
 
 export type TipoConfiavel = "TrustedScript" | "TrustedHTML" | "TrustedScriptURL";
 
-const politicas = new WeakMap<object, any>();
+const politicas = new WeakMap<object, { politica: any; identidade: unknown }>();
 const exigidos = new WeakSet<object>();
 
 // A política mora no global, sob um símbolo compartilhado: o realm de um quadro filho pode ter o
-// cliente instalado pelo motor do pai e depois carregar o próprio, e a segunda criação com o mesmo
-// nome falha quando a CSP do site não traz 'allow-duplicates'.
+// cliente instalado pelo motor do pai e depois carregar o próprio, e os dois usam a mesma.
 const POLITICA_NO_GLOBAL = Symbol.for("scramjet trusted types policy");
 
 function politicaDe(client: ScramjetClient): any {
 	const global = client.global as any;
-	if (politicas.has(global)) return politicas.get(global);
+	let identidade: unknown;
+	try {
+		identidade = global.String;
+	} catch {
+		return null;
+	}
+	// O `Window` do about:blank inicial continua o mesmo quando o quadro carrega um documento da
+	// mesma origem, e o realm antigo morre com o documento antigo. A política guardada nesse
+	// `Window` chama o `String` do realm morto e falha com "The provided callback is no longer
+	// runnable"; o `String` do global ter mudado é o sinal de que ela precisa ser criada de novo.
+	const guardada = politicas.get(global);
+	if (guardada && guardada.identidade === identidade) return guardada.politica;
 	let politica = null;
 	try {
-		politica = global[POLITICA_NO_GLOBAL] ?? null;
-		if (!politica) {
+		const noGlobal = global[POLITICA_NO_GLOBAL];
+		if (noGlobal && noGlobal.identidade === identidade) {
+			politica = noGlobal.politica;
+		} else {
 			// As funções da política são o `String` do próprio realm, que devolve a string que recebe.
-			// Uma função do motor de outro quadro morreria com ele ("The provided callback is no
-			// longer runnable"), e o motor de um quadro filho cria a política do pai pelo `postMessage`.
-			const identidade = global.String;
+			// Uma função do motor de outro quadro morreria com ele, e o motor de um quadro filho cria
+			// a política do pai pelo `postMessage`. A segunda criação com o mesmo nome no mesmo
+			// `Window` cabe porque a tradução da CSP acrescenta 'allow-duplicates' (`politicaDoMeta`).
 			politica = global.trustedTypes?.createPolicy(POLITICA_DO_MOTOR, {
 				createHTML: identidade,
 				createScript: identidade,
 				createScriptURL: identidade,
 			});
 			if (politica) {
-				Object_defineProperty(global, POLITICA_NO_GLOBAL, { value: politica });
+				Object_defineProperty(global, POLITICA_NO_GLOBAL, {
+					value: { politica, identidade },
+					configurable: true,
+				});
 			}
 		}
 	} catch {
 		politica = null;
 	}
-	politicas.set(global, politica);
+	politicas.set(global, { politica, identidade });
 
 	return politica;
 }
@@ -128,14 +143,38 @@ export function ehConfiavel(
 	);
 }
 
+/**
+ * Se o realm do cliente roda código. Um quadro sandbox sem 'allow-scripts' não roda: o `eval` nele
+ * é recusado, e antes da recusa o navegador ainda registra uma violação de Trusted Types, que a
+ * página vê pelo evento `securitypolicyviolation`. O motor não compila nada num realm assim.
+ */
+export function podeRodar(client: ScramjetClient): boolean {
+	const politica = politicaDe(client);
+	if (!politica) return true;
+	try {
+		politica.createScript("");
+
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export function embrulhar<T>(client: ScramjetClient, tipo: TipoConfiavel, valor: T): T {
 	if (typeof valor !== "string") return valor;
 	const politica = politicaDe(client);
 	if (!politica) return valor;
-	if (tipo === "TrustedScript") return politica.createScript(valor);
-	if (tipo === "TrustedHTML") return politica.createHTML(valor);
+	// Um quadro sandbox sem 'allow-scripts' não roda função nenhuma do próprio realm, nem a da
+	// política ("The provided callback is no longer runnable"). Nada executa ali, então a string
+	// segue, e o navegador a recusa como recusaria a do site.
+	try {
+		if (tipo === "TrustedScript") return politica.createScript(valor);
+		if (tipo === "TrustedHTML") return politica.createHTML(valor);
 
-	return politica.createScriptURL(valor);
+		return politica.createScriptURL(valor);
+	} catch {
+		return valor;
+	}
 }
 
 /**

@@ -211,7 +211,13 @@ export function politicaDoMeta(valor: string): string | null {
 			// a política com que o motor devolve o código reescrito precisa caber na lista do site
 			const lista =
 				nome === "trusted-types"
-					? [...fontes.filter((f) => f.toLowerCase() !== "'none'"), POLITICA_DO_MOTOR]
+					? [
+							...fontes.filter((f) => f.toLowerCase() !== "'none'"),
+							POLITICA_DO_MOTOR,
+							...(fontes.some((f) => f.toLowerCase() === "'allow-duplicates'")
+								? []
+								: ["'allow-duplicates'"]),
+						]
 					: fontes;
 			saida.push([nome, ...lista].join(" "));
 			continue;

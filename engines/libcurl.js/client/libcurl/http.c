@@ -113,6 +113,12 @@ void http_set_options(CURL* http_handle, const char* json_params, const char* bo
       fprintf(stderr, "libcurl.js: o perfil %s não foi aplicado inteiro: %s\n", perfil->valuestring, curl_easy_strerror(r));
     }
   }
+  //vssh fork: a ordem dos cabeçalhos deste pedido, que o transporte escolhe pelo tipo do pedido. O
+  //perfil traz uma ordem só, a de uma navegação, e o Chrome escreve um fetch numa ordem diferente.
+  cJSON* ordem = cJSON_GetObjectItemCaseSensitive(request_json, "_vssh_header_order");
+  if (cJSON_IsString(ordem) && ordem->valuestring[0]) {
+    curl_easy_setopt(http_handle, CURLOPT_HTTPHEADER_ORDER, ordem->valuestring);
+  }
 
   //some default options
   curl_easy_setopt(http_handle, CURLOPT_FOLLOWLOCATION, 1);

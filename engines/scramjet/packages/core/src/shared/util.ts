@@ -1,6 +1,8 @@
 import {
 	Array_from,
+	atob,
 	btoa,
+	TextDecoder_decode,
 	TextEncoder_encode,
 	String_fromCharCode,
 	String_fromCodePoint,
@@ -32,4 +34,15 @@ export function base64Encode(text: string) {
 			)
 			.join("")
 	);
+}
+
+// vssh fork: o inverso do `bytesToBase64(TextEncoder_encode(texto))`. O `atob` sozinho devolve os
+// bytes UTF-8 um por caractere, e um script com acento ou emoji voltava ao site com o texto trocado
+// e mais comprido.
+export function base64Decode(base64: string): string {
+	const bin = atob(base64);
+	const bytes = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+	return TextDecoder_decode(bytes);
 }

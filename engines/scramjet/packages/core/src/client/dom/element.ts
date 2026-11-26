@@ -4,9 +4,8 @@ import {
 	TextEncoder_encode,
 	Object_keys,
 	Object_defineProperty,
-	atob,
 } from "@/shared/snapshot";
-import { bytesToBase64 } from "@/shared/util";
+import { base64Decode, bytesToBase64 } from "@/shared/util";
 import { rewriteCss, unrewriteCss } from "@rewriters/css";
 import { rewriteHtml, unrewriteHtml } from "@rewriters/html";
 import { rewriteJs } from "@rewriters/js";
@@ -505,7 +504,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 					"Element.prototype.setAttribute",
 					ctx.this,
 					"scramjet-attr-script-source-src",
-					bytesToBase64(TextEncoder_encode(newval))
+					bytesToBase64(TextEncoder_encode(html))
 				);
 			} else if (client.box.instanceof(ctx.this, "HTMLStyleElement")) {
 				newval = rewriteCss(html, client.context, client.meta);
@@ -546,7 +545,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 				);
 
 				if (scriptSource) {
-					return atob(scriptSource);
+					return base64Decode(scriptSource);
 				}
 
 				return ctx.get();
@@ -599,13 +598,50 @@ export default function (client: ScramjetClient, self: typeof window) {
 				element,
 				"scramjet-attr-script-source-src"
 			);
-			if (scriptSource) return atob(scriptSource);
+			if (scriptSource) return base64Decode(scriptSource);
 			return text;
 		}
 		if (client.box.instanceof(element, "HTMLStyleElement")) {
 			return unrewriteCss(text, client.context);
 		}
+		if (element && client.box.instanceof(element, "Element")) {
+			return comScriptsOriginais(element, text);
+		}
 		return text;
+	};
+
+	// O `textContent` de um elemento junta o texto dos scripts que ele contém, e o de cada script
+	// reescrito volta ao original, na ordem do documento.
+	const comScriptsOriginais = (element: Element, text: string) => {
+		let scripts: ArrayLike<Element>;
+		try {
+			scripts = client.natives.call(
+				"Element.prototype.querySelectorAll",
+				element,
+				"script[scramjet-attr-script-source-src]"
+			);
+		} catch {
+			return text;
+		}
+		if (!scripts || scripts.length === 0) return text;
+		let saida = "";
+		let cursor = 0;
+		for (let i = 0; i < scripts.length; i++) {
+			const script = scripts[i];
+			const reescrito = client.descriptors.get("Node.prototype.textContent", script) as string;
+			if (!reescrito) continue;
+			const onde = text.indexOf(reescrito, cursor);
+			if (onde < 0) continue;
+			const fonte = client.natives.call(
+				"Element.prototype.getAttribute",
+				script,
+				"scramjet-attr-script-source-src"
+			);
+			saida += text.slice(cursor, onde) + base64Decode(fonte);
+			cursor = onde + reescrito.length;
+		}
+
+		return saida + text.slice(cursor);
 	};
 
 	// textContent/nodeValue live on Node, so they also fire for a Text node that is a *child* of a

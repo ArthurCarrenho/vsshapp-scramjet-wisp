@@ -17,13 +17,23 @@ export default function (client: ScramjetClient, _self: Self) {
 
 	const filterEntries = (entries: PerformanceEntry[]) => {
 		return entries.filter((entry) => {
+			const name = String(
+				client.descriptors.get("PerformanceEntry.prototype.name", entry)
+			);
 			for (const file of client.config.maskedfiles) {
-				const name = String(
-					client.descriptors.get("PerformanceEntry.prototype.name", entry)
-				);
 				if (name.endsWith(file)) {
 					return false;
 				}
+			}
+			// vssh fork: o Chrome não registra um recurso blob: nem data: na linha do tempo. Pelo
+			// motor esses endereços viram um pedido sob o prefixo, que o service worker atende, e o
+			// registro aparecia para o site (o Worker de blob do Turnstile deixava dois).
+			if (entry.entryType === "resource" && name.startsWith(client.context.prefix.href)) {
+				let real = "";
+				try {
+					real = client.unrewriteUrl(name);
+				} catch {}
+				if (real.startsWith("blob:") || real.startsWith("data:")) return false;
 			}
 
 			return true;

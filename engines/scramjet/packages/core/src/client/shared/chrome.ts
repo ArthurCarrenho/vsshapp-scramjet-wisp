@@ -31,12 +31,40 @@ export default function (client: ScramjetClient, self: any) {
 	if (!iswindow) return;
 	// DOM specific ones below here
 
-	// `Navigator.prototype.serviceWorker` continua sendo apagado. Ele é isolamento: com ele de
-	// volta, a página proxiada enxerga e registra Service Worker próprio, colidindo com o do
-	// motor, que é quem roteia tudo. Um `navigator.serviceWorker` que existe e recusa o
-	// `register` é pior: o desafio gerenciado do Cloudflare trata a recusa como falha e recarrega
-	// a página várias vezes por segundo, medido no tandfonline pela IPPRI-01.
-	Reflect.deleteProperty(Navigator.prototype, "serviceWorker");
+	// `navigator.serviceWorker` existe, como num Chrome, e não alcança o Service Worker do motor,
+	// que é quem roteia tudo. A página não vê controlador nem registro, e um `register` fica
+	// pendente: um registro recusado faz o desafio gerenciado do Cloudflare recarregar a página
+	// várias vezes por segundo, e um que a página conseguisse colidiria com o do motor. O
+	// Turnstile confere que o objeto existe; um Chrome sem ele é um navegador que não existe.
+	if (self.ServiceWorkerContainer) {
+		const nuncaResolve = () => new self.Promise(() => {});
+		const pronto = nuncaResolve();
+		client.Trap("ServiceWorkerContainer.prototype.controller", {
+			get() {
+				return null;
+			},
+		});
+		client.Trap("ServiceWorkerContainer.prototype.ready", {
+			get() {
+				return pronto;
+			},
+		});
+		client.Proxy("ServiceWorkerContainer.prototype.register", {
+			apply(ctx) {
+				ctx.return(nuncaResolve());
+			},
+		});
+		client.Proxy("ServiceWorkerContainer.prototype.getRegistration", {
+			apply(ctx) {
+				ctx.return(self.Promise.resolve(undefined));
+			},
+		});
+		client.Proxy("ServiceWorkerContainer.prototype.getRegistrations", {
+			apply(ctx) {
+				ctx.return(self.Promise.resolve([]));
+			},
+		});
+	}
 
 	// contact picker api
 	del("Navigator.prototype.contacts");

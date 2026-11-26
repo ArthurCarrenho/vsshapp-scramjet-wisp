@@ -7,13 +7,12 @@ import { rewriteJs } from "@rewriters/js";
 import { ScramjetContext } from "@/shared";
 import { htmlRules } from "@/shared/htmlRules";
 import { parseDeclarativeRefresh } from "@/shared/refresh";
-import { bytesToBase64 } from "@/shared/util";
+import { base64Decode, bytesToBase64 } from "@/shared/util";
 import { Tap } from "@/Tap";
 import { RawHeaders } from "@mercuryworkshop/proxy-transports";
 import { TrackedHistoryState } from "@/fetch";
 import {
 	Performance_now,
-	atob,
 	Object_entries,
 	JSON_parse,
 	JSON_stringify,
@@ -314,9 +313,13 @@ export function unrewriteHtml(html: string, foreignContext?: ForeignContext) {
 	function traverse(node: ChildNode) {
 		if ("attribs" in node) {
 			for (const key in node.attribs) {
+				// O texto original do script volta para dentro dele, e o atributo que o guardava sai: ele
+				// traz o script inteiro em base64, e o `outerHTML` do script ficava com mais que o dobro
+				// do tamanho.
 				if (key == "scramjet-attr-script-source-src") {
 					if (node.children[0] && "data" in node.children[0])
-						node.children[0].data = atob(node.attribs[key]);
+						node.children[0].data = base64Decode(node.attribs[key]);
+					delete node.attribs[key];
 					continue;
 				}
 
@@ -336,8 +339,10 @@ export function unrewriteHtml(html: string, foreignContext?: ForeignContext) {
 
 	traverse(handler.root);
 
+	// O Chrome serializa um atributo vazio como `nonce=""`, e nunca como `nonce` sozinho.
 	return render(handler.root, {
 		...renderOptions,
+		emptyAttrs: true,
 	});
 }
 

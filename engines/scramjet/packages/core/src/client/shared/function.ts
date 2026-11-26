@@ -1,7 +1,7 @@
 import { rewriteJs } from "@rewriters/js";
 import { ScramjetClient, ProxyCtx, Proxy } from "@client/index";
 import { String } from "@/shared/snapshot";
-import { ehConfiavel, embrulhar, exigeConfiavel } from "@/shared/confiavel";
+import { ehConfiavel, embrulhar, exigeConfiavel, podeRodar } from "@/shared/confiavel";
 
 // vssh fork: o `Function` num documento que exige Trusted Types.
 //
@@ -67,8 +67,9 @@ export default function (client: ScramjetClient, _self: Self) {
 
 	// Os construtores vêm do `eval` do próprio quadro, que pode ser um quadro filho cujo documento
 	// herdou a exigência de Trusted Types: o código vai embrulhado, como no resto deste arquivo.
-	// Num quadro em sandbox sem `allow-scripts` o navegador recusa o `eval`, e nenhum código
-	// nasce nesse realm; ali não há construtor a interceptar.
+	// Num quadro em sandbox sem `allow-scripts` nenhum código nasce, e ali não há construtor a
+	// interceptar.
+	if (!podeRodar(client)) return;
 	const construtorDe = (codigo: string) => {
 		try {
 			return client.natives.call(

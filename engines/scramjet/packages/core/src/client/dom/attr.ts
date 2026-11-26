@@ -23,6 +23,13 @@ export default function (client: ScramjetClient) {
 					if (prop === "getNamedItem") {
 						return (name: string) => proxy[name];
 					}
+					// vssh fork: o iterador é o `Array.prototype.values`, que lê `length` e os índices de
+					// quem o chama. Chamado sobre este proxy, ele só vê os atributos do site; o invólucro
+					// abaixo o chamaria sobre o mapa de verdade, com os atributos do motor junto.
+					if (prop === Symbol.iterator) return value;
+					if (prop === "item") {
+						return (i: number) => proxy[Number(i) >>> 0] ?? null;
+					}
 					if (prop === "getNamedItemNS") {
 						return (namespace: string, name: string) =>
 							proxy[`${namespace}:${name}`];

@@ -47,13 +47,23 @@ export default function (client: ScramjetClient) {
 			if (!f) return f;
 
 			const win = f.ownerDocument.defaultView;
-			if (win[SCRAMJETCLIENT]) {
-				// then this is a subframe in a scramjet context, and it's safe to pass back the real iframe
-				return f;
-			} else {
+			const pai = win[SCRAMJETCLIENT] as ScramjetClient | undefined;
+			if (!pai) {
 				// no, the top frame is outside the sandbox
 				return null;
 			}
+			// vssh fork: o navegador só entrega o elemento do quadro a um documento da mesma origem
+			// do pai. Pelo motor os dois moram na origem do proxy, e o quadro do Turnstile, de
+			// challenges.cloudflare.com dentro de um site, enxergava o <iframe> do pai.
+			try {
+				// Um about:blank herda a origem de quem o criou.
+				if (client.url.protocol !== "about:" && pai.url.origin !== client.url.origin)
+					return null;
+			} catch {
+				return null;
+			}
+
+			return f;
 		},
 	});
 }

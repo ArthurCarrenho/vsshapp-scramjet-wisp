@@ -119,15 +119,60 @@ function userAgentOf(headers: Record<string, string>): string | undefined {
   return headerOf(headers, "user-agent") ?? (globalThis as any).navigator?.userAgent;
 }
 
-// vssh fork: the `priority` header a browser sends on a navigation. The page never sees it (the
-// browser adds it below fetch), so it does not reach the transport, and a navigation without it
-// is one more mark of a client that is not the browser it claims to be. The value is the one
-// Chrome, Firefox and Safari send for a top-level document or a frame.
-function withNavigationPriority(headers: Record<string, string>): Record<string, string> {
+// vssh fork: the `priority` header Chrome sends with each request. The page never sees it (the
+// browser adds it below fetch), so it does not reach the transport, and a request without it is one
+// more mark of a client that is not the browser it claims to be. The values are the ones Chrome
+// sends for each destination; a destination missing here leaves the request as it came.
+const PRIORIDADES: Record<string, string> = {
+  document: "u=0, i",
+  iframe: "u=0, i",
+  frame: "u=0, i",
+  style: "u=0",
+  font: "u=0",
+  script: "u=1",
+  empty: "u=1, i",
+  image: "i",
+};
+
+function withPriority(headers: Record<string, string>): Record<string, string> {
   const destino = headerOf(headers, "sec-fetch-dest");
-  if ((destino === "document" || destino === "iframe") && headerOf(headers, "priority") === undefined)
-    return { ...headers, priority: "u=0, i" };
+  const prioridade = destino === undefined ? undefined : PRIORIDADES[destino];
+  if (prioridade !== undefined && headerOf(headers, "priority") === undefined)
+    return { ...headers, priority: prioridade };
   return headers;
+}
+
+// vssh fork: the order Chrome writes a request's headers in, measured against tls.peet.ws. The
+// curl-impersonate profile carries one order, the one of a GET navigation without cookies, and
+// curl uses it for every request. Chrome has two: a navigation keeps the client hints first, and a
+// subresource (fetch, XHR, script, image) opens with the body length and the platform hint and
+// keeps the headers the page set after `sec-ch-ua`. A header outside both lists is one the page
+// set, and it goes where Chrome puts the page's own headers.
+const ORDEM_NAVEGACAO = [
+  "content-length", "pragma", "cache-control", "sec-ch-ua", "sec-ch-ua-mobile",
+  "sec-ch-ua-platform", "upgrade-insecure-requests", "content-type", "user-agent", "origin",
+  "accept", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
+  "sec-fetch-storage-access", "referer", "accept-encoding", "accept-language", "cookie", "priority",
+];
+const ORDEM_SUBRECURSO_ANTES = [
+  "content-length", "pragma", "cache-control", "sec-ch-ua-platform", "user-agent", "sec-ch-ua",
+  "content-type",
+];
+const ORDEM_SUBRECURSO_DEPOIS = [
+  "sec-ch-ua-mobile", "accept", "origin", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
+  "sec-fetch-storage-access", "referer", "accept-encoding", "accept-language", "cookie", "priority",
+];
+const CONHECIDOS = new Set([...ORDEM_NAVEGACAO, ...ORDEM_SUBRECURSO_ANTES, ...ORDEM_SUBRECURSO_DEPOIS, "host"]);
+
+export function headerOrder(headers: Record<string, string>): string {
+  const daPagina = Object.keys(headers)
+    .map((k) => k.toLowerCase())
+    .filter((k) => !CONHECIDOS.has(k) && !k.startsWith(":"));
+  if (headerOf(headers, "sec-fetch-mode") === "navigate") {
+    const i = ORDEM_NAVEGACAO.indexOf("user-agent");
+    return [...ORDEM_NAVEGACAO.slice(0, i), ...daPagina, ...ORDEM_NAVEGACAO.slice(i)].join(",");
+  }
+  return [...ORDEM_SUBRECURSO_ANTES, ...daPagina, ...ORDEM_SUBRECURSO_DEPOIS].join(",");
 }
 
 export default class LibcurlClient implements ProxyTransport {
@@ -347,7 +392,7 @@ export default class LibcurlClient implements ProxyTransport {
       headersObj[key] = value;
     }
     const perfil = browserProfile(userAgentOf(headersObj));
-    if (perfil) headersObj = withNavigationPriority(headersObj);
+    if (perfil) headersObj = withPriority(headersObj);
     const inicio = Date.now();
     let payload;
     try {
@@ -359,6 +404,7 @@ export default class LibcurlClient implements ProxyTransport {
         signal: signal,
         insecure: this.insecure || this.insecureHosts.has(remote.host.toLowerCase()),
         _vssh_impersonate: perfil,
+        ...(perfil ? { _vssh_header_order: headerOrder(headersObj) } : {}),
         ...(this.connectTimeoutMs ? { _vssh_connect_timeout_ms: this.connectTimeoutMs } : {}),
       });
     } catch (e: any) {
