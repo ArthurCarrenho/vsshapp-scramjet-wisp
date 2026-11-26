@@ -45,8 +45,7 @@ import {
 	Object_defineProperty,
 	Object_defineProperties,
 	_Map,
-	_WeakMap,
-} from "@/shared/snapshot";
+	_WeakMap, _ProxyNativo } from "@/shared/snapshot";
 import { createIndirectEval } from "./shared/eval";
 import { recusarCiclo } from "./shared/proto";
 
@@ -299,9 +298,15 @@ export class ScramjetClient {
 
 		this.indirectEval = createIndirectEval(this);
 		this.wrapfn = createWrapFn(this, global);
+		// vssh fork: os nativos e os descritores ficam num objeto comum, e o `Proxy` em volta só
+		// preenche o que falta. O `call` e o `get` leem o objeto direto: todo hook do motor passa por
+		// eles, e o `Proxy` custava uma armadilha por chamada. A chamada vai por `Reflect.apply`; o
+		// `.call` lido da função viria do `Function.prototype`, que o site pode trocar.
+		const nativosGuardados: Record<string, any> = {};
+		const descritoresGuardados: Record<string, any> = {};
 		this.natives = {
-			store: new Proxy(
-				{},
+			store: new _ProxyNativo(
+				nativosGuardados,
 				{
 					get: (target, prop: string) => {
 						if (prop in target) {
@@ -328,15 +333,15 @@ export class ScramjetClient {
 				return new original(...args);
 			},
 			call(target, that, ...args) {
-				const original = this.store[target];
+				const original = nativosGuardados[target] ?? this.store[target];
 				if (!original) return null;
 
-				return original.call(that, ...args);
+				return Reflect_apply(original, that, args);
 			},
 		};
 		this.descriptors = {
-			store: new Proxy(
-				{},
+			store: new _ProxyNativo(
+				descritoresGuardados,
 				{
 					get: (target, prop: string) => {
 						if (prop in target) {
@@ -362,44 +367,59 @@ export class ScramjetClient {
 				}
 			),
 			get(target, that) {
-				const original = this.store[target];
+				const original = descritoresGuardados[target] ?? this.store[target];
 				if (!original) return null;
 
-				return original.get!.call(that);
+				return Reflect_apply(original.get!, that, []);
 			},
 			set(target, that, value) {
-				const original = this.store[target];
+				const original = descritoresGuardados[target] ?? this.store[target];
 				if (!original) return null;
 
-				original.set!.call(that, value);
+				Reflect_apply(original.set!, that, [value]);
 			},
 		};
 		// eslint-disable-next-line @typescript-eslint/no-this-alias
 		const client = this;
+		// vssh fork: o `meta` é lido a cada endereço que o motor reescreve (um `setAttribute("href")`
+		// passa por ele). O endereço do site, a base e a política de referrer ficam guardados enquanto
+		// o que os determina não muda: o endereço nativo, o `href` do primeiro `<base>`, e o número de
+		// `<meta>` do documento. Os `URL` daqui são do motor, e ninguém os altera.
+		let bases: HTMLCollectionOf<Element> | null = null;
+		let metas: HTMLCollectionOf<Element> | null = null;
+		let metasContadas = -1;
+		let metaDaPolitica: Element | null = null;
+		let baseGuardada: [string, string, _URL] | null = null;
 		this.meta = {
 			get origin() {
-				return client.url;
+				return client.urlInterna;
 			},
 			recusaImagem: (url: string) => cspRecusa(client, "img-src", url),
 			get base() {
+				const doSite = client.urlInterna;
 				if (iswindow) {
-					const base = client.natives.call(
-						"Document.prototype.querySelector",
+					bases ??= client.natives.call(
+						"Document.prototype.getElementsByTagName",
 						client.global.document,
 						"base"
 					);
+					const base = bases.length ? bases[0] : null;
 					if (base) {
-						let url = base.getAttribute("href");
-						if (!url) return client.url;
+						let url = client.natives.call("Element.prototype.getAttribute", base, "href") as string | null;
+						if (!url) return doSite;
 						const frag = url.indexOf("#");
 						url = url.substring(0, frag === -1 ? undefined : frag);
-						if (!url) return client.url;
+						if (!url) return doSite;
+						if (baseGuardada && baseGuardada[0] === url && baseGuardada[1] === doSite.origin)
+							return baseGuardada[2];
+						const resolvida = new _URL(url, doSite.origin);
+						baseGuardada = [url, doSite.origin, resolvida];
 
-						return new _URL(url, client.url.origin);
+						return resolvida;
 					}
 				}
 
-				return client.url;
+				return doSite;
 			},
 			// TODO: very bad assumptions made here, window.parent never throws
 			get topFrameName() {
@@ -516,26 +536,24 @@ export class ScramjetClient {
 				if (!iswindow) return "";
 
 				// TODO: need to nullify the actual meta tag so it still sends unsafe-url
-				const meta = [
-					...client.natives.call(
-						"Document.prototype.querySelectorAll",
-						client.global.document,
-						"meta[name='referrer']"
-					),
-					...client.natives.call(
-						"Document.prototype.querySelectorAll",
-						client.global.document,
-						"meta[name='referrer-policy']"
-					),
-					...client.natives.call(
-						"Document.prototype.querySelectorAll",
-						client.global.document,
-						"meta[http-equiv='referrer-policy']"
-					),
-				];
-				const last = meta[meta.length - 1];
-				if (last) {
-					return last.getAttribute("content");
+				metas ??= client.natives.call(
+					"Document.prototype.getElementsByTagName",
+					client.global.document,
+					"meta"
+				);
+				if (metas.length !== metasContadas) {
+					metasContadas = metas.length;
+					metaDaPolitica = null;
+					// A última do documento vale, como no navegador.
+					for (let i = metas.length - 1; i >= 0 && !metaDaPolitica; i--) {
+						const m = metas[i];
+						const nome = String(client.natives.call("Element.prototype.getAttribute", m, "name") ?? "").toLowerCase();
+						const equiv = String(client.natives.call("Element.prototype.getAttribute", m, "http-equiv") ?? "").toLowerCase();
+						if (nome === "referrer" || nome === "referrer-policy" || equiv === "referrer-policy") metaDaPolitica = m;
+					}
+				}
+				if (metaDaPolitica) {
+					return client.natives.call("Element.prototype.getAttribute", metaDaPolitica, "content");
 				}
 
 				return "";
@@ -614,6 +632,17 @@ export class ScramjetClient {
 	// custa um decode do codec. O texto desfeito fica guardado enquanto o `location` nativo não muda;
 	// cada leitura recebe um `URL` novo, que quem chama pode alterar.
 	private urlLida: [string, string] | null = null;
+
+	// O `URL` do site para o próprio motor, o mesmo objeto enquanto o endereço nativo não muda. Quem
+	// o recebe não o altera; o site recebe uma cópia pelo `url`.
+	private urlInternaGuardada: [string, _URL] | null = null;
+	get urlInterna(): _URL {
+		const nativo = this.global.location.href;
+		if (this.urlInternaGuardada === null || this.urlInternaGuardada[0] !== nativo)
+			this.urlInternaGuardada = [nativo, new _URL(this.unrewriteUrl(nativo))];
+
+		return this.urlInternaGuardada[1];
+	}
 
 	get url(): _URL {
 		const nativo = this.global.location.href;
@@ -861,7 +890,7 @@ return { apply, construct };
 			};
 		}
 
-		const proxy = new Proxy(value, h);
+		const proxy = new _ProxyNativo(value, h);
 		this.box.unproxy.set(proxy, value);
 		h.getOwnPropertyDescriptor = getOwnPropertyDescriptorHandler;
 		h.setPrototypeOf = recusarCiclo(this, () => proxy);

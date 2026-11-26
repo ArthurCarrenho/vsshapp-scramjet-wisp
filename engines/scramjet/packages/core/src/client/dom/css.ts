@@ -8,10 +8,13 @@ import {
 	_Map,
 	_WeakMap,
 	_WeakSet,
-	_URL,
-} from "@/shared/snapshot";
+	_URL, _ProxyNativo } from "@/shared/snapshot";
 import { AnyFunction } from "@/types";
+import { trocarRapida } from "@client/shared/troca-rapida";
 import { QP } from "@/fetch/parse";
+
+// Um valor de CSS só tem o que desfazer quando cita um endereço.
+const temEndereco = (v: string) => v.indexOf("url(") >= 0 || v.indexOf("URL(") >= 0 || v.indexOf("@import") >= 0;
 
 export default function (client: ScramjetClient) {
 	client.Proxy("CSSStyleDeclaration.prototype.setProperty", {
@@ -24,7 +27,7 @@ export default function (client: ScramjetClient) {
 	client.Proxy("CSSStyleDeclaration.prototype.getPropertyValue", {
 		apply(ctx) {
 			const v = ctx.call();
-			if (!v) return v;
+			if (!v || typeof v !== "string" || !temEndereco(v)) return v;
 			ctx.return(unrewriteCss(v, client.context, { absoluto: computados.has(ctx.this as object) }));
 		},
 	});
@@ -42,7 +45,8 @@ export default function (client: ScramjetClient) {
 		const el = donoDoEstilo.get(style);
 		if (!el) return;
 		const atual = client.natives.call("Element.prototype.getAttribute", el, "style") as string | null;
-		if (atual === null) client.natives.call("Element.prototype.removeAttribute", el, "scramjet-attr-style");
+		// Sem endereço do motor no atributo, o valor dele já é o do site, e o guardado sai.
+		if (atual === null || !temEndereco(atual)) client.natives.call("Element.prototype.removeAttribute", el, "scramjet-attr-style");
 		else
 			client.natives.call(
 				"Element.prototype.setAttribute",
@@ -51,64 +55,71 @@ export default function (client: ScramjetClient) {
 				unrewriteCss(atual, client.context),
 			);
 	};
+	// Um handler só para todas as vistas: o `getComputedStyle` devolve uma declaração nova a cada
+	// chamada, e uma vista com handler e mapa próprios custava mais que a leitura.
+	const metodosDe = new _WeakMap<object, Map<PropertyKey, AnyFunction>>([]);
+	const manipulador: ProxyHandler<CSSStyleDeclaration> = {
+		get(target, prop) {
+			const value = Reflect_get(target, prop);
+
+			if (typeof value === "function") {
+				let metodos = metodosDe.get(target);
+				if (!metodos) metodosDe.set(target, (metodos = new _Map<PropertyKey, AnyFunction>([])));
+				let metodo = metodos.get(prop);
+				if (!metodo || client.box.unproxy.get(metodo) !== value) {
+					const nativo = value;
+					metodo = new _ProxyNativo(nativo, {
+						apply(fn, _that, args) {
+							const r = Reflect_apply(fn, target, args);
+							if (prop === "setProperty" || prop === "removeProperty") sincronizar(target);
+
+							return r;
+						},
+					});
+					client.box.unproxy.set(metodo, nativo);
+					metodos.set(prop, metodo);
+				}
+
+				return metodo;
+			}
+
+			if (typeof value !== "string" || !value || !temEndereco(value)) return value;
+			if (prop in CSSStyleDeclaration.prototype) return value;
+
+			return unrewriteCss(value, client.context, { absoluto: computados.has(target) });
+		},
+		set(target, prop, value) {
+			let ok: boolean;
+			if (prop == "cssText" || value == "" || typeof value !== "string" || !temEndereco(value)) {
+				ok = Reflect_set(target, prop, value);
+			} else {
+				ok = Reflect_set(target, prop, rewriteCss(value, client.context, client.meta));
+			}
+			sincronizar(target);
+
+			return ok;
+		},
+	};
 	const vistaDoEstilo = (style: CSSStyleDeclaration): CSSStyleDeclaration => {
+		// A declaração computada é nova a cada chamada, e a vista dela não se guarda.
+		if (computados.has(style)) return new _ProxyNativo(style, manipulador);
 		const pronta = vistas.get(style);
 		if (pronta) return pronta;
-		const absoluto = computados.has(style);
-		const metodos = new _Map<PropertyKey, AnyFunction>([]);
-		const vista = new Proxy(style, {
-			get(target, prop) {
-				const value = Reflect_get(target, prop);
-
-				if (typeof value === "function") {
-					let metodo = metodos.get(prop);
-					if (!metodo || client.box.unproxy.get(metodo) !== value) {
-						const nativo = value;
-						metodo = new Proxy(nativo, {
-							apply(fn, _that, args) {
-								const r = Reflect_apply(fn, style, args);
-								if (prop === "setProperty" || prop === "removeProperty") sincronizar(style);
-
-								return r;
-							},
-						});
-						client.box.unproxy.set(metodo, nativo);
-						metodos.set(prop, metodo);
-					}
-
-					return metodo;
-				}
-
-				if (prop in CSSStyleDeclaration.prototype) return value;
-				if (!value || typeof value !== "string") return value;
-
-				return unrewriteCss(value, client.context, { absoluto });
-			},
-			set(target, prop, value) {
-				let ok: boolean;
-				if (prop == "cssText" || value == "" || typeof value !== "string") {
-					ok = Reflect_set(target, prop, value);
-				} else {
-					ok = Reflect_set(target, prop, rewriteCss(value, client.context, client.meta));
-				}
-				sincronizar(style);
-
-				return ok;
-			},
-		});
+		const vista = new _ProxyNativo(style, manipulador);
 		vistas.set(style, vista);
 
 		return vista;
 	};
 
-	client.Proxy("window.getComputedStyle", {
-		apply(ctx) {
-			const style = ctx.call() as CSSStyleDeclaration;
-			if (!style || typeof style !== "object") return ctx.return(style);
+	trocarRapida(client, client.global, "getComputedStyle", (anterior) =>
+		function (this: unknown, ...args: any[]) {
+			const style = Reflect_apply(anterior, this, args) as CSSStyleDeclaration;
+			if (!style || typeof style !== "object") return style;
 			computados.add(style);
-			ctx.return(vistaDoEstilo(style));
+
+			return vistaDoEstilo(style);
 		},
-	});
+	);
 	for (const regra of [
 		"CSSStyleRule",
 		"CSSPageRule",
@@ -198,6 +209,14 @@ export default function (client: ScramjetClient) {
 	client.Trap("CSSImportRule.prototype.href", {
 		get(ctx) {
 			return doSite(ctx.get(), true) as string;
+		},
+	});
+
+	// O valor do Typed OM volta ao site com o texto dele, como o `cssText`.
+	client.Proxy("CSSStyleValue.prototype.toString", {
+		apply(ctx) {
+			const texto = ctx.call();
+			ctx.return(typeof texto === "string" && texto.includes("url(") ? unrewriteCss(texto, client.context) : texto);
 		},
 	});
 

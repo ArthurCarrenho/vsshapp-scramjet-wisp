@@ -101,6 +101,10 @@ export async function doHandleFetch(
 			refererPolicy: ScramjetHeaders.fromRawHeaders(response.rawHeaders).get(
 				"referrer-policy"
 			),
+			// vssh fork: o `document.referrer` é o `Referer` do pedido do documento, o que o motor
+			// mandou acima. O de um quadro novo vem do documento que o abriu, e o histórico deste
+			// cliente só tem a entrada dele.
+			referer: newheaders.get("Referer") ?? "",
 		});
 	}
 

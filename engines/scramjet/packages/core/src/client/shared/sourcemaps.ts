@@ -37,12 +37,22 @@ function getEnd(rewrite: Rewrite): number {
 	throw "unreachable";
 }
 
+function base64ParaBytes(texto: string): Uint8Array {
+	const nativo = (Uint8Array as any).fromBase64;
+	if (typeof nativo === "function") return nativo(texto);
+	const bin = atob(texto);
+	const bytes = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+	return bytes;
+}
+
 function registerRewrites(
 	client: ScramjetClient,
-	buf: Array<number>,
+	buf: ArrayLike<number>,
 	tag: string
 ) {
-	const sourcemap = Uint8Array.from(buf);
+	const sourcemap = buf instanceof Uint8Array ? buf : Uint8Array.from(buf);
 	const view = new DataView(sourcemap.buffer);
 	const decoder = new TextDecoder("utf-8");
 
@@ -172,13 +182,19 @@ export const enabled = (client: ScramjetClient) =>
 export default function (client: ScramjetClient, self: Self) {
 	// every script will push a sourcemap
 	Object_defineProperty(self, client.config.globals.pushsourcemapfn, {
-		value: (buf: Array<number>, tag: string, linha?: number, coluna?: number) => {
+		value: (mapa: Array<number> | string, tag: string, linha?: number, coluna?: number) => {
 			// const before = performance.now();
-			registerRewrites(client, buf, tag);
+			// O service worker manda o mapa em base64; o cache de reescrita do cliente, como array.
+			// A mesma reescrita pedida de novo (o cache de `rewriters/js.ts`) traz a mesma tag, e o
+			// mapa dela já está registrado.
+			if (!client.box.sourcemaps[tag]) {
+				const buf = typeof mapa === "string" ? base64ParaBytes(mapa) : mapa;
+				registerRewrites(client, buf, tag);
+			}
 			client.box.mapas.ultimaTag = tag;
 			// A chamada que o service worker escreveu no começo do script diz qual script é este.
 			if (linha !== -1 && client.flagEnabled("cleanErrors"))
-				registrarDoServiceWorker(client, buf, tag, linha ?? 1, coluna ?? 0);
+				registrarDoServiceWorker(client, mapa, tag, linha ?? 1, coluna ?? 0);
 			// if (client.flagEnabled("rewriterLogs")) {
 			// 	dbg.time(client.meta, before, `scramtag parse for ${tag}`);
 			// }

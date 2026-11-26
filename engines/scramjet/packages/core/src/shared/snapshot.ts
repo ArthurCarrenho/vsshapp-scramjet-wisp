@@ -80,6 +80,8 @@ export const Promise_allSettled = globalThis.Promise.allSettled.bind(
 export const Promise_any = globalThis.Promise.any.bind(globalThis.Promise);
 
 export const Symbol_for = globalThis.Symbol.for;
+/** O `Proxy` do navegador. O do site passa pelo embrulho de `client/shared/proxy-do-site.ts`, e o motor não paga por ele. */
+export const _ProxyNativo = globalThis.Proxy;
 
 declare const WrappedBrand: unique symbol;
 

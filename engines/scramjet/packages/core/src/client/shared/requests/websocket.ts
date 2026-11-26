@@ -5,8 +5,7 @@ import {
 	Object_setPrototypeOf,
 	Reflect_get,
 	_URL,
-	_WeakMap,
-} from "@/shared/snapshot";
+	_WeakMap, _ProxyNativo } from "@/shared/snapshot";
 
 type FakeWebSocketState = {
 	protocol: string;
@@ -62,7 +61,7 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 			Object_setPrototypeOf(fakeWebSocket, ctx.fn.prototype);
 
 			const trustEvent = (ev: Event) =>
-				new Proxy(ev, {
+				new _ProxyNativo(ev, {
 					get(target, prop) {
 						if (prop === "isTrusted") return true;
 

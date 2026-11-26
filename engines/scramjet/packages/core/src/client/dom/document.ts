@@ -1,5 +1,6 @@
 import { IncrementalHtmlRewriter, rewriteHtml } from "@rewriters/html";
 import { ScramjetClient } from "@client/index";
+import { SCRAMJETCLIENT } from "@/symbols";
 import { excecaoDoNavegador } from "@client/shared/excecao";
 import { String, _URL } from "@/shared/snapshot";
 import { createReferrerString } from "@/fetch/util";
@@ -111,9 +112,28 @@ export default function (client: ScramjetClient, _self: Self) {
 	// é o padrão, atribuir ao documento o domínio que ele já tem não muda nada, e só lança em
 	// sandbox. Depois vem o sufixo, conferido contra o host do site. Passadas as duas, a
 	// atribuição é ignorada, como num agrupamento por origem.
+	// vssh fork: os acessores leem primeiro o nativo, que recusa um `this` que não é documento como o
+	// Chrome. O documento desta janela responde com o endereço do site; o de outro quadro do motor,
+	// com o dele; um documento inerte (`parseHTMLUnsafe`, `createHTMLDocument`) é `about:blank`, e
+	// o do `DOMParser` herda o endereço de quem o criou.
+	const doDocumento = <T,>(doc: any, nativo: T, doSite: (c: ScramjetClient) => T): T => {
+		if (doc === client.global.document) return doSite(client);
+		let dono: ScramjetClient | undefined;
+		try {
+			dono = doc?.[SCRAMJETCLIENT];
+		} catch {}
+		if (dono) return doSite(dono);
+		if (typeof nativo === "string" && nativo.startsWith(client.context.prefix.href))
+			return client.unrewriteUrl(nativo) as T;
+
+		return nativo;
+	};
 	client.Trap("Document.prototype.domain", {
-		get() {
-			return client.url.hostname;
+		get(ctx) {
+			const nativo = ctx.get() as string;
+			if (ctx.this === client.global.document) return client.url.hostname;
+
+			return doDocumento(ctx.this, nativo, (c) => c.url.hostname);
 		},
 		set(ctx, valor) {
 			if ((client.global as any).originAgentCluster === true) ctx.set(ctx.get());
@@ -130,8 +150,8 @@ export default function (client: ScramjetClient, _self: Self) {
 	});
 
 	client.Trap("Document.prototype.documentURI", {
-		get() {
-			return client.url.href;
+		get(ctx) {
+			return doDocumento(ctx.this, ctx.get() as string, (c) => c.url.href);
 		},
 		set() {
 			return false;
@@ -139,8 +159,8 @@ export default function (client: ScramjetClient, _self: Self) {
 	});
 
 	client.Trap("Document.prototype.URL", {
-		get() {
-			return client.url.href;
+		get(ctx) {
+			return doDocumento(ctx.this, ctx.get() as string, (c) => c.url.href);
 		},
 		set() {
 			return false;
@@ -150,6 +170,9 @@ export default function (client: ScramjetClient, _self: Self) {
 	client.Trap("Document.prototype.referrer", {
 		get() {
 			if (!client.history) return "";
+			const atual = client.history[client.history.length - 1];
+			if (atual && typeof atual.referer === "string" && atual.url === client.url.href.split("#")[0])
+				return atual.referer;
 			if (client.history.length < 2) return "";
 			const lastState = client.history[client.history.length - 2];
 			const referrerURL = new _URL(lastState.url);

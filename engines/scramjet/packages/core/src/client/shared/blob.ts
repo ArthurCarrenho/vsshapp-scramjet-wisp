@@ -28,6 +28,11 @@ export default function (client: ScramjetClient) {
 				ctx.return(undefined);
 				return;
 			}
+			// vssh fork: a revogação de verdade espera o service worker (abaixo), mas para o site ela
+			// vale agora: um `fetch` do endereço revogado falha como no Chrome (ver `requests/fetch.ts`).
+			try {
+				client.box.blobsRevogados.add(unrewriteBlob(recebido, client.context, client.meta));
+			} catch {}
 			setTimeout(() => {
 				// scramjet rewrites blob urls to pass through the service worker first
 				// this is neccesary if rewrites need to be applied to the blob

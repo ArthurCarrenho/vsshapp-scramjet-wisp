@@ -1,6 +1,6 @@
 import { flagEnabled } from "@/shared";
 import { ScramjetClient } from "@client/index";
-import { Reflect_apply } from "@/shared/snapshot";
+import { Reflect_apply, _ProxyNativo } from "@/shared/snapshot";
 
 export const enabled = (client: ScramjetClient) =>
 	client.flagEnabled("captureErrors");
@@ -44,7 +44,7 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 	client.Proxy("Promise.prototype.catch", {
 		apply(ctx) {
 			if (ctx.args[0])
-				ctx.args[0] = new Proxy(ctx.args[0], {
+				ctx.args[0] = new _ProxyNativo(ctx.args[0], {
 					apply(target, that, args) {
 						// console.warn("CAUGHT PROMISE REJECTION", args);
 						return Reflect_apply(target, that, args);

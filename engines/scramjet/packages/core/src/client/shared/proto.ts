@@ -1,6 +1,6 @@
 import type { ScramjetClient } from "@client/index";
 import { mascarado, quadrosCrus } from "@client/pilha";
-import { Reflect_getPrototypeOf, Reflect_setPrototypeOf } from "@/shared/snapshot";
+import { Reflect_getPrototypeOf, Reflect_setPrototypeOf, _ProxyNativo } from "@/shared/snapshot";
 
 // vssh fork: a função do motor na própria cadeia de protótipos.
 //
@@ -68,7 +68,7 @@ export function cobrir<T extends object>(
 	let proxy: T | undefined;
 	if (!manipulador.setPrototypeOf)
 		manipulador.setPrototypeOf = recusarCiclo(client, () => proxy) as any;
-	proxy = new Proxy(alvo, manipulador);
+	proxy = new _ProxyNativo(alvo, manipulador);
 
 	return proxy;
 }

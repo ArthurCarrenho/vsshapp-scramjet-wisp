@@ -6,10 +6,12 @@ import {
 	Object_keys,
 	Object_defineProperty,
 	_URL,
+	_Map,
+	_Set,
 } from "@/shared/snapshot";
 import { base64Decode, bytesToBase64 } from "@/shared/util";
 import { rewriteCss, unrewriteCss } from "@rewriters/css";
-import { rewriteHtml, unrewriteHtml } from "@rewriters/html";
+import { rewriteHtml, rewriteImportMap, unrewriteHtml } from "@rewriters/html";
 import { rewriteJs } from "@rewriters/js";
 import { rewriteBlob, unrewriteUrl } from "@rewriters/url";
 import { SCRAMJETCLIENT } from "@/symbols";
@@ -25,6 +27,7 @@ import { comoOriginal } from "@/shared/confiavel";
 import { vistaDe } from "@client/janela-cruzada";
 import { allowNativo } from "@/shared/permissoes";
 import { trocarRapida } from "@client/shared/troca-rapida";
+import { QP } from "@/fetch/parse";
 
 export function foreignContextForElement(
 	client: ScramjetClient,
@@ -53,6 +56,8 @@ export function insideForeignContext(
 
 	return "html";
 }
+
+const temEnderecoCss = (v: string) => v.indexOf("url(") >= 0 || v.indexOf("URL(") >= 0 || /@import/i.test(v);
 
 // A regra de `htmlRules` que reescreve o atributo `nome` num elemento `tag`, ou nenhuma.
 function regraDoAtributo(nome: string, tag: string) {
@@ -299,16 +304,45 @@ export default function (client: ScramjetClient, self: typeof window) {
 
 					return url[prop];
 				},
+				// vssh fork: o setter nativo mexeria no endereço do motor (o `search` dele leva os
+				// parâmetros do motor). O componente muda no endereço do site, e o `href` inteiro
+				// volta pelo setter que o reescreve.
+				set(ctx, valor) {
+					if (prop === "origin") return;
+					const href = desc.get.call(ctx.this);
+					if (!href) return;
+					let url: URL;
+					try {
+						url = new _URL(unrewriteUrl(href, client.context));
+					} catch {
+						return;
+					}
+					(url as any)[prop] = valor;
+					(ctx.this as HTMLAnchorElement).href = url.href;
+				},
 			});
 		}
 	}
 
 	client.Trap("Node.prototype.baseURI", {
 		get(ctx) {
+			const nativo = ctx.get() as string;
 			const node = ctx.this as Node;
 			const doc = client.box.instanceof(node, "Document")
 				? (node as Document)
 				: node.ownerDocument;
+			// vssh fork: o nó de outro documento tem a base dele: a de um quadro do motor é o endereço
+			// daquele site, e a de um documento inerte (`parseHTMLUnsafe`) é `about:blank`.
+			if (doc && doc !== self.document) {
+				let dono: ScramjetClient | undefined;
+				try {
+					dono = (doc as any)[SCRAMJETCLIENT];
+				} catch {}
+				if (!dono)
+					return typeof nativo === "string" && nativo.startsWith(client.context.prefix.href)
+						? client.unrewriteUrl(nativo)
+						: nativo;
+			}
 			const base = doc?.querySelector("base[href]") as HTMLBaseElement | null;
 
 			if (base) {
@@ -401,7 +435,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 					value,
 					client.context,
 					client.meta,
-					collectAttributeMap(client, ctx.this, name, value),
+					ruleList.fn.length > 3 ? collectAttributeMap(client, ctx.this, name, value) : undefined,
 				);
 				if (ret == null) {
 					client.natives.call(
@@ -459,7 +493,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 					value,
 					client.context,
 					client.meta,
-					collectAttributeMap(client, ctx.this, name, value),
+					ruleList.fn.length > 3 ? collectAttributeMap(client, ctx.this, name, value) : undefined,
 				);
 
 				if (ret == null) {
@@ -510,7 +544,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 					value,
 					client.context,
 					client.meta,
-					collectAttributeMap(client, ctx.this, name, value),
+					ruleList.fn.length > 3 ? collectAttributeMap(client, ctx.this, name, value) : undefined,
 				);
 				client.natives.call(
 					"Element.prototype.setAttribute",
@@ -526,12 +560,19 @@ export default function (client: ScramjetClient, self: typeof window) {
 	client.Trap("SVGAnimatedString.prototype.baseVal", {
 		get(ctx) {
 			const href = ctx.get() as string;
-			if (!href) return href;
+			if (!href || !href.startsWith(client.context.prefix.href)) return href;
+			try {
+				const escrito = new _URL(href).searchParams.get(QP.autor);
+				if (escrito !== null) return escrito;
+			} catch {}
 
 			return unrewriteUrl(href, client.context);
 		},
 		set(ctx, val: string) {
-			ctx.set(client.rewriteUrl(val));
+			const texto = String(val);
+			// Um `#id` aponta para dentro do documento e vai como está, como na regra do atributo.
+			if (texto.startsWith("#")) return ctx.set(texto);
+			ctx.set(client.rewriteUrl(texto, /^[a-z][a-z0-9+.-]*:/i.test(texto) ? undefined : { autor: texto }));
 		},
 	});
 	client.Trap("SVGAnimatedString.prototype.animVal", {
@@ -643,10 +684,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 				return ctx.get();
 			}
 
-			return unrewriteHtml(
-				ctx.get(),
-				foreignContextForElement(client, ctx.this),
-			);
+			return htmlDoSite(ctx.this as Node, false);
 		},
 	});
 
@@ -655,6 +693,21 @@ export default function (client: ScramjetClient, self: typeof window) {
 			? scriptBlockTypeForElement(client, element)
 			: null;
 
+		// vssh fork: um import map inserido por script tem os endereços do site, e o navegador os
+		// resolveria contra a origem do motor.
+		if (
+			client.box.instanceof(element, "HTMLScriptElement") &&
+			String(scriptBlockType).toLowerCase() === "importmap"
+		) {
+			client.natives.call(
+				"Element.prototype.setAttribute",
+				element,
+				"scramjet-attr-script-source-src",
+				bytesToBase64(TextEncoder_encode(value)),
+			);
+
+			return rewriteImportMap(value, client.context, client.meta);
+		}
 		if (
 			ehScript(client, element) &&
 			isScriptType(scriptBlockType)
@@ -811,7 +864,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 			);
 		},
 		get(ctx) {
-			return unrewriteHtml(ctx.get(), insideForeignContext(client, ctx.this));
+			return htmlDoSite(ctx.this as Node, true);
 		},
 	});
 
@@ -851,7 +904,20 @@ export default function (client: ScramjetClient, self: typeof window) {
 			);
 		},
 		get(ctx) {
-			return unrewriteHtml(ctx.get());
+			// Um shadow root não se copia: os filhos vão para o conteúdo de um `<template>`, que o
+			// navegador serializa como o `innerHTML` do shadow root.
+			const modelo = client.natives.call("Document.prototype.createElement", self.document, "template") as HTMLTemplateElement;
+			const conteudo = modelo.content;
+			const filhos = (ctx.this as ShadowRoot).childNodes;
+			for (let i = 0; i < filhos.length; i++)
+				client.natives.call(
+					"Node.prototype.appendChild",
+					conteudo,
+					client.natives.call("Node.prototype.cloneNode", filhos[i], true),
+				);
+			restaurarCopia(conteudo);
+
+			return client.descriptors.store["Element.prototype.innerHTML"].get.call(modelo);
 		},
 	});
 	client.Proxy("ShadowRoot.prototype.setHTMLUnsafe", {
@@ -868,18 +934,20 @@ export default function (client: ScramjetClient, self: typeof window) {
 	// vssh fork: o `XMLSerializer` escreve os atributos como estão no elemento: o endereço do motor e
 	// os `scramjet-attr-` junto. Ele serializa uma cópia, com o que o site escreveu de volta no lugar,
 	// e o nó do site fica como está. Exportar um gráfico com `serializeToString(svg)` é o caso comum.
+	// O tipo e o nome de um nó pelos acessores nativos, sem `instanceof`: a cópia anda por todos os
+	// elementos dela.
+	const tipoDoNo = Object.getOwnPropertyDescriptor(self.Node.prototype, "nodeType")!.get!;
+	const nomeLocal = Object.getOwnPropertyDescriptor(self.Element.prototype, "localName")!.get!;
+	const conteudoDoModelo = Object.getOwnPropertyDescriptor(self.HTMLTemplateElement.prototype, "content")!.get!;
 	const restaurarCopia = (raiz: Node) => {
+		const tipo = tipoDoNo.call(raiz);
 		const elementos: Element[] = [];
-		if (client.box.instanceof(raiz, "Element")) elementos.push(raiz as Element);
-		if (
-			client.box.instanceof(raiz, "Element") ||
-			client.box.instanceof(raiz, "Document") ||
-			client.box.instanceof(raiz, "DocumentFragment")
-		) {
+		if (tipo === 1) elementos.push(raiz as Element);
+		if (tipo === 1 || tipo === 9 || tipo === 11) {
 			const todos = client.natives.call(
-				client.box.instanceof(raiz, "Element")
+				tipo === 1
 					? "Element.prototype.querySelectorAll"
-					: client.box.instanceof(raiz, "Document")
+					: tipo === 9
 						? "Document.prototype.querySelectorAll"
 						: "DocumentFragment.prototype.querySelectorAll",
 				raiz as Element,
@@ -887,7 +955,17 @@ export default function (client: ScramjetClient, self: typeof window) {
 			) as ArrayLike<Element>;
 			for (let i = 0; i < todos.length; i++) elementos.push(todos[i]);
 		}
+		const textoNativo = client.descriptors.store["Node.prototype.textContent"];
 		for (const el of elementos) {
+			const local = nomeLocal.call(el);
+			// O conteúdo de um `<template>` é outro fragmento, fora do `querySelectorAll`.
+			if (local === "template" && client.box.instanceof(el, "HTMLTemplateElement")) restaurarCopia(conteudoDoModelo.call(el));
+			// O CSS de um `<style>` volta com os endereços do site.
+			if (local === "style") {
+				const texto = textoNativo?.get?.call(el);
+				if (typeof texto === "string" && (texto.includes("url(") || /@import/i.test(texto)))
+					textoNativo?.set?.call(el, unrewriteCss(texto, client.context));
+			}
 			const nomes = client.natives.call("Element.prototype.getAttributeNames", el) as string[];
 			for (const nome of nomes) {
 				if (!nome.startsWith("scramjet-attr-")) continue;
@@ -895,7 +973,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 				const original = nome.slice("scramjet-attr-".length);
 				if (original === "script-source-src") {
 					// O texto vai pelo setter nativo, sem a reescrita que o do motor faria de novo.
-					client.descriptors.store["Node.prototype.textContent"]?.set?.call(el, base64Decode(valor));
+					textoNativo?.set?.call(el, base64Decode(valor));
 				} else {
 					client.natives.call("Element.prototype.setAttribute", el, original, valor);
 				}
@@ -903,6 +981,81 @@ export default function (client: ScramjetClient, self: typeof window) {
 			}
 		}
 	};
+	// O texto serializado com o que o site escreveu de volta. O serializador do navegador escreve
+	// cada atributo como ` nome="valor"`, com `&` e `"` escapados, e o original guardado em
+	// `scramjet-attr-<nome>` está escapado do mesmo jeito: o valor muda de lugar sem reescape. O
+	// texto de um `<script>` e de um `<style>` sai sem escape, até o fechamento dele. Devolve `null`
+	// para o texto que este caminho não lê com segurança, e quem chama usa a cópia.
+	const TAG = /<!--[\s\S]*?-->|<(script|style)\b((?:\s+[^\s"'>/=]+(?:="[^"]*")?)*)\s*>([\s\S]*?)<\/\1>|<([A-Za-z][^\s/>]*)((?:\s+[^\s"'>/=]+(?:="[^"]*")?)*)(\s*\/?)>/g;
+	const ATRIBUTO = /\s+([^\s"'>/=]+)(?:="([^"]*)")?/g;
+	const atributosDoSite = (texto: string): [string, string | null] => {
+		const lista: [string, string | undefined][] = [];
+		const guardados = new _Map<string, string>([]);
+		let fonte: string | null = null;
+		ATRIBUTO.lastIndex = 0;
+		let m: RegExpExecArray | null;
+		while ((m = ATRIBUTO.exec(texto))) {
+			if (m[1].startsWith("scramjet-attr-")) guardados.set(m[1].slice(14), m[2] ?? "");
+			lista.push([m[1], m[2]]);
+		}
+		if (guardados.size === 0) return [texto, null];
+		const presentes: Set<string> = new (_Set as any)(lista.map((a) => a[0]));
+		let saida = "";
+		for (const [nome, valor] of lista) {
+			if (nome.startsWith("scramjet-attr-")) {
+				const original = nome.slice(14);
+				if (original === "script-source-src") {
+					fonte = valor ?? "";
+					continue;
+				}
+				// Um atributo que a regra tirou do elemento volta no lugar do guardado.
+				if (!presentes.has(original)) saida += ` ${original}="${valor ?? ""}"`;
+				continue;
+			}
+			const doSite = guardados.has(nome) ? guardados.get(nome)! : valor;
+			saida += doSite === undefined ? ` ${nome}` : ` ${nome}="${doSite}"`;
+		}
+
+		return [saida, fonte];
+	};
+	const desfazerSerializado = (html: string): string | null => {
+		try {
+			return html.replace(TAG, (tudo, bruto, attrsBruto, conteudo, tag, attrs, fim) => {
+				if (bruto) {
+					const [novos, fonte] = atributosDoSite(attrsBruto ?? "");
+					let texto = conteudo as string;
+					if (fonte !== null) texto = base64Decode(fonte);
+					else if (bruto.toLowerCase() === "style" && temEnderecoCss(texto)) texto = unrewriteCss(texto, client.context);
+
+					return `<${bruto}${novos}>${texto}</${bruto}>`;
+				}
+				if (!tag || !attrs || attrs.indexOf("scramjet-attr-") < 0) return tudo;
+
+				return `<${tag}${atributosDoSite(attrs)[0]}${fim}>`;
+			});
+		} catch {
+			return null;
+		}
+	};
+
+	// vssh fork: o `innerHTML` e o `outerHTML` lidos são os do navegador, sobre uma cópia com o que
+	// o site escreveu de volta no lugar. Reserializar pelo analisador do motor mudava a forma do
+	// texto: dentro de um `<svg>`, `<path/>` no lugar do `<path></path>` que o Chrome escreve.
+	const htmlDoSite = (no: Node, externo: boolean): string => {
+		const nome0 = externo ? "Element.prototype.outerHTML" : "Element.prototype.innerHTML";
+		const nativo = client.descriptors.store[nome0].get.call(no) as string;
+		// O caso comum sai aqui: um texto sem atributo guardado e sem endereço do motor não mudaria
+		// na cópia.
+		if (nativo.indexOf("scramjet-attr-") < 0 && nativo.indexOf(client.context.prefix.href) < 0) return nativo;
+		const desfeito = desfazerSerializado(nativo);
+		if (desfeito !== null) return desfeito;
+		const copia = client.natives.call("Node.prototype.cloneNode", no, true) as Node;
+		restaurarCopia(copia);
+		const nome = externo ? "Element.prototype.outerHTML" : "Element.prototype.innerHTML";
+
+		return client.descriptors.store[nome].get.call(copia);
+	};
+
 	if (self.XMLSerializer)
 		client.Proxy("XMLSerializer.prototype.serializeToString", {
 			apply(ctx) {
@@ -955,7 +1108,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 			const regra = regraDoAtributo(nome, tag);
 			if (!regra) continue;
 			const valor = client.natives.call("Element.prototype.getAttribute", el, nome) as string;
-			const novo = regra.fn(valor, client.context, client.meta, collectAttributeMap(client, el, nome, valor));
+			const novo = regra.fn(valor, client.context, client.meta, regra.fn.length > 3 ? collectAttributeMap(client, el, nome, valor) : undefined);
 			if (novo == null) client.natives.call("Element.prototype.removeAttribute", el, nome);
 			else client.natives.call("Element.prototype.setAttribute", el, nome, novo);
 			client.natives.call("Element.prototype.setAttribute", el, `scramjet-attr-${nome}`, valor);

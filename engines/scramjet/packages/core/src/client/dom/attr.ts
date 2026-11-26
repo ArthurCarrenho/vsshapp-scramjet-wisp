@@ -6,8 +6,7 @@ import {
 	Reflect_get,
 	Reflect_has,
 	Reflect_ownKeys,
-	_WeakMap,
-} from "@/shared/snapshot";
+	_WeakMap, _ProxyNativo } from "@/shared/snapshot";
 
 // O elemento dono de cada `NamedNodeMap`, e da vista dele que o site recebe. O `setNamedItem` e o
 // `setNamedItemNS` põem um atributo como o `setAttributeNode`, e o vão fazer pelo elemento.
@@ -18,7 +17,7 @@ export default function (client: ScramjetClient) {
 		get(ctx) {
 			const map = ctx.get() as NamedNodeMap;
 			donos.set(map, ctx.this as Element);
-			const proxy = new Proxy(map, {
+			const proxy = new _ProxyNativo(map, {
 				get(target, prop, _receiver) {
 					const value = Reflect_get(target, prop);
 
@@ -42,7 +41,7 @@ export default function (client: ScramjetClient) {
 					}
 
 					if (prop in NamedNodeMap.prototype && typeof value === "function") {
-						return new Proxy(value, {
+						return new _ProxyNativo(value, {
 							apply(target, that, args) {
 								if (that === proxy) {
 									return Reflect_apply(target, map, args);

@@ -1,5 +1,5 @@
 import { ScramjetClient } from "@client/index";
-import { Reflect_apply, Reflect_get, _Map, _Set } from "@/shared/snapshot";
+import { Reflect_apply, Reflect_get, _Map, _Set, _ProxyNativo } from "@/shared/snapshot";
 import { trocarRapida } from "@client/shared/troca-rapida";
 
 // vssh fork: um seletor de atributo escrito com o valor do site (`[href="/l1"]`, `[src^="/i"]`)
@@ -145,7 +145,7 @@ export default function (client: ScramjetClient, self: Self) {
 			}
 			const valor = antigo;
 			saida.push(
-				new Proxy(r, {
+				new _ProxyNativo(r, {
 					get(alvo, prop) {
 						if (prop === "oldValue") return valor;
 						const v = Reflect_get(alvo, prop, alvo);

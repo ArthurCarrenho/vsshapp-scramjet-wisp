@@ -63,7 +63,8 @@ async function rodada({ comExtensao }) {
 			anuncio:     await window.__bancada.naAba(aba.id, "window.__img"),
 			proprio:     await window.__bancada.naAba(aba.id, "window.__proprio"),
 			scriptRodou: await window.__bancada.naAba(aba.id, "!!window.__anuncioRodou"),
-			cosmetico:   await window.__bancada.naAba(aba.id, "!!document.getElementById('__vssh_ext_css')"),
+			// O shell adota a folha no documento da aba (`ExtensionRuntime.js`), sem nó no HTML.
+			cosmetico:   await window.__bancada.naAba(aba.id, "[...document.adoptedStyleSheets].some((f) => f.cssRules.length > 0)"),
 			id: aba.id,
 		};
 	}, [ALVO, EXTENSAO, comExtensao]);
