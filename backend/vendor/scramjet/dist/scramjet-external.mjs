@@ -5,6 +5,7 @@ export const {
 	BareResponse,
 	CookieJar,
 	IncrementalHtmlRewriter,
+	LISTAS_DE_ORIGENS,
 	Plugin,
 	SCRAMJETCLIENT,
 	SCRAMJETCLIENTNAME,
