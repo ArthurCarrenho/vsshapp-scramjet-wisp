@@ -1,5 +1,6 @@
 import { SCRAMJETCLIENT } from "@/symbols";
 import type { ScramjetClient } from "@client/index";
+import { excecaoDoNavegador } from "@client/shared/excecao";
 import { _URL, Object_defineProperty, Reflect_apply } from "@/shared/snapshot";
 import { POLLUTANT } from "@client/shared/realm";
 
@@ -103,7 +104,7 @@ function navegar(client: ScramjetClient, alvo: any, url: unknown, trocar: boolea
 
 function criarVista(client: ScramjetClient, alvo: any, minha: string) {
 	const bloqueio = `Blocked a frame with origin "${minha}" from accessing a cross-origin frame.`;
-	const erro = (msg: string) => new client.global.DOMException(msg, "SecurityError");
+	const erro = (msg: string) => excecaoDoNavegador(client, msg, "SecurityError");
 	const lendo = (k: PropertyKey, de = "Window") =>
 		typeof k === "symbol"
 			? erro(`Failed to read a named property from '${de}': ${bloqueio}`)

@@ -1,4 +1,5 @@
 import { ScramjetClient } from "@client/index";
+import { excecaoDoNavegador } from "@client/shared/excecao";
 import { String, _URL } from "@/shared/snapshot";
 
 /**
@@ -55,7 +56,8 @@ export default function (client: ScramjetClient, self: Self) {
 		apply(ctx) {
 			if (mesmaOrigem(ctx.this)) return;
 			const destino = String((ctx.this as any).destination.url);
-			throw new DOMException(
+			throw excecaoDoNavegador(
+				client,
 				`Failed to execute 'intercept' on 'NavigateEvent': A navigation with URL '${destino}' cannot be intercepted by in a window with origin '${client.url.origin}'.`,
 				"SecurityError"
 			);

@@ -220,6 +220,44 @@ export default [
 			assertEqual(location.href, location.origin + "/", "back to the root");
 		`,
 	}),
+	// O Chrome recusa o `pushState` e o `replaceState` para outra origem com um SecurityError que
+	// cita o endereço pedido, a origem e o endereço do documento. O desafio gerenciado do Cloudflare
+	// pede `replaceState` para outro site e confere a recusa.
+	basicTest({
+		name: "location-history-cross-origin-throws",
+		js: `
+			const antes = location.href;
+			for (const nome of ["pushState", "replaceState"]) {
+				for (const url of ["https://example.org/x", "//example.org/y"]) {
+					let erro = null;
+					try { history[nome]({}, "", url); } catch (e) { erro = e; }
+					assert(erro instanceof DOMException, nome + " " + url + " throws a DOMException");
+					assertEqual(erro.name, "SecurityError", nome + " error name");
+					assertEqual(erro.code, 18, nome + " error code");
+					assertEqual(String(erro.stack).split("\\n")[0], "SecurityError: " + erro.message, nome + " carries a stack, like the one the browser throws");
+					const destino = new URL(url, antes).href;
+					assertEqual(
+						erro.message,
+						"Failed to execute '" + nome + "' on 'History': A history state object with URL '" + destino +
+							"' cannot be created in a document with origin '" + location.origin + "' and URL '" + antes + "'.",
+						nome + " message"
+					);
+					assertEqual(location.href, antes, "the address stays after " + nome);
+				}
+			}
+		`,
+	}),
+	basicTest({
+		name: "location-history-illegal-invocation",
+		js: `
+			for (const nome of ["pushState", "replaceState"]) {
+				let erro = null;
+				try { History.prototype[nome].call({}, null, "", "/x"); } catch (e) { erro = e; }
+				assert(erro instanceof TypeError, nome + " on a non-History throws a TypeError");
+				assertEqual(erro.message, "Illegal invocation", nome + " message");
+			}
+		`,
+	}),
 	basicTest({
 		name: "location-history-popstate",
 		js: `
