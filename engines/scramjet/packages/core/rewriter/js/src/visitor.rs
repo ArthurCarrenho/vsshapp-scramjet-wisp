@@ -366,24 +366,14 @@ where
 									// don't recurse into the value because the value is the same and it would double rewrite the prop
 									continue;
 								} else {
-									// const { location: a } = self;
-									if no_shadow && id.name == "location" {
-										self.jschanges.add(rewrite!(
-											id.span(),
-											RewriteProperty {
-												ident: self
-													.alloc
-													.alloc_str(&self.config.templocid)
-													.into()
-											}
-										));
-										*location_assigned = true;
-									} else {
-										self.jschanges.add(rewrite!(
-											id.span(),
-											RewriteProperty { ident: id.name }
-										));
-									}
+									// `var { location: a } = self;` liga `a`. A chave é só o nome
+									// lido do objeto, e vira `$sj_location` com `var`, `let` ou
+									// `const`. Quando o valor é o identificador `location`
+									// (`var { x: location } = self`), a recursão abaixo o troca.
+									self.jschanges.add(rewrite!(
+										id.span(),
+										RewriteProperty { ident: id.name }
+									));
 								}
 							}
 						}

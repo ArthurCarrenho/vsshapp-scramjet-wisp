@@ -112,15 +112,15 @@ Cada uma é visível ao código do site, e o desafio do caso de referência pass
   frase curta no Chrome (`2 arguments required, but only 0 present.`) e a frase inteira pelo motor,
   que monta o cabeçalho quando a pilha é lida. Medido sob o playwright, dos dois lados.
 
-## O que a página do artigo ainda acusa
+## O gerenciador de consentimento do artigo
 
-Depois do desafio, o artigo abre com dois erros não tratados no console, pelo motor da `main` e
-por qualquer variante medida aqui: `String.prototype.startsWith called on null or undefined`, no
-gerenciador de consentimento do site (`transcend-cdn.com/cm/<id>/airgap.js`), e em seguida
-`window.airgap.getConsent is not a function`. O script guarda os nativos na carga e os chama por
-fora dos objetos, e algum deles devolve `null` pelo motor onde o Chrome devolve texto. O
-`sem-automacao.mjs` com `CONSOLE=1` mostra os dois. O caminho para achar a chamada é o do traço,
-com o script numa página sem desafio.
+O artigo carrega o `airgap.js` da Transcend (`transcend-cdn.com/cm/<id>/airgap.js`), que guarda os
+globais de uma vez, numa declaração `var {parent: p, location: l, navigator: n, ...} = globalThis`,
+e lê o `hostname` do `location` guardado. O reescritor trata a chave `location` de uma
+desestruturação como o nome lido do objeto (`$sj_location`), com `var`, `let` ou `const`, e o
+script recebe o endereço da página. Com o script servido numa página local, o Chrome direto e o
+motor terminam iguais: `airgap.getConsent` é uma função e o console fica sem erro. Na página do
+artigo a conferência é o `sem-automacao.mjs` com `CONSOLE=1`, que mostra os erros não tratados.
 
 ## Onde não está a diferença
 
