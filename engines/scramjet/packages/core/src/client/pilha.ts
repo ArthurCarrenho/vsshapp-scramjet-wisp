@@ -140,19 +140,19 @@ function lugarDe(client: ScramjetClient, quadro: any): string {
 }
 
 /** Os CallSites da pilha de quem chama, sem passar pelo `prepareStackTrace` do motor. */
-export function quadrosCrus(client: ScramjetClient): any[] | null {
+export function quadrosCrus(client: ScramjetClient, limite = 64): any[] | null {
 	const E = client.global.Error as any;
 	let quadros: any[] | undefined;
-	let limite: PropertyDescriptor | undefined;
+	let descritor: PropertyDescriptor | undefined;
 	try {
-		limite = Object_getOwnPropertyDescriptor(E, "stackTraceLimit");
+		descritor = Object_getOwnPropertyDescriptor(E, "stackTraceLimit");
 	} catch {}
 	// O limite do site conta os quadros do motor, que ficam acima do chamador; ele só é trocado
 	// quando é um valor comum, para nenhum setter do site rodar.
-	const troca = !!limite && "value" in limite && limite.writable === true;
+	const troca = !!descritor && "value" in descritor && descritor.writable === true;
 	capturando = true;
 	try {
-		if (troca) E.stackTraceLimit = 64;
+		if (troca) E.stackTraceLimit = limite;
 		const alvo: any = {};
 		E.captureStackTrace(alvo);
 		quadros = alvo.stack;
@@ -161,7 +161,7 @@ export function quadrosCrus(client: ScramjetClient): any[] | null {
 		capturando = false;
 		if (troca) {
 			try {
-				E.stackTraceLimit = limite!.value;
+				E.stackTraceLimit = descritor!.value;
 			} catch {}
 		}
 	}
@@ -179,13 +179,18 @@ export function registrarCompilacao(
 ) {
 	if (!client.flagEnabled("cleanErrors")) return;
 
-	const quadros = quadrosCrus(client);
-	if (!quadros) return;
-
+	// Os quadros do motor ficam acima de quem chama, e quase sempre cabem em 16; a pilha longa só é
+	// lida quando eles não couberam.
+	let quadros: any[] | null = null;
 	let i = 0;
-	while (i < quadros.length && mascarado(client, quadros[i].getFileName?.()))
-		i++;
-	if (i >= quadros.length) return;
+	for (const limite of [16, 64]) {
+		quadros = quadrosCrus(client, limite);
+		if (!quadros) return;
+		i = 0;
+		while (i < quadros.length && mascarado(client, quadros[i].getFileName?.())) i++;
+		if (i < quadros.length || quadros.length < limite) break;
+	}
+	if (!quadros || i >= quadros.length) return;
 
 	let origem: string;
 	try {

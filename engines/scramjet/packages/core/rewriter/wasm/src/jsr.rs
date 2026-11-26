@@ -15,10 +15,17 @@ use crate::{
 };
 
 // slightly modified https://github.com/ungap/random-uuid/blob/main/index.js
+//
+// vssh fork: os onze bytes saem de uma chamada só, pelo `getRandomValues` guardado quando o módulo
+// carrega. Um por dígito eram onze chamadas a cada reescrita, e pelo `crypto` global, que o site
+// pode ter trocado e onde ele veria o motor chamar.
 #[wasm_bindgen(inline_js = r#"
+const aleatorios = crypto.getRandomValues.bind(crypto);
 export function scramtag() {
+    const b = aleatorios(new Uint8Array(11));
+    let i = 0;
     return (""+1e10).replace(/[018]/g,
-      c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+      c => (c ^ b[i++] & 15 >> c / 4).toString(16)
     );
 }
 "#)]

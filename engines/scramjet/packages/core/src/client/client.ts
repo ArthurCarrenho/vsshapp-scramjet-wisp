@@ -599,8 +599,17 @@ export class ScramjetClient {
 		}
 	}
 
+	// vssh fork: o endereço do site é lido a cada reescrita, e desfazer a reescrita do `location`
+	// custa um decode do codec. O texto desfeito fica guardado enquanto o `location` nativo não muda;
+	// cada leitura recebe um `URL` novo, que quem chama pode alterar.
+	private urlLida: [string, string] | null = null;
+
 	get url(): _URL {
-		return new _URL(this.unrewriteUrl(this.global.location.href));
+		const nativo = this.global.location.href;
+		if (this.urlLida === null || this.urlLida[0] !== nativo)
+			this.urlLida = [nativo, this.unrewriteUrl(nativo)];
+
+		return new _URL(this.urlLida[1]);
 	}
 
 	set url(url: _URL | string) {

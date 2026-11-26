@@ -37,6 +37,26 @@ function flagsDe(context: ScramjetContext, meta: URLMeta): Record<string, boolea
 	return flags;
 }
 
+// vssh fork: o objeto de configuração que vai ao rewriter é sempre o mesmo para os mesmos globais
+// e o mesmo prefixo. O lado Rust guarda o que leu do último objeto e não o lê de novo quando
+// recebe o mesmo (ver `config_de` em `rewriter/wasm/src/lib.rs`).
+const configsGuardadas = new WeakMap<object, Map<string, Record<string, string>>>();
+
+function configDe(context: ScramjetContext): Record<string, string> {
+	const globais = context.config.globals as unknown as Record<string, string>;
+	let porPrefixo = configsGuardadas.get(globais);
+	if (!porPrefixo) configsGuardadas.set(globais, (porPrefixo = new Map()));
+	const prefixo = context.prefix.pathname;
+	let config = porPrefixo.get(prefixo);
+	if (!config) {
+		config = { ...globais, prefix: prefixo };
+		if (porPrefixo.size >= 16) porPrefixo.delete(porPrefixo.keys().next().value!);
+		porPrefixo.set(prefixo, config);
+	}
+
+	return config;
+}
+
 function rewriteJsWasm(
 	input: string | Uint8Array,
 	source: string | null,
@@ -54,10 +74,7 @@ function rewriteJsWasm(
 		// try {
 		if (typeof input === "string") {
 			out = rewriter.rewrite_js(
-				{
-					...context.config.globals,
-					prefix: context.prefix.pathname,
-				},
+				configDe(context),
 				flagsobj,
 				context.interface.codecEncode,
 				input,
@@ -67,10 +84,7 @@ function rewriteJsWasm(
 			);
 		} else {
 			out = rewriter.rewrite_js_bytes(
-				{
-					...context.config.globals,
-					prefix: context.prefix.pathname,
-				},
+				configDe(context),
 				flagsobj,
 				context.interface.codecEncode,
 				input,
