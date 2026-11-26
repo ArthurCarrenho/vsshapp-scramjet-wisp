@@ -11,7 +11,7 @@ import {
 	isJavascriptMimeType,
 	rewriteCss,
 	rewriteHtml,
-	rewriteJs,
+	rewriteJsDaRede,
 	rewriteWorkers,
 } from "@/shared";
 import { sniffEncoding } from "@/shared/sniffEncoding";
@@ -55,7 +55,7 @@ export async function rewriteBody(
 					return response.body;
 				}
 
-				let rewritten = rewriteJs(
+				let rewritten = await rewriteJsDaRede(
 					new Uint8Array(await response.arrayBuffer()),
 					response.url,
 					handler.context,
