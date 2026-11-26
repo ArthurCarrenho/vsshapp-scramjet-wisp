@@ -12,9 +12,6 @@ import {
 	Performance_now,
 } from "../snapshot";
 
-// eslint-disable-next-line scramjet-core/no-globals
-Error.stackTraceLimit = 50;
-
 type RewriterResult = {
 	js: string | Uint8Array;
 	map: Uint8Array | null;

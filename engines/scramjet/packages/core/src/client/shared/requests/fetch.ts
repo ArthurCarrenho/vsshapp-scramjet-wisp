@@ -18,10 +18,21 @@ function rewriteUrlOptionsForFetch(init: RequestInit | undefined) {
 	};
 }
 
+/**
+ * vssh fork: um `data:` pedido por `fetch`, XHR ou `EventSource` vai ao navegador como está. Ele
+ * não sai para a rede, então não há o que proxiar, e só assim o `connect-src` que o motor entrega
+ * (ver `politicaDeConexao` em `fetch/headers.ts`) recusa o pedido como o Chrome recusaria. Pela
+ * URL reescrita ele seria um pedido à origem do motor, que o `'self'` deixa passar.
+ */
+export function ehUrlDeDados(url: unknown): boolean {
+	return /^\s*data:/i.test(String(url));
+}
+
 export default function (client: ScramjetClient) {
 	client.Proxy("fetch", {
 		apply(ctx) {
 			if (client.box.instanceof(ctx.args[0], "Request")) return;
+			if (ehUrlDeDados(ctx.args[0])) return;
 			const url = String(ctx.args[0]);
 			ctx.args[0] = client.rewriteUrl(
 				url,
@@ -33,6 +44,7 @@ export default function (client: ScramjetClient) {
 	client.Proxy("Request", {
 		construct(ctx) {
 			if (client.box.instanceof(ctx.args[0], "Request")) return;
+			if (ehUrlDeDados(ctx.args[0])) return;
 			const url = String(ctx.args[0]);
 			ctx.args[0] = client.rewriteUrl(
 				url,

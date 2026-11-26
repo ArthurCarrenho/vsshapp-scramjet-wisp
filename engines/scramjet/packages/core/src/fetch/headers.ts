@@ -67,9 +67,12 @@ export async function rewriteResponseHeaders(
 ): Promise<ScramjetHeaders> {
 	const headers = ScramjetHeaders.fromRawHeaders(rawHeaders);
 
+	const politica = headers.get("content-security-policy");
 	for (const cspHeader of SEC_HEADERS) {
 		headers.delete(cspHeader);
 	}
+	const conexao = politica ? politicaDeConexao(politica) : null;
+	if (conexao) headers.set("Content-Security-Policy", conexao);
 
 	for (const urlHeader of URL_HEADERS) {
 		if (headers.has(urlHeader)) {
@@ -115,6 +118,39 @@ export async function rewriteResponseHeaders(
 	}
 
 	return headers;
+}
+
+/**
+ * vssh fork: o `connect-src` do site, na parte que sobrevive à troca de origem.
+ *
+ * A política inteira não pode ir para o navegador: as fontes dela são os hosts do site, e todo
+ * pedido da página proxiada sai para a origem do motor. O que se traduz sem perder o sentido são os
+ * esquemas. Cada política vira `connect-src 'self'` mais os esquemas que ela permitia (`data:`,
+ * `blob:`, `wss:`), e o navegador recusa sozinho o resto, com o erro, o aviso no console e o
+ * `securitypolicyviolation` dele. O Turnstile pede `fetch("data:,")` debaixo de um `connect-src`
+ * sem `data:` e espera a recusa; quando o pedido volta com sucesso, o desafio não fecha.
+ *
+ * Quando a política não fala de conexão (nem `connect-src` nem `default-src`), ela não entra.
+ * Várias políticas no mesmo cabeçalho, separadas por vírgula, valem cada uma por si, como no
+ * navegador.
+ */
+export function politicaDeConexao(cabecalho: string): string | null {
+	const saida: string[] = [];
+	for (const politica of cabecalho.split(",")) {
+		const diretivas = new Map<string, string[]>();
+		for (const bruta of politica.split(";")) {
+			const partes = bruta.trim().split(/\s+/).filter(Boolean);
+			if (!partes.length) continue;
+			const nome = partes[0].toLowerCase();
+			if (!diretivas.has(nome)) diretivas.set(nome, partes.slice(1));
+		}
+		const fontes = diretivas.get("connect-src") ?? diretivas.get("default-src");
+		if (!fontes) continue;
+		const esquemas = fontes.filter((f) => /^[a-z][a-z0-9+.-]*:$/i.test(f));
+		saida.push(["connect-src", "'self'", ...esquemas].join(" "));
+	}
+
+	return saida.length ? saida.join(", ") : null;
 }
 
 export function rewriteRequestHeaders(

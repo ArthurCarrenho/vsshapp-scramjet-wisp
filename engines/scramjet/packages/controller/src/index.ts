@@ -70,7 +70,10 @@ const scramjetConfig: Partial<ScramjetConfig> = {
 		...scramjetDefaultConfig.flags,
 		allowFailedIntercepts: true,
 	},
-	maskedfiles: ["inject.js", "scramjet.wasm.js"],
+	// vssh fork: o `scramjet.js` também. Toda chamada que passa por um nativo envolvido ganha um
+	// quadro do invólucro na pilha (`RawProxy.r.apply.l.apply (…/scram/scramjet.js:18:1067)`), e
+	// a página que lê a própria pilha via o arquivo do motor no meio da dela.
+	maskedfiles: ["inject.js", "scramjet.wasm.js", "scramjet.js"],
 };
 
 // vssh fork: distingue FALHA DE TRANSPORTE/REDE (libcurl/wisp: URL morta, host bloqueado, arquivo

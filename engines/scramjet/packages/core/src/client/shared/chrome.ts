@@ -31,12 +31,49 @@ export default function (client: ScramjetClient, self: any) {
 	if (!iswindow) return;
 	// DOM specific ones below here
 
-	// `Navigator.prototype.serviceWorker` continua sendo apagado, e é a exceção consciente do
-	// bloco abaixo: ele não é fingerprint, é ISOLAMENTO. Com ele de volta, a página proxiada
-	// enxerga e registra Service Worker próprio, colidindo com o do motor — que é quem roteia
-	// tudo. Devolvê-lo exige um shim que finja um registro sem conceder nenhum, e isso é
-	// trabalho de verdade, não uma linha.
-	Reflect.deleteProperty(Navigator.prototype, "serviceWorker");
+	// `navigator.serviceWorker` existe, e não registra nada. Ele é isolamento: um Service Worker da
+	// página proxiada colidiria com o do motor, que é quem roteia tudo. Um Chrome sem
+	// `navigator.serviceWorker` num contexto seguro não existe, então o objeto e os métodos
+	// continuam os nativos, e cada um responde como uma página sem worker: `controller` nulo, nenhum
+	// registro, `ready` que não resolve, e `register` recusado como o Chrome recusa um registro que
+	// a política do navegador não permite.
+	if (typeof (self as any).ServiceWorkerContainer === "function") {
+		client.Trap("ServiceWorkerContainer.prototype.controller", {
+			get() {
+				return null;
+			},
+		});
+		const nunca = new Promise(() => {});
+		client.Trap("ServiceWorkerContainer.prototype.ready", {
+			get() {
+				return nunca;
+			},
+		});
+		client.Proxy("ServiceWorkerContainer.prototype.register", {
+			apply(ctx) {
+				ctx.return(
+					Promise.reject(
+						new DOMException(
+							"Failed to register a ServiceWorker: The user denied permission to use Service Worker.",
+							"SecurityError"
+						)
+					)
+				);
+			},
+		});
+		client.Proxy("ServiceWorkerContainer.prototype.getRegistration", {
+			apply(ctx) {
+				ctx.return(Promise.resolve(undefined));
+			},
+		});
+		client.Proxy("ServiceWorkerContainer.prototype.getRegistrations", {
+			apply(ctx) {
+				ctx.return(Promise.resolve([]));
+			},
+		});
+	} else {
+		Reflect.deleteProperty(Navigator.prototype, "serviceWorker");
+	}
 
 	// contact picker api
 	del("Navigator.prototype.contacts");
@@ -140,12 +177,5 @@ export default function (client: ScramjetClient, self: any) {
 	// o primeiro é geometria somente-leitura (numa aba ele já reporta invisível) e o segundo só
 	// rotula uma captura que precisaria ter sido concedida antes. Nenhum dos dois concede nada.
 
-	// Navigation API (not chrome only but it's really annoying to implement)
-	del("navigation");
-	del("NavigateEvent");
-	del("NavigationActivation");
-	del("NavigationCurrentEntryChangeEvent");
-	del("NavigationDestination");
-	del("NavigationHistoryEntry");
-	del("NavigationTransition");
+	// A Navigation API fica, traduzida em `client/dom/navigation.ts`.
 }

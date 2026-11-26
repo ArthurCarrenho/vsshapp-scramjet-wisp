@@ -99,9 +99,17 @@ export default function (client: ScramjetClient, self: Self) {
 	const localStorageProxy = new Proxy(self.localStorage, handler);
 	const sessionStorageProxy = new Proxy(self.sessionStorage, handler);
 
-	delete self.localStorage;
-	delete self.sessionStorage;
-
-	self.localStorage = localStorageProxy;
-	self.sessionStorage = sessionStorageProxy;
+	// vssh fork: os dois continuam acessores do global, como no Chrome, e o getter de cada um se
+	// apresenta como o nativo (ver `RawTrap`). Uma propriedade de dado no lugar deles aparece em
+	// `Object.getOwnPropertyDescriptor(window, "localStorage")`.
+	client.Trap("localStorage", {
+		get() {
+			return localStorageProxy;
+		},
+	});
+	client.Trap("sessionStorage", {
+		get() {
+			return sessionStorageProxy;
+		},
+	});
 }

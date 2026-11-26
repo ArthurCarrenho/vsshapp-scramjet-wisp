@@ -159,7 +159,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 				element.prototype,
 				attr
 			);
-			Object_defineProperty(element.prototype, attr, {
+			const acessores = {
 				get() {
 					if (["src", "data", "href", "action", "formaction"].includes(attr)) {
 						return unrewriteUrl(descriptor.get.call(this), client.context);
@@ -167,18 +167,27 @@ export default function (client: ScramjetClient, self: typeof window) {
 
 					return descriptor.get.call(this);
 				},
-
-				set(value) {
-					// if (
-					// 	this.tagName === "IFRAME" &&
-					// 	attr === "src" &&
-					// 	value === "about:blank"
-					// ) {
-					// 	this.setAttribute("srcdoc", "");
-					// 	return;
-					// }
+				set(value: any) {
 					return this.setAttribute(attr, value);
 				},
+			};
+			// vssh fork: o getter e o setter se apresentam como os nativos que eles substituem: o
+			// `toString` sai do nativo (pelo `unproxy`, que o `Function.prototype.toString` do motor
+			// consulta), e `name` e `length` são copiados. Sem isso, ler
+			// `Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, "href").get` devolvia o
+			// corpo deste arquivo minificado.
+			for (const [novo, nativo] of [
+				[acessores.get, descriptor?.get],
+				[acessores.set, descriptor?.set],
+			] as const) {
+				if (typeof nativo !== "function") continue;
+				client.box.unproxy.set(novo, nativo);
+				Object_defineProperty(novo, "name", { value: nativo.name, configurable: true });
+				Object_defineProperty(novo, "length", { value: nativo.length, configurable: true });
+			}
+			Object_defineProperty(element.prototype, attr, {
+				get: acessores.get,
+				set: acessores.set,
 			});
 		}
 	}

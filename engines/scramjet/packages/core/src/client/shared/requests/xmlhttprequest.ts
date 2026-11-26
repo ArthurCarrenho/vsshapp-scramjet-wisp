@@ -1,6 +1,7 @@
 import { getFlag, ScramjetContext } from "@/shared";
 import { rewriteUrl, unrewriteUrl, URLMeta } from "@rewriters/url";
 import { ScramjetClient } from "@client/index";
+import { ehUrlDeDados } from "./fetch";
 
 export default function (client: ScramjetClient, self: Self) {
 	let worker;
@@ -12,7 +13,8 @@ export default function (client: ScramjetClient, self: Self) {
 
 	client.Proxy("XMLHttpRequest.prototype.open", {
 		apply(ctx) {
-			if (ctx.args[1]) ctx.args[1] = client.rewriteUrl(ctx.args[1]);
+			if (ctx.args[1] && !ehUrlDeDados(ctx.args[1]))
+				ctx.args[1] = client.rewriteUrl(ctx.args[1]);
 			if (ctx.args[2] === undefined) ctx.args[2] = true;
 			ctx.this[ARGS] = ctx.args;
 		},
@@ -29,6 +31,8 @@ export default function (client: ScramjetClient, self: Self) {
 		apply(ctx) {
 			const args = ctx.this[ARGS];
 			if (!args || args[2]) return;
+			// Um `data:` síncrono não sai para a rede: o navegador responde, ou o `connect-src` recusa.
+			if (ehUrlDeDados(args[1])) return;
 
 			if (!client.getFlag("syncxhr")) {
 				console.warn("ignoring request - sync xhr disabled in flags");
