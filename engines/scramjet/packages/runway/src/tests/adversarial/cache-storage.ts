@@ -43,11 +43,7 @@ export default [
 
 	// ------------------------------------------------------------------
 	basicTest({
-		// KNOWN FAILURE: caches.keys() reports the namespaced name
-		// ("http://site@name" instead of "name"). The standard activate-time
-		// cleanup filters this list against a known cache name, so it either
-		// matches nothing and deletes every cache, or matches nothing and cleans
-		// up none of them.
+		// caches.keys() lists the page's caches under the names it gave them.
 		name: "cachestorage-keys-not-namespaced",
 		js: `
 			const c = await caches.open("adversarial-cache3");
@@ -59,8 +55,7 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: the Request objects from cache.keys() carry the proxy
-		// origin, so code that re-fetches or compares them targets the wrong host.
+		// The Request keys from cache.keys() carry the site's URL.
 		name: "cachestorage-request-keys-urls",
 		js: `
 			const c = await caches.open("adversarial-cache4");
@@ -72,8 +67,8 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: cache.add and cache.addAll reject with "Request failed".
-		// addAll is how every precaching service worker populates its cache.
+		// cache.add and cache.addAll fetch the site's URL. addAll is how every
+		// precaching service worker populates its cache.
 		name: "cachestorage-add-and-addall",
 		js: `
 			const c = await caches.open("adversarial-cache5");
