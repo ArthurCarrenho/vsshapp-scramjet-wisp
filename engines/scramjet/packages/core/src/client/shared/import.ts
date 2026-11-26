@@ -1,12 +1,15 @@
 import { ScramjetClient } from "@client/index";
 import { Object_defineProperty, _URL } from "@/shared/snapshot";
+import { embrulhar } from "@/shared/confiavel";
 
 export default function (client: ScramjetClient, self: Self) {
+	// vssh fork: compilada pelo `eval` com um TrustedScript. O `Function` nativo, com strings, vai
+	// à política padrão do site num documento que exige Trusted Types, e ela recusa o código do
+	// motor; o `import()` reescrito do quadro inteiro ficava sem destino.
 	const boundimport = client.natives.call(
-		"Function",
+		"eval",
 		null,
-		"url",
-		"return import(url)"
+		embrulhar(client, "TrustedScript", "(function (url) {\n\treturn import(url);\n})")
 	);
 
 	Object_defineProperty(self, client.config.globals.importfn, {

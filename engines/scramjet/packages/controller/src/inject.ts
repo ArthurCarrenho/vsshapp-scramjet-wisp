@@ -341,7 +341,9 @@ class ExecutionContextWrapper {
 	injectScramjet() {
 		const frame = this.global.frameElement as HTMLIFrameElement | null;
 		if (frame && !frame.name) {
-			window.name = frame.name = createFrameId();
+			// O nome vai ao contexto do quadro (`this.global`). Num quadro filho instalado de fora, o
+			// `window` deste código é o do pai, que ficava com o nome do filho.
+			this.global.name = frame.name = createFrameId();
 			(frame as any)[NOMEGERADO] = frame.name;
 		}
 		let controllerFrame = frame?.[CONTROLLERFRAME];

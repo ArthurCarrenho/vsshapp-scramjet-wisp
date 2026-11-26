@@ -3,6 +3,7 @@ import { rewriteHtml, rewriteSrcset } from "@rewriters/html";
 import { rewriteUrl, unrewriteBlob, URLMeta } from "@rewriters/url";
 import { ScramjetContext } from "@/shared";
 import { _URL } from "./snapshot";
+import { politicaDoMeta } from "@/fetch/headers";
 
 export const htmlRules: {
 	[key: string]: "*" | string[] | ((...any: any[]) => string | null);
@@ -80,7 +81,9 @@ export const htmlRules: {
 		fn: () => null,
 
 		// csp stuff that must be deleted
-		nonce: "*",
+		//
+		// vssh fork: o `nonce` fica. A CSP de um `<meta>` chega ao navegador com os nonces dela
+		// (`politicaDoMeta`), e um script sem o nonce dele não rodaria.
 		csp: ["iframe"],
 		credentialless: ["iframe"],
 	},
@@ -127,6 +130,19 @@ export const htmlRules: {
 			else return value;
 		},
 		target: ["a", "base"],
+	},
+	{
+		// vssh fork: a CSP de um `<meta http-equiv>` vai ao navegador traduzida por `politicaDoMeta`.
+		// O elemento continua no documento, e `getAttribute("content")` e `.content` devolvem a
+		// política do site. O quadro do Turnstile traz a CSP dele assim e confere que ela vale; sem
+		// ela, o desafio responde `fail`.
+		fn: (value, _context, _meta, attrs) => {
+			if (attrs?.["http-equiv"]?.toLowerCase() !== "content-security-policy")
+				return value;
+
+			return politicaDoMeta(value) ?? "";
+		},
+		content: ["meta"],
 	},
 	{
 		// svg elements with an href property

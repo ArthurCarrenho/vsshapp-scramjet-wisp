@@ -576,10 +576,19 @@ export class ScramjetClient {
 			return aorder - border;
 		});
 
+		// vssh fork: um módulo que falha não leva os outros junto. Num quadro em sandbox sem
+		// `allow-scripts` o motor instala o cliente de fora, e o que precisa compilar código no
+		// realm do quadro (o `eval` dele) é recusado pelo navegador. Os módulos seguintes, como os
+		// acessores de `wrap.ts` que o código reescrito do pai usa para ler `eval`, `location`,
+		// `top` e `parent` desse quadro, continuam valendo para ele.
 		for (const module of modules) {
-			if (!module.enabled || module.enabled(this))
-				module.default(this, this.global);
-			else if (module.disabled) module.disabled(this, this.global);
+			try {
+				if (!module.enabled || module.enabled(this))
+					module.default(this, this.global);
+				else if (module.disabled) module.disabled(this, this.global);
+			} catch (e) {
+				dbg.error("módulo do cliente falhou", e);
+			}
 		}
 	}
 

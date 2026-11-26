@@ -1,6 +1,7 @@
 import { rewriteJs } from "@rewriters/js";
 import { ScramjetClient } from "@client/index";
 import { String } from "@/shared/snapshot";
+import { comoOriginal } from "@/shared/confiavel";
 
 export default function (client: ScramjetClient, self: Self) {
 	client.Proxy(["setTimeout", "setInterval"], {
@@ -8,11 +9,12 @@ export default function (client: ScramjetClient, self: Self) {
 			if (typeof ctx.args[0] !== "function") {
 				const code = String(ctx.args[0]);
 				// @ts-expect-error - for some reason it doesn't recognize setTimeout(string, number)
-				ctx.args[0] = rewriteJs(
-					code,
-					"(setTimeout string eval)",
-					client.context,
-					client.meta
+				ctx.args[0] = comoOriginal(
+					client,
+					"TrustedScript",
+					ctx.args[0],
+					rewriteJs(code, "(setTimeout string eval)", client.context, client.meta),
+					"Window setTimeout"
 				);
 			}
 		},

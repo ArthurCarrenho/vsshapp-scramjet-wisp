@@ -20,6 +20,7 @@ import {
 	isScriptType,
 } from "@/shared/mime";
 import { ForeignContext } from "@/shared/rewriters/html";
+import { comoOriginal } from "@/shared/confiavel";
 
 export function foreignContextForElement(
 	client: ScramjetClient,
@@ -128,6 +129,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 		srcdoc: [self.HTMLIFrameElement],
 		poster: [self.HTMLVideoElement],
 		imagesrcset: [self.HTMLLinkElement],
+		content: [self.HTMLMetaElement],
 	};
 
 	const urlinterfaces = [
@@ -163,6 +165,10 @@ export default function (client: ScramjetClient, self: typeof window) {
 				get() {
 					if (["src", "data", "href", "action", "formaction"].includes(attr)) {
 						return unrewriteUrl(descriptor.get.call(this), client.context);
+					}
+					// O `content` de um `<meta>` só muda numa CSP, e o do site está no atributo guardado.
+					if (attr === "content") {
+						return this.getAttribute(attr) ?? "";
 					}
 
 					return descriptor.get.call(this);
@@ -517,7 +523,19 @@ export default function (client: ScramjetClient, self: typeof window) {
 				}
 			}
 
-			ctx.set(newval);
+			ctx.set(
+				comoOriginal(
+					client,
+					client.box.instanceof(ctx.this, "HTMLScriptElement")
+						? "TrustedScript"
+						: "TrustedHTML",
+					value,
+					newval,
+					client.box.instanceof(ctx.this, "HTMLScriptElement")
+						? "HTMLScriptElement innerHTML"
+						: "Element innerHTML"
+				)
+			);
 		},
 		get(ctx) {
 			if (client.box.instanceof(ctx.this, "HTMLScriptElement")) {
@@ -604,7 +622,17 @@ export default function (client: ScramjetClient, self: typeof window) {
 		{
 			set(ctx, value) {
 				const text = String(value);
-				return ctx.set(rewriteTextForElement(textTargetOf(ctx.this), text));
+				return ctx.set(
+					comoOriginal(
+						client,
+						"TrustedScript",
+						value,
+						rewriteTextForElement(textTargetOf(ctx.this), text),
+						client.box.instanceof(ctx.this, "HTMLScriptElement")
+							? "HTMLScriptElement textContent"
+							: undefined
+					)
+				);
 			},
 			get(ctx) {
 				return getTextForElement(textTargetOf(ctx.this), ctx.get());
@@ -619,7 +647,17 @@ export default function (client: ScramjetClient, self: typeof window) {
 		{
 			set(ctx, value: string) {
 				const text = String(value);
-				return ctx.set(rewriteTextForElement(ctx.this, text));
+				return ctx.set(
+					comoOriginal(
+						client,
+						"TrustedScript",
+						value,
+						rewriteTextForElement(ctx.this, text),
+						client.box.instanceof(ctx.this, "HTMLScriptElement")
+							? "HTMLScriptElement innerText"
+							: undefined
+					)
+				);
 			},
 			get(ctx) {
 				return getTextForElement(ctx.this, ctx.get());
@@ -631,13 +669,19 @@ export default function (client: ScramjetClient, self: typeof window) {
 		set(ctx, value: string) {
 			const html = String(value);
 			ctx.set(
-				rewriteHtml(html, client.context, client.meta, {
-					loadScripts: false,
-					inline: true,
-					source: client.url.href,
-					apisource: "set Element.prototype.outerHTML",
-					foreignContext: insideForeignContext(client, ctx.this),
-				})
+				comoOriginal(
+					client,
+					"TrustedHTML",
+					value,
+					rewriteHtml(html, client.context, client.meta, {
+						loadScripts: false,
+						inline: true,
+						source: client.url.href,
+						apisource: "set Element.prototype.outerHTML",
+						foreignContext: insideForeignContext(client, ctx.this),
+					}),
+					"Element outerHTML"
+				)
 			);
 		},
 		get(ctx) {
@@ -667,13 +711,19 @@ export default function (client: ScramjetClient, self: typeof window) {
 	client.Proxy("Element.prototype.insertAdjacentHTML", {
 		apply(ctx) {
 			const html = String(ctx.args[1]);
-			ctx.args[1] = rewriteHtml(html, client.context, client.meta, {
-				loadScripts: false,
-				inline: true,
-				source: client.url.href,
-				apisource: "set Element.prototype.insertAdjacentHTML",
-				foreignContext: foreignContextForElement(client, ctx.this),
-			});
+			ctx.args[1] = comoOriginal(
+				client,
+				"TrustedHTML",
+				ctx.args[1],
+				rewriteHtml(html, client.context, client.meta, {
+					loadScripts: false,
+					inline: true,
+					source: client.url.href,
+					apisource: "set Element.prototype.insertAdjacentHTML",
+					foreignContext: foreignContextForElement(client, ctx.this),
+				}),
+				"Element insertAdjacentHTML"
+			);
 		},
 	});
 
@@ -785,7 +835,15 @@ export default function (client: ScramjetClient, self: typeof window) {
 	// jQuery's DOMEval injects code via script.text
 	client.Trap("HTMLScriptElement.prototype.text", {
 		set(ctx, value) {
-			ctx.set(rewriteTextForElement(ctx.this, String(value)));
+			ctx.set(
+				comoOriginal(
+					client,
+					"TrustedScript",
+					value,
+					rewriteTextForElement(ctx.this, String(value)),
+					"HTMLScriptElement text"
+				)
+			);
 		},
 		get(ctx) {
 			return getTextForElement(ctx.this, ctx.get());

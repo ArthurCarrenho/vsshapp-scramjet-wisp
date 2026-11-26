@@ -1,6 +1,7 @@
 import { rewriteJs } from "@rewriters/js";
 import { ScramjetClient } from "@client/index";
 import { Object_defineProperty, String } from "@/shared/snapshot";
+import { comoOriginal } from "@/shared/confiavel";
 
 export default function (client: ScramjetClient, self: Self) {
 	// used for proxying *direct eval*
@@ -9,6 +10,7 @@ export default function (client: ScramjetClient, self: Self) {
 		value: function (js: any) {
 			// if eval is called on anything other than a string, we should just return it unchanged
 			// the one exception is TrustedScript, which can just be stringified and rewritten
+			const original = js;
 			if (client.box.instanceof(js, "TrustedScript")) js = String(js);
 			if (typeof js !== "string") return js;
 
@@ -19,7 +21,7 @@ export default function (client: ScramjetClient, self: Self) {
 				client.meta
 			);
 
-			return rewritten;
+			return comoOriginal(client, "TrustedScript", original, rewritten, "eval");
 		},
 		writable: false,
 		configurable: false,
@@ -31,18 +33,25 @@ export function createIndirectEval(client: ScramjetClient) {
 	const proxy = new Proxy(client.global.eval, {
 		apply(_target, _thisArg, args) {
 			let js = args[0];
+			const original = js;
 			// > If the argument of eval() is not a string, eval() returns the argument unchanged
 			// the one exception is TrustedScript, which can just be stringified and rewritten
 			if (client.box.instanceof(js, "TrustedScript")) js = String(js);
 			if (typeof js !== "string") return js;
 
 			return indirection(
-				rewriteJs(
-					js,
-					"(indirect eval proxy)",
-					client.context,
-					client.meta
-				) as string
+				comoOriginal(
+					client,
+					"TrustedScript",
+					original,
+					rewriteJs(
+						js,
+						"(indirect eval proxy)",
+						client.context,
+						client.meta
+					) as string,
+					"eval"
+				)
 			);
 		},
 	});

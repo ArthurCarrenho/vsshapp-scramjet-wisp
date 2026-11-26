@@ -2,6 +2,7 @@ import { IncrementalHtmlRewriter, rewriteHtml } from "@rewriters/html";
 import { ScramjetClient } from "@client/index";
 import { String, _URL } from "@/shared/snapshot";
 import { createReferrerString } from "@/fetch/util";
+import { comoOriginal, ehConfiavel, embrulhar } from "@/shared/confiavel";
 
 export default function (client: ScramjetClient, _self: Self) {
 	function resetDocumentWriter(document: Document) {
@@ -29,29 +30,36 @@ export default function (client: ScramjetClient, _self: Self) {
 		},
 	});
 
+	// vssh fork: o HTML reescrito vai ao navegador com o tipo que o do site teria. Num documento
+	// que exige Trusted Types, o `write` aceita TrustedHTML, ou uma string que a política padrão do
+	// site aprova; o navegador junta os argumentos e consulta a política uma vez, com o sink
+	// "Document write" ou "Document writeln".
+	function escrever(ctx: any, sink: string, fim: string) {
+		const writer = getDocumentWriter(ctx.this);
+		const args: unknown[] = ctx.args;
+		const original =
+			args.length > 0 && args.every((a) => ehConfiavel(client, a, "TrustedHTML"))
+				? args[0]
+				: args.map((a) => String(a)).join("") + fim;
+		const reescrito = writer.write(args.map((a) => String(a)).join("") + fim);
+		ctx.return(
+			client.natives.call(
+				"Document.prototype.write",
+				ctx.this,
+				comoOriginal(client, "TrustedHTML", original, reescrito, sink)
+			)
+		);
+	}
+
 	client.Proxy("Document.prototype.write", {
 		apply(ctx) {
-			const writer = getDocumentWriter(ctx.this);
-			ctx.return(
-				client.natives.call(
-					"Document.prototype.write",
-					ctx.this,
-					writer.write(ctx.args.join(""))
-				)
-			);
+			escrever(ctx, "Document write", "");
 		},
 	});
 
 	client.Proxy("Document.prototype.writeln", {
 		apply(ctx) {
-			const writer = getDocumentWriter(ctx.this);
-			ctx.return(
-				client.natives.call(
-					"Document.prototype.write",
-					ctx.this,
-					writer.write(ctx.args.join("") + "\n")
-				)
-			);
+			escrever(ctx, "Document writeln", "\n");
 		},
 	});
 
@@ -65,7 +73,11 @@ export default function (client: ScramjetClient, _self: Self) {
 			try {
 				const remaining = writer.end();
 				if (remaining) {
-					client.natives.call("Document.prototype.write", ctx.this, remaining);
+					client.natives.call(
+						"Document.prototype.write",
+						ctx.this,
+						embrulhar(client, "TrustedHTML", remaining)
+					);
 				}
 			} finally {
 				resetDocumentWriter(ctx.this);

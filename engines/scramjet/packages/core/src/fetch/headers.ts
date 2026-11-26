@@ -14,6 +14,7 @@ import {
 import { RawHeaders } from "@mercuryworkshop/proxy-transports";
 import { _URL, _Set } from "@/shared/snapshot";
 import { createReferrerString } from "./util";
+import { POLITICA_DO_MOTOR } from "@/shared/confiavel";
 
 /**
  * Headers for security policy features that haven't been emulated yet
@@ -151,6 +152,101 @@ export function politicaDeConexao(cabecalho: string): string | null {
 	}
 
 	return saida.length ? saida.join(", ") : null;
+}
+
+/**
+ * vssh fork: a CSP de um `<meta http-equiv>`, traduzida diretiva por diretiva.
+ *
+ * Uma política de `<meta>` só vale para o que o parser encontra depois dela, e os scripts do motor
+ * vêm antes, no começo do `<head>`. Por isso ela pode ir ao navegador quase inteira, ao contrário da
+ * do cabeçalho, que valeria também para eles. Palavras-chave, nonces, hashes, esquemas e as
+ * diretivas de Trusted Types ficam como o site escreveu. Toda fonte de host, e o `'self'`, vira o
+ * `'self'` do motor, porque todo endereço proxiado mora nele; `data:` e `blob:` também ganham o
+ * `'self'` fora do `connect-src`, porque o motor os serve pelo prefixo. O `connect-src` segue
+ * `politicaDeConexao`. O código do motor compila WebAssembly, e a diretiva que governa os scripts
+ * ganha `'wasm-unsafe-eval'` quando o site não deu `'unsafe-eval'`.
+ *
+ * O que um `<meta>` não aplica (`frame-ancestors`, `sandbox`, relatórios) sai, e o
+ * `upgrade-insecure-requests` sai porque reescreveria os endereços do próprio motor.
+ *
+ * O quadro do Turnstile traz a política dele assim e confere que ela vale: o `eval` recusado, o
+ * script e o atributo de evento sem nonce que não rodam.
+ */
+const DIRETIVAS_DE_BUSCA = new Set([
+	"default-src",
+	"script-src",
+	"script-src-elem",
+	"script-src-attr",
+	"style-src",
+	"style-src-elem",
+	"style-src-attr",
+	"img-src",
+	"font-src",
+	"media-src",
+	"object-src",
+	"frame-src",
+	"child-src",
+	"worker-src",
+	"manifest-src",
+	"base-uri",
+	"form-action",
+]);
+const DIRETIVAS_COMO_ESTAO = new Set([
+	"require-trusted-types-for",
+	"trusted-types",
+]);
+
+export function politicaDoMeta(valor: string): string | null {
+	const diretivas = new Map<string, string[]>();
+	for (const bruta of valor.split(";")) {
+		const partes = bruta.trim().split(/\s+/).filter(Boolean);
+		if (!partes.length) continue;
+		const nome = partes[0].toLowerCase();
+		if (!diretivas.has(nome)) diretivas.set(nome, partes.slice(1));
+	}
+
+	const saida: string[] = [];
+	for (const [nome, fontes] of diretivas) {
+		if (DIRETIVAS_COMO_ESTAO.has(nome)) {
+			// a política com que o motor devolve o código reescrito precisa caber na lista do site
+			const lista =
+				nome === "trusted-types"
+					? [...fontes.filter((f) => f.toLowerCase() !== "'none'"), POLITICA_DO_MOTOR]
+					: fontes;
+			saida.push([nome, ...lista].join(" "));
+			continue;
+		}
+		if (!DIRETIVAS_DE_BUSCA.has(nome)) continue;
+
+		const guardadas: string[] = [];
+		let proprio = false;
+		for (const fonte of fontes) {
+			const minuscula = fonte.toLowerCase();
+			if (minuscula === "'self'") proprio = true;
+			else if (fonte.startsWith("'")) guardadas.push(fonte);
+			else if (/^[a-z][a-z0-9+.-]*:$/i.test(fonte)) {
+				guardadas.push(fonte);
+				proprio = true;
+			} else proprio = true;
+		}
+		if (proprio) guardadas.unshift("'self'");
+		const semNone = guardadas.filter((f) => f.toLowerCase() !== "'none'");
+		saida.push([nome, ...(semNone.length ? semNone : ["'none'"])].join(" "));
+	}
+
+	const conexao = politicaDeConexao(valor);
+	const semConexao = saida.filter((d) => !d.startsWith("connect-src"));
+	if (conexao) semConexao.push(conexao);
+
+	// a diretiva que governa os scripts precisa deixar o motor compilar o WebAssembly dele
+	const governa = semConexao.findIndex((d) => d.startsWith("script-src "));
+	const i =
+		governa >= 0 ? governa : semConexao.findIndex((d) => d.startsWith("default-src "));
+	if (i >= 0 && !/'unsafe-eval'|'wasm-unsafe-eval'/i.test(semConexao[i])) {
+		semConexao[i] = semConexao[i].replace(/ 'none'$/i, "") + " 'wasm-unsafe-eval'";
+	}
+
+	return semConexao.length ? semConexao.join("; ") : null;
 }
 
 export function rewriteRequestHeaders(
