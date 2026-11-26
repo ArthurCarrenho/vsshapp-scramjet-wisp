@@ -197,7 +197,9 @@ export const htmlRules: {
 		fn: (value, context, meta) => {
 			// #id values are not rewritten
 			if (value.startsWith("#")) return value;
-			return rewriteUrl(value, context, meta);
+			// O `baseVal` devolve o texto como o autor o escreveu, que vai no `$au` (ver
+			// `rewriters/css.ts`).
+			return rewriteUrl(value, context, meta, /^[a-z][a-z0-9+.-]*:/i.test(value) ? undefined : { autor: value });
 		},
 		href: [
 			"use",

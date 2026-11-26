@@ -7,8 +7,7 @@ import {
 	Reflect_apply,
 	Object_setPrototypeOf,
 	_URL,
-	Object_defineProperty,
-} from "@/shared/snapshot";
+	Object_defineProperty, _ProxyNativo } from "@/shared/snapshot";
 
 const URLPROPS = [
 	"protocol",
@@ -260,7 +259,7 @@ function origensAncestrais(client: ScramjetClient, self: GlobalThis) {
 	);
 	const indice = (p: PropertyKey) =>
 		typeof p === "string" && /^(0|[1-9]\d*)$/.test(p) ? Number(p) : -1;
-	const lista = new Proxy(nativa, {
+	const lista = new _ProxyNativo(nativa, {
 		get(alvo, p) {
 			const i = indice(p);
 			if (i >= 0) return origens[i];

@@ -1,5 +1,6 @@
 import { flagEnabled, ScramjetContext } from "@/shared";
 import { URLMeta } from "@rewriters/url";
+import { bytesToBase64 } from "@/shared/util";
 
 import { discardRewriter, getRewriter, JsRewriterOutput } from "@rewriters/wasm";
 import {
@@ -185,7 +186,10 @@ function rewriteJsMapeado(
 				// devolve a posição da fonte do site a cada quadro da pilha (ver
 				// `client/posicoes.ts`).
 				const [linha, coluna] = inicio ?? [1, 0];
-				const sourcemapfn = `${context.config.globals.pushsourcemapfn}([${res.map.join(",")}], "${res.tag}", ${linha}, ${coluna});`;
+				// vssh fork: o mapa vai em base64. Como literal de array ele tinha centenas de
+				// milhares de números num script grande: caro de montar aqui e de analisar na página.
+				const mapa64 = bytesToBase64(res.map instanceof Uint8Array ? res.map : Uint8Array.from(res.map));
+				const sourcemapfn = `${context.config.globals.pushsourcemapfn}("${mapa64}", "${res.tag}", ${linha}, ${coluna});`;
 
 				// don't put the sourcemap call before "use strict"
 				const strictMode = new _RegExp(/^\s*(['"])use strict\1;?/);

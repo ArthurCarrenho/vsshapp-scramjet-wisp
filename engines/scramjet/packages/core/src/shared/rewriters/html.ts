@@ -377,6 +377,60 @@ export function unrewriteHtml(html: string, foreignContext?: ForeignContext) {
 
 // i need to add the attributes in during rewriting
 
+/**
+ * O import map com os endereços do motor: os de `imports` e os de cada `scopes`, e as chaves de
+ * `scopes`, que também são endereços. Um JSON que não se lê sai como veio, e o navegador o recusa
+ * como recusaria o do site.
+ */
+export function rewriteImportMap(json: string, context: ScramjetContext, meta: URLMeta): string {
+	let map: any;
+	try {
+		map = JSON_parse(json);
+	} catch {
+		return json;
+	}
+	if (!map || typeof map !== "object") return json;
+	const enderecos = (tabela: any) => {
+		if (!tabela || typeof tabela !== "object") return tabela;
+		for (const chave in tabela)
+			if (typeof tabela[chave] === "string")
+				tabela[chave] = rewriteUrl(tabela[chave], context, meta, { isModule: true });
+
+		return tabela;
+	};
+	enderecos(map.imports);
+	if (map.scopes && typeof map.scopes === "object") {
+		const escopos: Record<string, unknown> = {};
+		for (const escopo in map.scopes)
+			escopos[rewriteUrl(escopo, context, meta, { isModule: true })] = enderecos(map.scopes[escopo]);
+		map.scopes = escopos;
+	}
+
+	return JSON_stringify(map);
+}
+
+let indiceDeRegras: Map<string, [number, number][]> | null = null;
+
+/** De cada nome de atributo para as regras de `htmlRules` que o reescrevem: [regra, posição da chave]. */
+function regrasPorAtributo(): Map<string, [number, number][]> {
+	if (indiceDeRegras) return indiceDeRegras;
+	const indice = new Map<string, [number, number][]>();
+	htmlRules.forEach((rule, i) => {
+		let k = 0;
+		for (const attr in rule) {
+			if (typeof rule[attr] !== "function") {
+				const nome = attr.toLowerCase();
+				let lista = indice.get(nome);
+				if (!lista) indice.set(nome, (lista = []));
+				lista.push([i, k]);
+			}
+			k++;
+		}
+	});
+
+	return (indiceDeRegras = indice);
+}
+
 function traverseParsedHtml(
 	node: any,
 	context: ScramjetContext,
@@ -387,23 +441,31 @@ function traverseParsedHtml(
 	}
 
 	if (node.attribs) {
-		for (const rule of htmlRules) {
-			for (const attr in rule) {
-				const sel = rule[attr.toLowerCase()];
+		// As regras que o nó pede, na ordem de `htmlRules` (a do `allow` lê o `src` que a anterior
+		// guardou). O índice vai do nome do atributo às regras, e o nó comum, sem atributo de regra,
+		// não percorre as regras.
+		const indice = regrasPorAtributo();
+		let pares: [number, number, string][] | null = null;
+		for (const attr in node.attribs) {
+			const lista = indice.get(attr);
+			if (!lista) continue;
+			if (!pares) pares = [];
+			for (const [i, k] of lista) pares.push([i, k, attr]);
+		}
+		if (pares) {
+			if (pares.length > 1) pares.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+			for (const [i, , attr] of pares) {
+				const rule = htmlRules[i];
+				const sel = rule[attr];
 				if (typeof sel === "function") continue;
+				if (sel !== "*" && !sel.includes(node.name)) continue;
+				if (node.attribs[attr] === undefined) continue;
+				const value = node.attribs[attr];
+				const v = rule.fn(value, context, meta, node.attribs);
 
-				if (sel === "*" || sel.includes(node.name)) {
-					if (node.attribs[attr] !== undefined) {
-						const value = node.attribs[attr];
-						const v = rule.fn(value, context, meta, node.attribs);
-
-						if (v === null) delete node.attribs[attr];
-						else {
-							node.attribs[attr] = v;
-						}
-						node.attribs[`scramjet-attr-${attr}`] = value;
-					}
-				}
+				if (v === null) delete node.attribs[attr];
+				else node.attribs[attr] = v;
+				node.attribs[`scramjet-attr-${attr}`] = value;
 			}
 		}
 	}
@@ -416,23 +478,7 @@ function traverseParsedHtml(
 		node.attribs.type?.toLowerCase() === "importmap" &&
 		node.children[0] !== undefined
 	) {
-		const json = node.children[0].data;
-		try {
-			const map = JSON_parse(json);
-			if (map.imports) {
-				for (const key in map.imports) {
-					let url = map.imports[key];
-					if (typeof url === "string") {
-						url = rewriteUrl(url, context, meta, { isModule: true });
-						map.imports[key] = url;
-					}
-				}
-			}
-
-			node.children[0].data = JSON_stringify(map);
-		} catch (e) {
-			dbg.error("Failed to parse importmap JSON:", e);
-		}
+		node.children[0].data = rewriteImportMap(node.children[0].data, context, meta);
 	}
 	if (
 		node.name === "script" &&

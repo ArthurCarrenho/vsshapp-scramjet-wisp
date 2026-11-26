@@ -56,9 +56,11 @@ export default [
 		"performance-resource-tojson-name",
 		`(() => performance.getEntriesByType("resource").find((e) => e.name.endsWith("/script.js")).toJSON().name)()`
 	),
+	// The name carries the per-run `#runway_token=…`, which differs between the scramjet and the bare
+	// load; the comparison is on the address before it.
 	probe(
 		"performance-navigation-tojson-name",
-		`(() => performance.getEntriesByType("navigation")[0].toJSON().name)()`
+		`(() => performance.getEntriesByType("navigation")[0].toJSON().name.split("#")[0])()`
 	),
 	probe(
 		"performance-getentriesbyname-author-url",

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -32,13 +33,16 @@ export async function startHarness() {
 		)
 	);
 
+	// O transporte que a produção usa é o do repositório (`backend/vendor/libcurl-transport`), e é ele
+	// que o harness serve quando existe. O do npm é outro, e um defeito dele (a query vazia `?` que
+	// some) aparecia como defeito do motor.
+	const libcurlDoRepositorio = path.join(packageRoot, "../../../../backend/vendor/libcurl-transport/dist");
 	app.use(
 		"/libcurl",
 		express.static(
-			path.join(
-				packageRoot,
-				"node_modules/@mercuryworkshop/libcurl-transport/dist"
-			)
+			fs.existsSync(path.join(libcurlDoRepositorio, "index.js"))
+				? libcurlDoRepositorio
+				: path.join(packageRoot, "node_modules/@mercuryworkshop/libcurl-transport/dist")
 		)
 	);
 

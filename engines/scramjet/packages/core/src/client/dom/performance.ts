@@ -21,7 +21,9 @@ export default function (client: ScramjetClient, _self: Self) {
 			const name = String(
 				client.descriptors.get("PerformanceEntry.prototype.name", entry)
 			);
-			for (const file of client.config.maskedfiles) {
+			// Os arquivos do motor saem da linha do tempo de recursos; uma marca do site com o mesmo
+			// nome (`performance.mark("inject.js")`) é do site, e fica.
+			if (entry.entryType === "resource") for (const file of client.config.maskedfiles) {
 				if (name.endsWith(file)) {
 					return false;
 				}
@@ -41,14 +43,34 @@ export default function (client: ScramjetClient, _self: Self) {
 		});
 	};
 
+	// vssh fork: o nome de uma entrada de recurso no navegador é o endereço do motor, e o site
+	// procura pelo dele (`getEntriesByName(location.origin + "/script.js")`). A busca por nome passa a
+	// comparar o nome que o site lê.
+	for (const dono of ["Performance", "PerformanceObserverEntryList"]) {
+		client.Proxy(`${dono}.prototype.getEntriesByName`, {
+			apply(ctx) {
+				if (ctx.args.length === 0) return;
+				const procurado = String(ctx.args[0]);
+				const tipo = ctx.args[1] === undefined ? null : String(ctx.args[1]);
+				const todos = client.natives.call(`${dono}.prototype.getEntries`, ctx.this) as PerformanceEntry[];
+				ctx.return(
+					filterEntries(todos).filter((e) => {
+						if (tipo !== null && e.entryType !== tipo) return false;
+						const nome = String(client.descriptors.get("PerformanceEntry.prototype.name", e));
+
+						return (nome.startsWith(client.context.prefix.href) ? client.unrewriteUrl(nome) : nome) === procurado;
+					})
+				);
+			},
+		});
+	}
+
 	client.Proxy(
 		[
 			"Performance.prototype.getEntries",
 			"Performance.prototype.getEntriesByType",
-			"Performance.prototype.getEntriesByName",
 			"PerformanceObserverEntryList.prototype.getEntries",
 			"PerformanceObserverEntryList.prototype.getEntriesByType",
-			"PerformanceObserverEntryList.prototype.getEntriesByName",
 		],
 		{
 			apply(ctx) {

@@ -46,6 +46,15 @@ export function blobNativo(client: ScramjetClient, url: unknown): string | null 
 	}
 }
 
+// Um `blob:` que não existe: o navegador recusa o pedido como recusaria o revogado.
+function blobRevogado(blob: string): string {
+	try {
+		return "blob:" + new URL(blob.slice(5)).origin + "/00000000-0000-4000-8000-000000000000";
+	} catch {
+		return blob;
+	}
+}
+
 export default function (client: ScramjetClient) {
 	client.Proxy("fetch", {
 		apply(ctx) {
@@ -53,7 +62,7 @@ export default function (client: ScramjetClient) {
 			if (ehUrlDeDados(ctx.args[0])) return;
 			const blob = blobNativo(client, ctx.args[0]);
 			if (blob) {
-				ctx.args[0] = blob;
+				ctx.args[0] = client.box.blobsRevogados.has(blob) ? blobRevogado(blob) : blob;
 
 				return;
 			}
@@ -73,7 +82,7 @@ export default function (client: ScramjetClient) {
 			if (ehUrlDeDados(ctx.args[0])) return;
 			const blob = blobNativo(client, ctx.args[0]);
 			if (blob) {
-				ctx.args[0] = blob;
+				ctx.args[0] = client.box.blobsRevogados.has(blob) ? blobRevogado(blob) : blob;
 
 				return;
 			}

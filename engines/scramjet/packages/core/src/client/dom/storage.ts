@@ -8,8 +8,7 @@ import {
 	Reflect_ownKeys,
 	Reflect_set,
 	String,
-	_URL,
-} from "@/shared/snapshot";
+	_URL, _ProxyNativo } from "@/shared/snapshot";
 
 /**
  * O prefixo que separa, no storage da origem do motor, as chaves de cada site: o host da origem
@@ -127,8 +126,8 @@ export default function (client: ScramjetClient, self: Self) {
 		},
 	};
 
-	const localStorageProxy = new Proxy(self.localStorage, handler);
-	const sessionStorageProxy = new Proxy(self.sessionStorage, handler);
+	const localStorageProxy = new _ProxyNativo(self.localStorage, handler);
+	const sessionStorageProxy = new _ProxyNativo(self.sessionStorage, handler);
 
 	// vssh fork: os dois continuam acessores do global, como no Chrome, e o getter de cada um se
 	// apresenta como o nativo (ver `RawTrap`). Uma propriedade de dado no lugar deles aparece em

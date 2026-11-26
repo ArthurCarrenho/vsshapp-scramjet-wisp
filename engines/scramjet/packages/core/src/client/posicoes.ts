@@ -37,6 +37,8 @@ const CONHECIDOS_MAX = 2048;
 export class MapasDeScript {
 	porHash = new Map<string, Registro>();
 	pendentes: { fonte: () => string; registro: Registro }[] = [];
+	/** Os scripts do service worker: o quadro da chamada guarda o script, e o hash sai dele só quando uma pilha precisa. */
+	doServiceWorker: { quadro: any; registro: Registro }[] = [];
 	ultimaTag: string | null = null;
 }
 
@@ -49,6 +51,22 @@ export function registrarScript(
 	const m = client.box.mapas;
 	m.pendentes.push({ fonte, registro });
 	if (m.pendentes.length > PENDENTES_MAX) m.pendentes.shift();
+}
+
+/**
+ * O comprimento de `buf.join(",")` sem montar o texto. O mapa de um script de 250 KB tem centenas
+ * de milhares de números, e o `join` só para medir custava dezenas de milissegundos por script.
+ */
+function tamanhoDaLista(buf: ArrayLike<number>): number {
+	const n = buf.length;
+	if (n === 0) return 0;
+	let total = n - 1;
+	for (let i = 0; i < n; i++) {
+		const v = buf[i];
+		total += v >= 0 && v < 10 ? 1 : v >= 10 && v < 100 ? 2 : v >= 100 && v < 1000 && (v | 0) === v ? 3 : String(v).length;
+	}
+
+	return total;
 }
 
 function guardar(m: MapasDeScript, hash: string, r: Registro) {
@@ -64,7 +82,7 @@ function guardar(m: MapasDeScript, hash: string, r: Registro) {
  */
 export function registrarDoServiceWorker(
 	client: ScramjetClient,
-	buf: ArrayLike<number>,
+	buf: ArrayLike<number> | string,
 	tag: string,
 	linha: number,
 	coluna: number,
@@ -75,26 +93,35 @@ export function registrarDoServiceWorker(
 	while (i < quadros.length && mascarado(client, quadros[i].getFileName?.())) i++;
 	const q = quadros[i];
 	if (!q) return;
-	let hash: string, pos: number, linhaDaChamada: number;
+	// vssh fork: o hash do script (`getScriptHash`) é o SHA-256 do texto inteiro, e o V8 o calcula na
+	// primeira pergunta: uns 6 ms num script de 250 KB. Ele fica para quando uma pilha precisar.
+	let pos: number, linhaDaChamada: number;
 	try {
-		hash = q.getScriptHash();
 		pos = q.getPosition();
 		linhaDaChamada = q.getLineNumber();
 	} catch {
 		return;
 	}
-	if (!hash || typeof pos !== "number") return;
+	if (typeof pos !== "number") return;
 	// O texto da chamada, como `rewriteJsMapeado` o escreve. Depois de um "use strict" ela vem
 	// atrás de um `;` a mais.
-	const n = `${client.config.globals.pushsourcemapfn}([${Array.prototype.join.call(buf, ",")}], "${tag}", ${linha}, ${coluna});`.length;
-	guardar(client.box.mapas, hash, {
-		tag,
-		ini: pos + n,
-		d: -(n + (pos > 0 ? 1 : 0)),
-		dl: linha - linhaDaChamada,
-		primeira: linhaDaChamada,
-		col0: coluna,
+	const n =
+		typeof buf === "string"
+			? `${client.config.globals.pushsourcemapfn}("${buf}", "${tag}", ${linha}, ${coluna});`.length
+			: `${client.config.globals.pushsourcemapfn}([], "${tag}", ${linha}, ${coluna});`.length + tamanhoDaLista(buf);
+	const m = client.box.mapas;
+	m.doServiceWorker.push({
+		quadro: q,
+		registro: {
+			tag,
+			ini: pos + n,
+			d: -(n + (pos > 0 ? 1 : 0)),
+			dl: linha - linhaDaChamada,
+			primeira: linhaDaChamada,
+			col0: coluna,
+		},
 	});
+	if (m.doServiceWorker.length > PENDENTES_MAX) m.doServiceWorker.shift();
 }
 
 function registroDe(
@@ -105,6 +132,22 @@ function registroDe(
 	const m = client.box.mapas;
 	const r = m.porHash.get(hash);
 	if (r) return r;
+	// Os scripts do service worker ainda sem hash: o deste quadro pode estar entre eles.
+	if (m.doServiceWorker.length) {
+		const fila = m.doServiceWorker;
+		m.doServiceWorker = [];
+		let achado: Registro | null = null;
+		for (const p of fila) {
+			let h = "";
+			try {
+				h = p.quadro.getScriptHash();
+			} catch {}
+			if (!h) continue;
+			guardar(m, h, p.registro);
+			if (h === hash) achado = p.registro;
+		}
+		if (achado) return achado;
+	}
 	// Os pendentes são o código do `Function` e do `eval`, e só um quadro de código avaliado pode
 	// ser de um deles: o quadro de um script com arquivo não paga o hash de nenhum.
 	if (!avaliado) return null;

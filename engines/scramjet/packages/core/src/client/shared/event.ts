@@ -11,8 +11,7 @@ import {
 	Reflect_apply,
 	Reflect_get,
 	Reflect_ownKeys,
-	Symbol_for,
-} from "@/shared/snapshot";
+	Symbol_for, _ProxyNativo } from "@/shared/snapshot";
 
 const realOnEvent = Symbol_for("scramjet original onevent function");
 
@@ -189,7 +188,7 @@ export default function (client: ScramjetClient, self: Self) {
 	};
 
 	function wraplistener(listener: (...args: any) => any) {
-		return new Proxy(listener, {
+		return new _ProxyNativo(listener, {
 			apply(target, that, args) {
 				const realEvent: Event = args[0];
 
@@ -205,7 +204,7 @@ export default function (client: ScramjetClient, self: Self) {
 							if (handler._init.call(realEvent) === false) return;
 						}
 
-						args[0] = new Proxy(realEvent, {
+						args[0] = new _ProxyNativo(realEvent, {
 							get(target, prop, reciever) {
 								const value = Reflect_get(target, prop);
 								if (prop in handler) {
@@ -213,7 +212,7 @@ export default function (client: ScramjetClient, self: Self) {
 								}
 
 								if (typeof value === "function") {
-									return new Proxy(value, {
+									return new _ProxyNativo(value, {
 										apply(target, that, args) {
 											if (that === reciever) {
 												return Reflect_apply(target, realEvent, args);
