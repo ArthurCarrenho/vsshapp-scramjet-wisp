@@ -161,15 +161,4 @@ export default function (client: ScramjetClient, _self: Self) {
 		},
 	});
 
-	client.Proxy(
-		["Document.prototype.querySelector", "Document.prototype.querySelectorAll"],
-		{
-			apply(ctx) {
-				ctx.args[0] = String(ctx.args[0]).replace(
-					/((?:^|\s)\b\w+\[(?:src|href|data-href))[\^]?(=['"]?(?:https?[:])?\/\/)/,
-					"$1*$2",
-				);
-			},
-		},
-	);
 }

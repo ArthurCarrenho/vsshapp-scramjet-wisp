@@ -62,9 +62,11 @@ pub(crate) enum RewriteType<'alloc: 'data, 'data> {
 	/// `$scramitize(span)`
 	Scramitize,
 
-	/// `eval(cfg.rewritefn(inner))`
+	/// `eval(cfg.rewritefn(inner))`, ou `eval(cfg.rewritefn(inner,eval))` com `callee`: o cliente
+	/// recebe a função chamada e só reescreve para o `eval` nativo.
 	Eval {
 		inner: Span,
+		callee: bool,
 	},
 	/// `((t)=>$scramjet$tryset(name,"op",t)||(name op t))(rhs)`
 	Assignment {
@@ -259,15 +261,9 @@ impl<'alloc: 'data, 'data> RewriteType<'alloc, 'data> {
 					}
 				)
 			],
-			Self::Eval { inner } => smallvec![
+			Self::Eval { inner, callee } => smallvec![
 				change!(Span::new(inner.start, inner.start), EvalRewriteFn),
-				change!(
-					Span::new(inner.end, inner.end),
-					ClosingParen {
-						semi: false,
-						replace: false,
-					}
-				)
+				change!(Span::new(inner.end, inner.end), EvalRewriteClose { callee })
 			],
 			Self::Assignment { name, rhs, op } => smallvec![
 				change!(span!(span rhs start), AssignmentLeft { name, op }),

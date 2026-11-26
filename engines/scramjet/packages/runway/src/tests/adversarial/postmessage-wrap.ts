@@ -133,16 +133,15 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE, with and without scramjet: the test body is sloppy code,
-		// where a detached method runs with the global as `this` and returns
-		// "undefined1" without throwing.
+		// A detached method runs with the global as `this`: the test body is sloppy
+		// code, so Chrome returns "undefined1" without throwing. The wrapper the
+		// rewriter puts around `o.postMessage` must not keep `o` as the receiver.
 		name: "pmwrap-detached-loses-receiver",
 		js: `
 			const o = { tag: "T", postMessage(x) { return this.tag + x; } };
 			const detached = o.postMessage;
-			let threw = false;
-			try { detached("1"); } catch (e) { threw = e instanceof TypeError; }
-			assert(threw, "a detached postMessage must lose its receiver");
+			assertEqual(detached("1"), "undefined1", "a detached postMessage loses its receiver");
+			assertEqual(detached.call(o, "2"), "T2", "and takes the one it is called with");
 		`,
 	}),
 ];

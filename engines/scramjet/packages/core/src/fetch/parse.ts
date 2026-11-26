@@ -22,6 +22,7 @@ export const QP = {
 	crossSiteRedirect: "$csr",
 	fakeDataURL: "$fakedataurl",
 	isolado: "$coi",
+	autor: "$au",
 } as const;
 
 export type QueryParamKey = keyof typeof QP;

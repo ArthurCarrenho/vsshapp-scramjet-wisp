@@ -6,12 +6,18 @@ import {
 	Reflect_get,
 	Reflect_has,
 	Reflect_ownKeys,
+	_WeakMap,
 } from "@/shared/snapshot";
+
+// O elemento dono de cada `NamedNodeMap`, e da vista dele que o site recebe. O `setNamedItem` e o
+// `setNamedItemNS` põem um atributo como o `setAttributeNode`, e o vão fazer pelo elemento.
+const donos = new _WeakMap<object, Element>([]);
 
 export default function (client: ScramjetClient) {
 	client.Trap("Element.prototype.attributes", {
 		get(ctx) {
 			const map = ctx.get() as NamedNodeMap;
+			donos.set(map, ctx.this as Element);
 			const proxy = new Proxy(map, {
 				get(target, prop, _receiver) {
 					const value = Reflect_get(target, prop);
@@ -74,7 +80,21 @@ export default function (client: ScramjetClient) {
 				},
 			});
 
+			donos.set(proxy, ctx.this as Element);
+
 			return proxy;
+		},
+	});
+
+	// vssh fork: `attributes.setNamedItem(attr)` põe o atributo sem passar pelo `setAttributeNode`, e
+	// um `onclick` ou um `src` iria ao elemento como o site o escreveu. Ele vai pelo
+	// `setAttributeNode` do elemento, que reescreve o valor, e devolve o mesmo que o nativo.
+	client.Proxy(["NamedNodeMap.prototype.setNamedItem", "NamedNodeMap.prototype.setNamedItemNS"], {
+		apply(ctx) {
+			const dono = donos.get(ctx.this as object);
+			if (!dono || !client.box.instanceof(ctx.args[0], "Attr")) return;
+			const metodo = `${ctx.fn.name}`.endsWith("NS") ? "setAttributeNodeNS" : "setAttributeNode";
+			ctx.return(Reflect_apply(client.global.Element.prototype[metodo], dono, [ctx.args[0]]));
 		},
 	});
 

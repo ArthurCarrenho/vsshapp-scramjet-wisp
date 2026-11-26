@@ -62,6 +62,10 @@ pub enum JsChangeType<'alloc: 'data, 'data> {
 	ScramitizeFn,
 	/// insert `eval(${cfg.rewritefn}(`
 	EvalRewriteFn,
+	/// insert `,eval)` with `callee`, `)` without
+	EvalRewriteClose {
+		callee: bool,
+	},
 	/// insert `: ${cfg.wrapfn}(ident)`
 	ShorthandObj {
 		ident: Atom<'data>,
@@ -258,6 +262,9 @@ impl<'alloc: 'data, 'data> Transform<'data> for JsChange<'alloc, 'data> {
 			Ty::ScramErrFn { ident } => LL::insert(transforms!["$scramerr(", ident, ");"]),
 			Ty::ScramitizeFn => LL::insert(transforms![" $scramitize("]),
 			Ty::EvalRewriteFn => LL::insert(transforms![&cfg.rewritefn, "("]),
+			Ty::EvalRewriteClose { callee } => {
+				LL::insert(if callee { transforms![",eval)"] } else { transforms![")"] })
+			}
 			Ty::ShorthandObj { ident } => {
 				LL::insert(transforms![":", &cfg.wrapfn, "(", ident, ")"])
 			}

@@ -27,6 +27,12 @@ function createRewriteContext() {
 	return { context, meta };
 }
 
+// O `url()` relativo sai com o endereço como o autor o escreveu no parâmetro `$au`, que a
+// desreescrita devolve (ver `rewriters/css.ts`); o absoluto sai sem ele.
+function emCss(url: string, context: any, meta: any) {
+	return rewriteUrl(url, context, meta, /^[a-z][a-z0-9+.-]*:/i.test(url) ? undefined : { autor: url });
+}
+
 function cssRewriteTest(props: {
 	name: string;
 	url: string;
@@ -37,7 +43,7 @@ function cssRewriteTest(props: {
 		name,
 		fn: ({ assertEqual }) => {
 			const { context, meta } = createRewriteContext();
-			const encoded = rewriteUrl(url, context, meta);
+			const encoded = emCss(url, context, meta);
 			const [input, expected] = fn(url, encoded);
 			const rewritten = rewriteCss(input, context, meta);
 			assertEqual(
@@ -61,7 +67,7 @@ function cssRewriteMultiTest(props: {
 			const { context, meta } = createRewriteContext();
 			let expected = input;
 			for (const u of urls) {
-				const enc = rewriteUrl(u, context, meta);
+				const enc = emCss(u, context, meta);
 				expected = expected.split(u).join(enc);
 			}
 			assertEqual(
@@ -83,7 +89,7 @@ function cssUnrewriteTest(props: {
 		name,
 		fn: ({ assertEqual }) => {
 			const { context, meta } = createRewriteContext();
-			const encoded = rewriteUrl(url, context, meta);
+			const encoded = emCss(url, context, meta);
 			const [input, expected] = fn(url, encoded);
 			const unrewritten = unrewriteCss(input, context);
 			assertEqual(
@@ -277,7 +283,7 @@ export default [
 			const input = `a{background:url("${first}"), url("${second}")}`;
 			assertEqual(
 				rewriteCss(input, context, meta),
-				`a{background:url("${rewriteUrl(first, context, meta)}"), url("${rewriteUrl(second, context, meta)}")}`
+				`a{background:url("${emCss(first, context, meta)}"), url("${emCss(second, context, meta)}")}`
 			);
 		},
 	}),

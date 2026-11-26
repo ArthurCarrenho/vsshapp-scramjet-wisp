@@ -87,6 +87,36 @@ export function vistaDe<T>(client: ScramjetClient, alvo: T): T {
 	return vista;
 }
 
+/**
+ * A janela de quem mandou uma mensagem de fora do motor (o shell que hospeda as abas, ou outra
+ * página da origem do motor). Para o site ela é de outra origem, e sai pela mesma vista de
+ * `vistaDe`; entregue crua, ela daria ao site o `eval`, o `top` e os cookies da origem do motor.
+ */
+export function vistaDeFora<T>(client: ScramjetClient, alvo: T): T {
+	if (!alvo || typeof alvo !== "object" || reais.has(alvo as any)) return alvo;
+	const dele = origemDe(alvo);
+	if (dele) return vistaDe(client, alvo);
+	// O `Window` de fora do motor é de um realm que a caixa não conhece, e o `instanceof` dela não o
+	// reconhece. Uma janela é a que é a própria `window`.
+	let ehJanela = false;
+	try {
+		ehJanela = (alvo as any).window === alvo;
+	} catch {}
+	if (!ehJanela || alvo === (client.global as unknown)) return alvo;
+	const minha = origemDe(client.global) ?? client.url.origin;
+
+	let cache = vistasPorCliente.get(client);
+	if (!cache) vistasPorCliente.set(client, (cache = new _WeakMap()));
+	let vista = cache.get(alvo as any);
+	if (!vista) {
+		vista = criarVista(client, alvo as any, minha);
+		cache.set(alvo as any, vista);
+		reais.set(vista, alvo as any);
+	}
+
+	return vista;
+}
+
 function nativa(client: ScramjetClient, fn: Function, nome: string, tamanho: number, fonte: string) {
 	Object_defineProperty(fn, "name", { value: nome, configurable: true });
 	Object_defineProperty(fn, "length", { value: tamanho, configurable: true });
