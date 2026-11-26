@@ -883,22 +883,45 @@ return { apply, construct };
 
 		const desc: PropertyDescriptor = {};
 
-		if (descriptor.get) {
-			desc.get = function () {
-				ctx.this = this;
+		// vssh fork: o acessor que entra no lugar do nativo se apresenta como ele. Uma página lê o
+		// `get` de `Document.prototype.cookie` e confere o `toString`, o `name`, o `length` e se a
+		// função tem `prototype`, e o nativo responde `function get cookie() { [native code] }`,
+		// `"get cookie"`, 0 e não. Por isso as funções nascem como métodos, que não têm
+		// `prototype`, e entram no `unproxy`, que o `Function.prototype.toString` do motor já
+		// consulta para mostrar o nativo no lugar do invólucro.
+		const imitar = (novo: AnyFunction, nativo: AnyFunction | undefined) => {
+			if (typeof nativo !== "function") return;
+			this.box.unproxy.set(novo, nativo);
+			Object_defineProperty(novo, "name", { value: nativo.name, configurable: true });
+			Object_defineProperty(novo, "length", { value: nativo.length, configurable: true });
+		};
 
-				return descriptor.get(ctx);
-			};
+		if (descriptor.get) {
+			desc.get = {
+				get() {
+					ctx.this = this;
+
+					return descriptor.get(ctx);
+				},
+			}.get;
+			imitar(desc.get, oldDescriptor?.get);
 		} else if (oldDescriptor?.get) {
 			desc.get = oldDescriptor.get;
 		}
 
-		if (descriptor.set) {
-			desc.set = function (v: any) {
-				ctx.this = this;
+		// Um acessor nativo só de leitura (`Document.prototype.URL`, `referrer`, `baseURI`) continua
+		// sem `set`: com um, a atribuição deixaria de ser ignorada, e o descritor mostraria uma
+		// função que o navegador não tem.
+		const soLeitura = !!oldDescriptor?.get && !oldDescriptor?.set;
+		if (descriptor.set && !soLeitura) {
+			desc.set = {
+				set(v: any) {
+					ctx.this = this;
 
-				descriptor.set(ctx, v);
-			};
+					descriptor.set(ctx, v);
+				},
+			}.set;
+			imitar(desc.set, oldDescriptor?.set);
 		} else if (oldDescriptor?.set) {
 			desc.set = oldDescriptor.set;
 		}

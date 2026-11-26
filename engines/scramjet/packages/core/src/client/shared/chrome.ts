@@ -31,11 +31,11 @@ export default function (client: ScramjetClient, self: any) {
 	if (!iswindow) return;
 	// DOM specific ones below here
 
-	// `Navigator.prototype.serviceWorker` continua sendo apagado, e é a exceção consciente do
-	// bloco abaixo: ele não é fingerprint, é ISOLAMENTO. Com ele de volta, a página proxiada
-	// enxerga e registra Service Worker próprio, colidindo com o do motor — que é quem roteia
-	// tudo. Devolvê-lo exige um shim que finja um registro sem conceder nenhum, e isso é
-	// trabalho de verdade, não uma linha.
+	// `Navigator.prototype.serviceWorker` continua sendo apagado. Ele é isolamento: com ele de
+	// volta, a página proxiada enxerga e registra Service Worker próprio, colidindo com o do
+	// motor, que é quem roteia tudo. Um `navigator.serviceWorker` que existe e recusa o
+	// `register` é pior: o desafio gerenciado do Cloudflare trata a recusa como falha e recarrega
+	// a página várias vezes por segundo, medido no tandfonline pela IPPRI-01.
 	Reflect.deleteProperty(Navigator.prototype, "serviceWorker");
 
 	// contact picker api
@@ -140,12 +140,5 @@ export default function (client: ScramjetClient, self: any) {
 	// o primeiro é geometria somente-leitura (numa aba ele já reporta invisível) e o segundo só
 	// rotula uma captura que precisaria ter sido concedida antes. Nenhum dos dois concede nada.
 
-	// Navigation API (not chrome only but it's really annoying to implement)
-	del("navigation");
-	del("NavigateEvent");
-	del("NavigationActivation");
-	del("NavigationCurrentEntryChangeEvent");
-	del("NavigationDestination");
-	del("NavigationHistoryEntry");
-	del("NavigationTransition");
+	// A Navigation API fica, traduzida em `client/dom/navigation.ts`.
 }

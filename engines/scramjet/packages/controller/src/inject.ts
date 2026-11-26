@@ -6,7 +6,7 @@ import type {
 
 import { RpcHelper } from "@mercuryworkshop/rpc";
 import type { Config } from ".";
-import { CONTROLLERFRAME } from "./symbols";
+import { CONTROLLERFRAME, NOMEGERADO } from "./symbols";
 import type {
 	SerializedCookieSyncEntry,
 	ControllerToTransport,
@@ -342,6 +342,7 @@ class ExecutionContextWrapper {
 		const frame = this.global.frameElement as HTMLIFrameElement | null;
 		if (frame && !frame.name) {
 			window.name = frame.name = createFrameId();
+			(frame as any)[NOMEGERADO] = frame.name;
 		}
 		let controllerFrame = frame?.[CONTROLLERFRAME];
 		let isTopLevel = true;

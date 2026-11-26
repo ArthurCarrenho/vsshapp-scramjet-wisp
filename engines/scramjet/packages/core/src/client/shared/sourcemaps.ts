@@ -192,6 +192,10 @@ export default function (client: ScramjetClient, self: Self) {
 				// `this` will then be the proxy, which has the wrong [[SourceText]]
 				// unproxy so it passes through
 				ctx.this = client.box.unproxy.get(ctx.this)!;
+				// vssh fork: o alvo pode ser outro invólucro registrado (o `open` que o ambiente
+				// troca, envolvido de novo pelo cliente); desce até a nativa.
+				for (let i = 0; i < 8 && client.box.unproxy.has(ctx.this); i++)
+					ctx.this = client.box.unproxy.get(ctx.this)!;
 				// since we know it's a native function, no need to unrewrite
 				return;
 			}
