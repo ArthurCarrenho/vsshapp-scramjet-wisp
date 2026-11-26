@@ -7,7 +7,9 @@ import { directTest, type Test } from "../testcommon.ts";
 
 function createRewriteContext() {
 	const context = {
-		config: {},
+		// O rewriter de CSS consulta as flags do motor (`disableViewTransitions`); sem nenhuma
+		// ligada, a folha sai só com os endereços reescritos.
+		config: { flags: {}, siteFlags: {} },
 		prefix: new URL("https://proxy.test/service/"),
 		interface: {
 			codecEncode: encodeURIComponent,
