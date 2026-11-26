@@ -58,7 +58,6 @@
 		"incumbent-window-open-settimeout-cb",
 		"incumbent-window-open-settimeout-cb-eval",
 		"longtail-api-document-domain-getter-brand",
-		"longtail-api-document-domain-setter-brand",
 		"longtail-api-parsehtmlunsafe-secondary-document-url",
 		"longtail-api-performance-getentriesbyname-author-url",
 		"longtail-api-performance-navigation-tojson-name",

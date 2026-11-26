@@ -64,6 +64,7 @@ export const URL_revokeObjectURL = globalThis.URL.revokeObjectURL.bind(
 export const Error = globalThis.Error;
 export const Math_random = globalThis.Math.random;
 export const Math_min = globalThis.Math.min;
+export const Math_floor = globalThis.Math.floor;
 
 export const Promise_all = globalThis.Promise.all.bind(globalThis.Promise);
 export const Promise_race = globalThis.Promise.race.bind(globalThis.Promise);

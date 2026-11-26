@@ -54,6 +54,7 @@ export default function (client: ScramjetClient, _self: GlobalThis) {
 					client.rewriteUrl(texto, {
 						destination: "worker",
 						isModule: ctx.args[1]?.type === "module",
+						isolado: client.isolado,
 					}),
 				"Worker constructor",
 			);
@@ -90,6 +91,7 @@ export default function (client: ScramjetClient, _self: GlobalThis) {
 					client.rewriteUrl(texto, {
 						destination: "sharedworker",
 						isModule,
+						isolado: client.isolado,
 					}),
 				"SharedWorker constructor",
 			);

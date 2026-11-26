@@ -1,3 +1,4 @@
+import { ajustarNomesDoIsolamento, esquecerIsolamento, isolamentoDoSite } from "@client/shared/isolamento";
 import {
 	BareCompatibleClient,
 	ProxyTransport,
@@ -556,6 +557,13 @@ export class ScramjetClient {
 		if (init.cookies !== undefined) {
 			this.context.cookieJar.load(init.cookies);
 		}
+		esquecerIsolamento(this);
+		ajustarNomesDoIsolamento(this);
+	}
+
+	/** Se o site isolou este documento de outras origens (`client/shared/isolamento.ts`). */
+	get isolado(): boolean {
+		return isolamentoDoSite(this);
 	}
 
 	hook() {
@@ -590,6 +598,8 @@ export class ScramjetClient {
 		// acessores de `wrap.ts` que o código reescrito do pai usa para ler `eval`, `location`,
 		// `top` e `parent` desse quadro, continuam valendo para ele.
 		for (const module of modules) {
+			// Um arquivo só de funções, como `shared/excecao.ts`, não tem o que instalar.
+			if (typeof module.default !== "function") continue;
 			try {
 				if (!module.enabled || module.enabled(this))
 					module.default(this, this.global);

@@ -60,11 +60,11 @@ logging.set_level(logging.WARN);
 // ─── A internet de mentira resolve aqui ──────────────────────────────────────────────────────
 //
 // `rede.js` aceita `lookup` injetado exatamente para isto, e o cabeçalho dele já diz por quê: as
-// opções do wisp merecem estar num lugar que dê para testar sem tocar a rede. Todo `*.teste` cai
-// em 127.0.0.1; qualquer outro host resolve normalmente — e como este ambiente não tem saída, um
+// opções do wisp merecem estar num lugar que dê para testar sem tocar a rede. Todo `*.teste` e
+// todo `*.localhost` caem em 127.0.0.1; qualquer outro host resolve normalmente — e como este ambiente não tem saída, um
 // host de verdade falha com o erro dele em vez de pendurar, que é o que se quer de uma bancada.
 function lookupDaBancada(hostname, opcoes) {
-	if (/(^|\.)teste$/i.test(hostname)) {
+	if (/(^|\.)(teste|localhost)$/i.test(hostname)) {
 		return Promise.resolve({ address: "127.0.0.1", family: 4 });
 	}
 	return import("node:dns/promises").then((dns) => dns.lookup(hostname, opcoes));
@@ -212,11 +212,14 @@ ${scripts}
  * `ensureRunning` da página segue dizendo `ready: true` de propósito — foi assim em produção, e é
  * o que faz a sonda medir o caso real em vez de um app parado.
  *
+ * `isolamento` é o valor do COEP (`credentialless`, o da amostra do portal, ou `require-corp`) com
+ * que a página da bancada se isola de outras origens; sem ele, ela roda como o shell comum.
+ *
  * `TCPSocket` é a classe de socket que o wisp usa para cada stream, a mesma opção que o
  * `server.js` de produção passa ao `routeRequest`. Sem ela vale o socket do wisp-js, que conecta
  * direto; `turnstile.mjs` passa uma que sai por um túnel CONNECT quando a máquina só tem proxy.
  */
-export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null, motorParavel = false, subidaMs = 800, TCPSocket = null, apendiceDaApi = "" }) {
+export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null, motorParavel = false, subidaMs = 800, TCPSocket = null, apendiceDaApi = "", isolamento = null }) {
 	// O motor como o supervisor o trata. `pararMotor()` é o motor descendo por ociosidade: as
 	// conexões do wisp caem, e o portal recusa o app com o 409 "App Not Running", que é o que o
 	// de verdade responde quando o túnel até o app também caiu. O `ensureRunning` da página passa
@@ -225,6 +228,13 @@ export async function subirPortal({ porta = 0, portaSites, statusDosAssets = nul
 
 	const srv = createServer((req, res) => {
 		const caminho = decodeURIComponent(req.url.split("?")[0]);
+
+		// O shell da amostra isolada do portal (`src/utils/isolamento.ts` do vssh-sso): COOP e COEP
+		// no documento, e o COEP em todo quadro e todo script de Worker. Aqui vão em toda resposta.
+		if (isolamento) {
+			res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+			res.setHeader("Cross-Origin-Embedder-Policy", isolamento);
+		}
 
 		if (caminho === "/s/proxy/vssh-desktop/" || caminho === "/s/proxy/vssh-desktop") {
 			res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });

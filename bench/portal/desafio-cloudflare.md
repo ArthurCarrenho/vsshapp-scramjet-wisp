@@ -85,14 +85,15 @@ roda isolada. Pelo motor ela roda dentro do shell, sem isolamento (ver abaixo), 
 
 Cada uma é visível ao código do site, e o desafio do caso de referência passa com elas.
 
-- `crossOriginIsolated` é `false` num documento que o Chrome isola. Faltam o `SharedArrayBuffer`
-  entre os nomes do global e o relógio de 5 µs (o passo do `performance.now()` é 100 µs). O motor
-  põe COOP e COEP nos documentos proxiados quando a página que o hospeda é isolada
-  (`handler.crossOriginIsolated`), e a bancada mede isso servindo a página dela com os dois
-  cabeçalhos: o quadro do Turnstile passa a responder `true`, com `require-corp` e com
-  `credentialless`, e um Worker de `blob:` nasce isolado. O shell do ambiente só é isolado na
-  amostra de `VSSH_ISOLAMENTO` (`src/utils/isolamento.ts` do vssh-sso), e nela ele abre os links
-  numa aba do navegador no lugar do navegador embutido.
+- `crossOriginIsolated` é `false` num documento que o Chrome isola, quando o shell que hospeda a
+  aba não é isolado. Faltam o `SharedArrayBuffer` entre os nomes do global e o relógio de 5 µs (o
+  passo do `performance.now()` é 100 µs). O motor não tem como entregar memória compartilhada sem
+  o isolamento de verdade. O shell do ambiente só é isolado na amostra de `VSSH_ISOLAMENTO`
+  (`src/utils/isolamento.ts` do vssh-sso). Nela o motor põe COOP e COEP nos documentos proxiados
+  (`handler.crossOriginIsolated`) e responde a cada site o que ele pediu
+  (`client/shared/isolamento.ts`): o documento com COOP e COEP próprios, os quadros que a política
+  de permissões alcança e os workers deles se veem isolados, e os outros se veem como num
+  documento comum. `isolamento.mjs` mede as duas situações contra o Chrome.
 - `'prepareStackTrace' in Error` é `true`. O V8 lê o formatador do próprio `Error`, e o operador
   `in` não passa por nenhuma função que o motor troque.
 - A folha `<style id="__vssh_ext_css">` do shell (a barra de rolagem do ambiente e o cosmético das

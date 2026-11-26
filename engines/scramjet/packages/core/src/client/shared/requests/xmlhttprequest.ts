@@ -1,3 +1,4 @@
+import { memoriaCompartilhada } from "@client/shared/isolamento";
 import { getFlag, ScramjetContext } from "@/shared";
 import { rewriteUrl, unrewriteUrl, URLMeta } from "@rewriters/url";
 import { ScramjetClient } from "@client/index";
@@ -52,7 +53,7 @@ export default function (client: ScramjetClient, self: Self) {
 			// there's a nice way of polyfilling this though, we can spin on an atomic using sharedarraybuffer. this will maintain the sync behavior
 
 			//@ts-ignore
-			const sab = new SharedArrayBuffer(1024, { maxByteLength: 2147483647 });
+			const sab = new (memoriaCompartilhada(client.global) as any)(1024, { maxByteLength: 2147483647 });
 			const view = new DataView(sab);
 
 			client.natives.call("Worker.prototype.postMessage", worker, {
