@@ -5815,11 +5815,77 @@ function headerOf(headers, name) {
 function userAgentOf(headers) {
   return headerOf(headers, "user-agent") ?? globalThis.navigator?.userAgent;
 }
-function withNavigationPriority(headers) {
+var PRIORIDADES = {
+  document: "u=0, i",
+  iframe: "u=0, i",
+  frame: "u=0, i",
+  style: "u=0",
+  font: "u=0",
+  script: "u=1",
+  empty: "u=1, i",
+  image: "i"
+};
+function withPriority(headers) {
   const destino = headerOf(headers, "sec-fetch-dest");
-  if ((destino === "document" || destino === "iframe") && headerOf(headers, "priority") === void 0)
-    return { ...headers, priority: "u=0, i" };
+  const prioridade = destino === void 0 ? void 0 : PRIORIDADES[destino];
+  if (prioridade !== void 0 && headerOf(headers, "priority") === void 0)
+    return { ...headers, priority: prioridade };
   return headers;
+}
+var ORDEM_NAVEGACAO = [
+  "content-length",
+  "pragma",
+  "cache-control",
+  "sec-ch-ua",
+  "sec-ch-ua-mobile",
+  "sec-ch-ua-platform",
+  "upgrade-insecure-requests",
+  "content-type",
+  "user-agent",
+  "origin",
+  "accept",
+  "sec-fetch-site",
+  "sec-fetch-mode",
+  "sec-fetch-user",
+  "sec-fetch-dest",
+  "sec-fetch-storage-access",
+  "referer",
+  "accept-encoding",
+  "accept-language",
+  "cookie",
+  "priority"
+];
+var ORDEM_SUBRECURSO_ANTES = [
+  "content-length",
+  "pragma",
+  "cache-control",
+  "sec-ch-ua-platform",
+  "user-agent",
+  "sec-ch-ua",
+  "content-type"
+];
+var ORDEM_SUBRECURSO_DEPOIS = [
+  "sec-ch-ua-mobile",
+  "accept",
+  "origin",
+  "sec-fetch-site",
+  "sec-fetch-mode",
+  "sec-fetch-dest",
+  "sec-fetch-storage-access",
+  "referer",
+  "accept-encoding",
+  "accept-language",
+  "cookie",
+  "priority"
+];
+var CONHECIDOS = /* @__PURE__ */ new Set([...ORDEM_NAVEGACAO, ...ORDEM_SUBRECURSO_ANTES, ...ORDEM_SUBRECURSO_DEPOIS, "host"]);
+function headerOrder(headers) {
+  const daPagina = Object.keys(headers).map((k) => k.toLowerCase()).filter((k) => !CONHECIDOS.has(k) && !k.startsWith(":"));
+  if (headerOf(headers, "sec-fetch-mode") === "navigate") {
+    const i = ORDEM_NAVEGACAO.indexOf("user-agent");
+    return [...ORDEM_NAVEGACAO.slice(0, i), ...daPagina, ...ORDEM_NAVEGACAO.slice(i)].join(",");
+  }
+  return [...ORDEM_SUBRECURSO_ANTES, ...daPagina, ...ORDEM_SUBRECURSO_DEPOIS].join(",");
 }
 var LibcurlClient = class {
   session;
@@ -6024,7 +6090,7 @@ var LibcurlClient = class {
       headersObj[key] = value;
     }
     const perfil = browserProfile(userAgentOf(headersObj));
-    if (perfil) headersObj = withNavigationPriority(headersObj);
+    if (perfil) headersObj = withPriority(headersObj);
     const inicio = Date.now();
     let payload;
     try {
@@ -6036,6 +6102,7 @@ var LibcurlClient = class {
         signal,
         insecure: this.insecure || this.insecureHosts.has(remote.host.toLowerCase()),
         _vssh_impersonate: perfil,
+        ...perfil ? { _vssh_header_order: headerOrder(headersObj) } : {},
         ...this.connectTimeoutMs ? { _vssh_connect_timeout_ms: this.connectTimeoutMs } : {}
       });
     } catch (e) {
@@ -6092,5 +6159,6 @@ export {
   LibcurlClient,
   WISP_REASONS,
   browserProfile,
-  LibcurlClient as default
+  LibcurlClient as default,
+  headerOrder
 };
