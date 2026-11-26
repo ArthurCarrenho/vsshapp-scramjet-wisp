@@ -90,9 +90,6 @@ export default function (client: ScramjetClient, self: any) {
 	// concede a capacidade**. O comportamento escolhido em cada caso é o que um Chrome real faz
 	// quando o usuário recusa — um caminho que todo site que usa estas APIs já precisa tratar.
 	//
-	// ⚠ Limite conhecido: `Function.prototype.toString` sobre um método neutralizado devolve
-	// fonte JS em vez de `[native code]`. Fechar isso exige mexer no `Function.prototype.toString`
-	// global, e fica registrado como o próximo passo se algum desafio olhar tão fundo.
 	const recusar = (nome: string) =>
 		function () {
 			return Promise.reject(
@@ -100,22 +97,14 @@ export default function (client: ScramjetClient, self: any) {
 			);
 		};
 
-	// Troca UM método, deixando o objeto de interface intacto.
+	// Troca UM método, deixando o objeto de interface intacto. O método continua o nativo por
+	// fora (`name`, `length`, o `toString` e o descritor), e a chamada responde o recuo.
 	const neutralizar = (caminho: string, recuo: (...args: any[]) => any) => {
-		const partes = caminho.split(".");
-		const prop = partes.pop();
-		const alvo = partes.reduce((a: any, b: string) => a?.[b], self);
-		if (!alvo || !prop || !(prop in alvo)) return;
-		try {
-			Object.defineProperty(alvo, prop, {
-				value: recuo,
-				writable: true,
-				enumerable: false,
-				configurable: true,
-			});
-		} catch {
-			// alvo não-configurável: deixar como está é melhor que derrubar o hook inteiro
-		}
+		client.Proxy(caminho, {
+			apply(ctx) {
+				ctx.return(Reflect.apply(recuo, ctx.this, ctx.args));
+			},
+		});
 	};
 
 	// Web Bluetooth: o seletor de dispositivo é do navegador real.

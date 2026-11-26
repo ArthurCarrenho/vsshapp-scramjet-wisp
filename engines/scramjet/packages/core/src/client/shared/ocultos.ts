@@ -5,7 +5,8 @@ const Symbol_keyFor = Symbol.keyFor;
 
 /**
  * vssh fork: os globais do motor (`$scramjet`, `$scramjetController`, `$scramitize` e os
- * `$scramjet$*` que o código reescrito chama) somem das listas de chaves do global. Eles
+ * `$scramjet$*` que o código reescrito chama) somem das listas de chaves do global e do
+ * `Object.prototype`. Eles
  * continuam lá, porque o código reescrito os chama pelo nome, mas `Object.keys(window)`,
  * `Object.getOwnPropertyNames(window)`, `Reflect.ownKeys(window)` e
  * `Object.getOwnPropertyDescriptors(window)` devolvem o que um Chrome sem o motor devolveria, e
@@ -31,11 +32,14 @@ export default function (client: ScramjetClient, self: Self) {
 	// Chromium limpo. Ele continua no construtor, porque o V8 o lê de lá, e some das listas de
 	// chaves e dos descritores próprios do `Error`.
 	const ocultaNoError = client.flagEnabled("cleanErrors");
+	// O `Object.prototype` leva os acessores que o código reescrito chama
+	// (`$scramjet__location` e os outros, ver `wrap.ts`) e o `$scramjet$setrealmfn`.
+	const comGlobais = (alvo: unknown) => alvo === self || alvo === self.Object.prototype;
 	const oculta = (alvo: unknown, k: PropertyKey) =>
 		simboloDoMotor(k) ||
-		(alvo === self && doMotor(k)) ||
+		(comGlobais(alvo) && doMotor(k)) ||
 		(ocultaNoError && alvo === self.Error && k === "prepareStackTrace");
-	const temOculta = (alvo: unknown) => alvo === self || (ocultaNoError && alvo === self.Error);
+	const temOculta = (alvo: unknown) => comGlobais(alvo) || (ocultaNoError && alvo === self.Error);
 
 	for (const caminho of ["Object.keys", "Object.getOwnPropertyNames"]) {
 		client.Proxy(caminho, {

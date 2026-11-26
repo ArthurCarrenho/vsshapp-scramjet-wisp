@@ -49,6 +49,7 @@ import {
 import { createIndirectEval } from "./shared/eval";
 
 const protoDe = Object.getPrototypeOf;
+const ehProtoDe = Object.prototype.isPrototypeOf;
 
 // https://github.com/Microsoft/TypeScript/issues/27024#issuecomment-421529650
 type IfEquals<T, U, Y = unknown, N = never> =
@@ -654,7 +655,13 @@ export class ScramjetClient {
 		if (!target) return;
 		if (!prop) return;
 		if (!Reflect_has(target, prop)) return;
-		target = this.donoNoGlobal(target, prop);
+		let alcance: any;
+		[target, alcance] = this.donoDe(target, prop);
+		const fora = (t: any) =>
+			alcance !== null &&
+			t !== alcance &&
+			!(t == null && alcance === this.global) &&
+			!Reflect_apply(ehProtoDe, alcance, [t]);
 
 		const value = Reflect_get(target, prop);
 		const originalDescriptor = Object_getOwnPropertyDescriptor(target, prop);
@@ -755,6 +762,7 @@ return { apply, construct };
 
 		if (handler.apply) {
 			h.apply = (fn: any, that: any, args: any[]) => {
+				if (fora(that)) return Reflect_apply(fn, that, args);
 				let returnValue: any = undefined;
 				let earlyreturn = false;
 
@@ -876,22 +884,33 @@ return { apply, construct };
 	}
 	/**
 	 * vssh fork: num worker, `setTimeout`, `fetch` e o resto do `WorkerGlobalScope` moram no
-	 * protótipo do global, e a troca do motor fica lá. Definida no próprio global, ela viraria uma
-	 * chave a mais em `Object.getOwnPropertyNames(self)`.
+	 * protótipo do global, e a troca do motor fica lá.
+	 *
+	 * Onde a troca de `prop` mora, e a quem ela vale. No Chrome `Text.prototype` não
+	 * tem `appendData` próprio, nem `Attr.prototype` tem `nodeValue`: os dois moram mais acima
+	 * (`CharacterData`, `Node`). A troca fica no dono, como o nativo, e só vale para quem descende
+	 * do alvo pedido; o resto recebe o nativo. A troca de um membro do global vale também para a
+	 * chamada sem `this`, que é como o site chama `setTimeout(...)`.
 	 */
-	donoNoGlobal(target: any, prop: string): any {
-		if (target !== this.global) return target;
-		let o = target;
-		while (o && !Object_getOwnPropertyDescriptor(o, prop))
-			o = protoDe(o);
+	donoDe(target: any, prop: string): [any, any] {
+		if (Object_getOwnPropertyDescriptor(target, prop)) return [target, null];
+		let o = protoDe(target);
+		while (o && !Object_getOwnPropertyDescriptor(o, prop)) o = protoDe(o);
+		if (!o) return [target, null];
 
-		return o ?? target;
+		return [o, target];
 	}
 	RawTrap(target: any, prop: string, descriptor: Trap<any>) {
 		if (!target) return;
 		if (!prop) return;
 		if (!Reflect_has(target, prop)) return;
-		target = this.donoNoGlobal(target, prop);
+		let alcance: any;
+		[target, alcance] = this.donoDe(target, prop);
+		const fora = (t: any) =>
+			alcance !== null &&
+			t !== alcance &&
+			!(t == null && alcance === this.global) &&
+			!Reflect_apply(ehProtoDe, alcance, [t]);
 
 		const oldDescriptor = this.natives.call(
 			"Object.getOwnPropertyDescriptor",
@@ -930,6 +949,7 @@ return { apply, construct };
 		if (descriptor.get) {
 			desc.get = {
 				get() {
+					if (fora(this)) return oldDescriptor?.get?.call(this);
 					ctx.this = this;
 
 					return descriptor.get(ctx);
@@ -947,6 +967,11 @@ return { apply, construct };
 		if (descriptor.set && !soLeitura) {
 			desc.set = {
 				set(v: any) {
+					if (fora(this)) {
+						oldDescriptor?.set?.call(this, v);
+
+						return;
+					}
 					ctx.this = this;
 
 					descriptor.set(ctx, v);

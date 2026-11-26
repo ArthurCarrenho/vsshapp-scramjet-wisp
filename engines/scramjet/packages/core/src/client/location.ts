@@ -157,7 +157,7 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 		}
 	}
 
-	// vssh fork: os métodos são do próprio objeto, somente leitura, como no `Location` do Chrome
+	// vssh fork: os métodos são do próprio objeto, com o descritor do `Location` do Chrome
 	// ([LegacyUnforgeable]), e o `toString` de cada um é o do nativo que ele envolve: um
 	// `function () { [native code] }` sem nome denuncia o invólucro.
 	for (const nome of ["toString", "valueOf", "assign", "reload", "replace"]) {
@@ -166,13 +166,26 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 			continue;
 		const nativo = (self.location as any)[nome];
 		if (nativo) client.box.unproxy.set(fn, nativo);
+		const d = iswindow
+			? client.natives.call("Object.getOwnPropertyDescriptor", null, self.location, nome)
+			: null;
 		delete fakeLocation[nome];
 		Object_defineProperty(fakeLocation, nome, {
 			value: fn,
-			writable: false,
-			enumerable: true,
+			writable: d ? d.writable : false,
+			enumerable: d ? d.enumerable : true,
 			configurable: false,
 		});
+	}
+	// O `Symbol.toPrimitive` próprio do `Location`, que no Chrome vale `undefined`.
+	if (iswindow) {
+		const d = client.natives.call(
+			"Object.getOwnPropertyDescriptor",
+			null,
+			self.location,
+			Symbol.toPrimitive
+		);
+		if (d) Object_defineProperty(fakeLocation, Symbol.toPrimitive, { ...d, configurable: false });
 	}
 
 	return fakeLocation;

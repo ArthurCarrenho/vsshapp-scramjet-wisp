@@ -163,6 +163,9 @@ export default function (client: ScramjetClient, self: typeof window) {
 				element.prototype,
 				attr,
 			);
+			// O atributo sem propriedade no Chrome (`formaction`, `imagesrcset`: as propriedades
+			// são `formAction` e `imageSrcset`) não ganha uma.
+			if (!descriptor) continue;
 			const acessores = {
 				get() {
 					if (["src", "data", "href", "action", "formaction"].includes(attr)) {
