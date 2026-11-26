@@ -126,6 +126,8 @@ async function servirArquivo(res, arquivo, raiz) {
 // verdade funcionar — e os módulos são carregados **na ordem que o `index.html` real declara**,
 // lida dele. Inverter lá quebra a bancada aqui, que é a forma certa de uma ordem ser verificada.
 const MODULOS = [
+	// O contrato de requisição do shell: o motor pede por ele os cookies guardados no portal.
+	"js/VsshApi.js",
 	"js/browser/BrowserEngines.js",
 	"js/browser/MatchPattern.js",
 	"js/browser/ExtensionRuntime.js",

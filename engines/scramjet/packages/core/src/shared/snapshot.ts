@@ -33,6 +33,8 @@ export const Reflect_has = globalThis.Reflect.has;
 export const Reflect_ownKeys = globalThis.Reflect.ownKeys;
 export const Reflect_construct = globalThis.Reflect.construct;
 export const Reflect_apply = globalThis.Reflect.apply;
+export const Reflect_getPrototypeOf = globalThis.Reflect.getPrototypeOf;
+export const Reflect_setPrototypeOf = globalThis.Reflect.setPrototypeOf;
 
 export const Array_from = globalThis.Array.from;
 export const Array_isArray = globalThis.Array.isArray;

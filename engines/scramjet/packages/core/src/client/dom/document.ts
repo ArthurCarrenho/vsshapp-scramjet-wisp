@@ -1,5 +1,6 @@
 import { IncrementalHtmlRewriter, rewriteHtml } from "@rewriters/html";
 import { ScramjetClient } from "@client/index";
+import { excecaoDoNavegador } from "@client/shared/excecao";
 import { String, _URL } from "@/shared/snapshot";
 import { createReferrerString } from "@/fetch/util";
 import { comoOriginal, ehConfiavel, embrulhar } from "@/shared/confiavel";
@@ -119,7 +120,8 @@ export default function (client: ScramjetClient, _self: Self) {
 			const host = client.url.hostname;
 			const pedido = String(valor).toLowerCase();
 			if (pedido !== host && !(pedido.includes(".") && host.endsWith(`.${pedido}`))) {
-				throw new DOMException(
+				throw excecaoDoNavegador(
+					client,
 					`Failed to set the 'domain' property on 'Document': '${String(valor)}' is not a suffix of '${host}'.`,
 					"SecurityError"
 				);

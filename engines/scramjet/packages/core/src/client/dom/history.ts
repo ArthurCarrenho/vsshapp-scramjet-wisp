@@ -1,4 +1,5 @@
 import { ScramjetClient } from "@client/index";
+import { excecaoDoNavegador } from "@client/shared/excecao";
 import { Tap } from "@/Tap";
 import { String, _URL } from "@/shared/snapshot";
 
@@ -11,17 +12,30 @@ export default function (client: ScramjetClient, _self: Self) {
 		{
 			apply(ctx) {
 				const relevantclient = client.box.histories.get(ctx.this);
-				const url = ctx.args[2] ? String(ctx.args[2]) : undefined;
+				// Um `this` que não é o `history` de um quadro do motor vai ao navegador como veio,
+				// e a recusa é a dele.
+				if (!relevantclient) return;
+				// O terceiro argumento é opcional, e `null` e `undefined` deixam o endereço como está.
+				const url = ctx.args[2] == null ? undefined : String(ctx.args[2]);
 
-				if (_URL.canParse(url)) {
-					const parsedUrl = new _URL(url);
-					if (parsedUrl.origin !== relevantclient.url.origin) {
-						// TODO: we want to emulate the proper security error here. right now this will leak the origin in the error message
-						return ctx.return(undefined);
-					}
+				// O endereço novo se resolve contra o do documento e tem de ser da origem dele. O
+				// Chrome recusa o resto com um SecurityError, e a página que pede `replaceState`
+				// para outro site confere que a recusa veio.
+				if (url !== undefined) {
+					const atual = relevantclient.url;
+					let destino: URL | null = null;
+					try {
+						destino = new _URL(url, relevantclient.meta.base);
+					} catch {}
+					if (destino && destino.origin !== atual.origin)
+						throw excecaoDoNavegador(
+							client,
+							`Failed to execute '${nome}' on 'History': A history state object with URL '${destino.href}' cannot be created in a document with origin '${atual.origin}' and URL '${atual.href}'.`,
+							"SecurityError"
+						);
 				}
 
-				if (url || url === "") ctx.args[2] = relevantclient.rewriteUrl(url);
+				if (url !== undefined) ctx.args[2] = relevantclient.rewriteUrl(url);
 				ctx.call();
 				Tap.dispatch(
 					relevantclient.hooks.lifecycle.navigate,

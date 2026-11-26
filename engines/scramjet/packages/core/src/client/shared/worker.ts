@@ -1,4 +1,5 @@
 import { ScramjetClient } from "@client/index";
+import { excecaoDoNavegador } from "@client/shared/excecao";
 import { comoOriginal } from "@/shared/confiavel";
 import { cspRecusa, enderecoRecusado } from "@client/csp";
 
@@ -32,7 +33,8 @@ export default function (client: ScramjetClient, _self: GlobalThis) {
 				: url.origin;
 		const minha = client.meta.origin.origin;
 		if (url.protocol !== "data:" && deOrigem !== minha)
-			throw new client.global.DOMException(
+			throw excecaoDoNavegador(
+				client,
 				`Failed to construct 'Worker': Script at '${url.href}' cannot be accessed from origin '${minha}'.`,
 				"SecurityError",
 			);
