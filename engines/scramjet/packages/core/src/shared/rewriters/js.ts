@@ -217,6 +217,95 @@ function rewriteJsMapeado(
 	}
 }
 
+// vssh fork: a reescrita de um script que veio da rede, guardada pelo SHA-256 dos bytes.
+//
+// O cache HTTP do motor guarda o corpo antes da reescrita, e cada acerto dele reescreve de novo,
+// na thread do shell: o bundle que um site serve em todas as páginas dele era percorrido pelo
+// rewriter a cada navegação, a uns 40 ms por megabyte. A chave leva o que entra na saída além dos
+// bytes: módulo ou não, o prefixo, os globais e as flags. O endereço base entra na saída só pelo
+// `import()`, pelo `import.meta` e pelos `import` estáticos de um módulo, e a entrada guarda a
+// base só nesses casos; um script clássico sem nenhum dos dois serve qualquer página. O hash é
+// criptográfico porque o cache é de todos os sites: um script que colidisse com o de outro site
+// rodaria no lugar dele, na origem dele.
+const TETO_DA_REDE = 32 * 1024 * 1024;
+const guardadosDaRede = new Map<
+	string,
+	{ js: string | Uint8Array; base: string | null; tamanho: number }
+>();
+let tamanhoDaRede = 0;
+const idsDosGlobais = new WeakMap<object, number>();
+let proximoId = 0;
+
+function idDosGlobais(globais: object): number {
+	let id = idsDosGlobais.get(globais);
+	if (id === undefined) idsDosGlobais.set(globais, (id = proximoId++));
+
+	return id;
+}
+
+function hexDe(buf: ArrayBuffer): string {
+	const bytes = new Uint8Array(buf);
+	let hex = "";
+	for (let i = 0; i < bytes.length; i++) hex += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+
+	return hex;
+}
+
+export async function rewriteJsDaRede(
+	js: Uint8Array,
+	url: string | null,
+	context: ScramjetContext,
+	meta: URLMeta,
+	isModule = false
+): Promise<string | Uint8Array> {
+	const subtle = globalThis.crypto?.subtle;
+	if (!subtle) return rewriteJs(js, url, context, meta, isModule);
+
+	const flags = flagsDe(context, meta);
+	let chaveDasFlags = "";
+	for (const k of Object_keys(flags)) if (flags[k]) chaveDasFlags += k + ",";
+	const chave = `${isModule ? 1 : 0}\u0000${context.prefix.pathname}\u0000${idDosGlobais(context.config.globals)}\u0000${chaveDasFlags}\u0000${hexDe(await subtle.digest("SHA-256", js as Uint8Array<ArrayBuffer>))}`;
+
+	const guardado = guardadosDaRede.get(chave);
+	if (guardado && (guardado.base === null || guardado.base === meta.base.href)) {
+		guardadosDaRede.delete(chave);
+		guardadosDaRede.set(chave, guardado);
+
+		return guardado.js;
+	}
+
+	let saida: string | Uint8Array;
+	try {
+		saida = rewriteJsMapeado(js, url, context, meta, isModule);
+	} catch {
+		// A falha fica fora do cache e segue o caminho de sempre, com a segunda tentativa e a
+		// recusa de rodar o que não se reescreveu.
+		return rewriteJs(js, url, context, meta, isModule);
+	}
+
+	const tamanho = saida.length;
+	if (tamanho <= TETO_DA_REDE / 4) {
+		const { importfn, metafn } = context.config.globals;
+		const texto = typeof saida === "string" ? saida : null;
+		const usaBase =
+			isModule ||
+			texto === null ||
+			texto.includes(importfn + "(") ||
+			texto.includes(metafn + "(");
+		if (guardado) tamanhoDaRede -= guardado.tamanho;
+		guardadosDaRede.delete(chave);
+		guardadosDaRede.set(chave, { js: saida, base: usaBase ? meta.base.href : null, tamanho });
+		tamanhoDaRede += tamanho;
+		while (tamanhoDaRede > TETO_DA_REDE) {
+			const [velha, entrada] = guardadosDaRede.entries().next().value!;
+			guardadosDaRede.delete(velha);
+			tamanhoDaRede -= entrada.tamanho;
+		}
+	}
+
+	return saida;
+}
+
 export function rewriteJs(
 	js: string | Uint8Array,
 	url: string | null,
