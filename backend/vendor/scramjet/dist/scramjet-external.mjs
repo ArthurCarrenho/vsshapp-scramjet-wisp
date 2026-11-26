@@ -45,6 +45,7 @@ export const {
 	rewriteBlob,
 	rewriteCss,
 	rewriteHtml,
+	rewriteImportMap,
 	rewriteJs,
 	rewriteJsInner,
 	rewriteSrcset,
