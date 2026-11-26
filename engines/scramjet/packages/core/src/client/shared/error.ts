@@ -28,24 +28,88 @@ export default function (client: ScramjetClient, self: Self) {
 			// getters do site em `name`/`message` podem lançar; o V8 também os chamaria
 		}
 
-		const linhas: string[] = [];
-		for (let i = 0; i < stack.length; i++) {
-			let arquivo: string | null = null;
+		const mascarado = (arquivo: string | null | undefined) => {
 			try {
-				arquivo = stack[i].getFileName();
+				return !!arquivo && client.config.maskedfiles.some((f) => arquivo!.endsWith(f));
+			} catch {
+				return false;
+			}
+		};
+		const arquivoDe = (i: number) => {
+			try {
+				return stack[i].getFileName() as string | null;
+			} catch {
+				return null;
+			}
+		};
+		const desreescrito = (arquivo: string) => {
+			try {
+				if (String_startsWith(arquivo, client.context.prefix.href))
+					return unrewriteUrl(arquivo, client.context);
 			} catch {}
 
-			// strip stack frames including scramjet handlers from the trace
+			return arquivo;
+		};
+
+		// O `eval` indireto e o `Function` passam pelo invólucro do motor, e o V8 escreve a origem
+		// do código avaliado como o invólucro: `eval at i (…/scramjet.js:18:39738)`. No Chrome a
+		// origem é quem chamou, e quem chamou é o primeiro quadro de fora do motor abaixo do
+		// invólucro. A origem é reescrita com o nome e o lugar desse quadro.
+		const origemDoEval = (i: number): [string, string] | null => {
+			let origem: string | undefined;
 			try {
-				if (arquivo && client.config.maskedfiles.some((f) => arquivo!.endsWith(f)))
-					continue;
-			} catch {}
+				if (!stack[i].isEval()) return null;
+				origem = stack[i].getEvalOrigin();
+			} catch {
+				return null;
+			}
+			if (!origem || !client.config.maskedfiles.some((f) => origem!.includes(f)))
+				return null;
+			let j = i + 1;
+			while (j < stack.length && !mascarado(arquivoDe(j))) j++;
+			while (j < stack.length && mascarado(arquivoDe(j))) j++;
+			if (j >= stack.length) return null;
+			try {
+				const q = stack[j];
+				const nome = q.getFunctionName() || "<anonymous>";
+				const arquivo = q.getFileName();
+				const lugar = arquivo
+					? `${desreescrito(arquivo)}:${q.getLineNumber()}:${q.getColumnNumber()}`
+					: "<anonymous>";
+
+				return [origem, `eval at ${nome} (${lugar})`];
+			} catch {
+				return null;
+			}
+		};
+
+		const linhas: string[] = [];
+		for (let i = 0; i < stack.length; i++) {
+			const arquivo = arquivoDe(i);
+
+			// strip stack frames including scramjet handlers from the trace
+			if (mascarado(arquivo)) continue;
 
 			let texto: string;
 			try {
 				texto = String(stack[i]);
 			} catch {
 				continue;
+			}
+
+			const troca = origemDoEval(i);
+			if (troca) texto = texto.replace(troca[0], troca[1]);
+			// Um quadro de código avaliado não tem arquivo, e a origem dele carrega o endereço da
+			// página como o motor o serve; cada endereço sob o prefixo volta ao do site.
+			if (!arquivo) {
+				try {
+					const prefixo = client.context.prefix.href;
+					if (texto.includes(prefixo)) {
+						texto = texto.replace(/[^\s()]+(?=:\d+:\d+)/g, (u) =>
+							String_startsWith(u, prefixo) ? desreescrito(u) : u
+						);
+					}
+				} catch {}
 			}
 
 			// Só o que está SOB O PROXY, e o teste vem ANTES da chamada.

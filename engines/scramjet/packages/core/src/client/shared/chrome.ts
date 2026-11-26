@@ -31,49 +31,12 @@ export default function (client: ScramjetClient, self: any) {
 	if (!iswindow) return;
 	// DOM specific ones below here
 
-	// `navigator.serviceWorker` existe, e não registra nada. Ele é isolamento: um Service Worker da
-	// página proxiada colidiria com o do motor, que é quem roteia tudo. Um Chrome sem
-	// `navigator.serviceWorker` num contexto seguro não existe, então o objeto e os métodos
-	// continuam os nativos, e cada um responde como uma página sem worker: `controller` nulo, nenhum
-	// registro, `ready` que não resolve, e `register` recusado como o Chrome recusa um registro que
-	// a política do navegador não permite.
-	if (typeof (self as any).ServiceWorkerContainer === "function") {
-		client.Trap("ServiceWorkerContainer.prototype.controller", {
-			get() {
-				return null;
-			},
-		});
-		const nunca = new Promise(() => {});
-		client.Trap("ServiceWorkerContainer.prototype.ready", {
-			get() {
-				return nunca;
-			},
-		});
-		client.Proxy("ServiceWorkerContainer.prototype.register", {
-			apply(ctx) {
-				ctx.return(
-					Promise.reject(
-						new DOMException(
-							"Failed to register a ServiceWorker: The user denied permission to use Service Worker.",
-							"SecurityError"
-						)
-					)
-				);
-			},
-		});
-		client.Proxy("ServiceWorkerContainer.prototype.getRegistration", {
-			apply(ctx) {
-				ctx.return(Promise.resolve(undefined));
-			},
-		});
-		client.Proxy("ServiceWorkerContainer.prototype.getRegistrations", {
-			apply(ctx) {
-				ctx.return(Promise.resolve([]));
-			},
-		});
-	} else {
-		Reflect.deleteProperty(Navigator.prototype, "serviceWorker");
-	}
+	// `Navigator.prototype.serviceWorker` continua sendo apagado. Ele é isolamento: com ele de
+	// volta, a página proxiada enxerga e registra Service Worker próprio, colidindo com o do
+	// motor, que é quem roteia tudo. Um `navigator.serviceWorker` que existe e recusa o
+	// `register` é pior: o desafio gerenciado do Cloudflare trata a recusa como falha e recarrega
+	// a página várias vezes por segundo, medido no tandfonline pela IPPRI-01.
+	Reflect.deleteProperty(Navigator.prototype, "serviceWorker");
 
 	// contact picker api
 	del("Navigator.prototype.contacts");
