@@ -12,6 +12,10 @@ export * from "./htmlRules";
 export * from "./mime";
 export * from "./rewriters";
 
+// vssh fork: a expressão de cada `siteFlags` é compilada uma vez. O rewriter consulta todas as
+// flags a cada script, e um `Function` num laço pagava uma compilação de regex por flag.
+const expressoesDeSite = new Map<string, RegExp>();
+
 export function flagEnabled(
 	flag: keyof ScramjetFlags,
 	context: ScramjetContext,
@@ -20,7 +24,11 @@ export function flagEnabled(
 	const value = context.config.flags[flag];
 	for (const regex in context.config.siteFlags) {
 		const partialflags = context.config.siteFlags[regex];
-		if (new _RegExp(regex).test(url.href) && flag in partialflags) {
+		if (!(flag in partialflags)) continue;
+		let re = expressoesDeSite.get(regex);
+		if (!re) expressoesDeSite.set(regex, (re = new _RegExp(regex)));
+		re.lastIndex = 0;
+		if (re.test(url.href)) {
 			return partialflags[flag];
 		}
 	}

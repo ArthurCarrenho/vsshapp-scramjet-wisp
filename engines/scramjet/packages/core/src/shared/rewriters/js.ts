@@ -107,6 +107,13 @@ export function rewriteJsInner(
 	return rewriteJsWasm(js, url, context, meta, isModule);
 }
 
+const CACHE_MAX = 512;
+const CACHE_TEXTO_MAX = 64 * 1024;
+const cacheDeReescrita = new Map<
+	string,
+	{ js: string; tag: string; mapa: number[] | null }
+>();
+
 function rewriteJsMapeado(
 	js: string | Uint8Array,
 	url: string | null,
@@ -116,13 +123,28 @@ function rewriteJsMapeado(
 	inicio?: [number, number]
 ): string | Uint8Array {
 	{
+		// vssh fork: no cliente, a mesma fonte pedida de novo (o `Function` e o `eval` de um laço)
+		// sai da reescrita já feita, com o mesmo mapa e a mesma tag.
+		const pushmap = globalThis[context.config.globals.pushsourcemapfn];
+		const chave =
+			pushmap && typeof js === "string" && js.length <= CACHE_TEXTO_MAX
+				? `${isModule ? 1 : 0}\u0000${url}\u0000${meta.base.href}\u0000${meta.origin.href}\u0000${js}`
+				: null;
+		const guardada = chave !== null ? cacheDeReescrita.get(chave) : undefined;
+		if (guardada) {
+			if (guardada.mapa) pushmap(guardada.mapa, guardada.tag, -1);
+
+			return guardada.js;
+		}
+
 		const res = rewriteJsInner(js, url, context, meta, isModule);
 		let newjs = res.js;
+		let mapa: number[] | null = null;
 
 		if (flagEnabled("sourcemaps", context, meta.base)) {
-			const pushmap = globalThis[context.config.globals.pushsourcemapfn];
 			if (pushmap) {
-				pushmap(Array_from(res.map), res.tag, -1);
+				mapa = Array_from(res.map);
+				pushmap(mapa, res.tag, -1);
 			} else {
 				// TODO: how do we check instanceof here?
 				if (typeof newjs !== "string") {
@@ -149,6 +171,12 @@ function rewriteJsMapeado(
 			for (const error of res.errors) {
 				dbg.error("oxc parse error", error);
 			}
+		}
+
+		if (chave !== null && typeof newjs === "string") {
+			if (cacheDeReescrita.size >= CACHE_MAX)
+				cacheDeReescrita.delete(cacheDeReescrita.keys().next().value!);
+			cacheDeReescrita.set(chave, { js: newjs, tag: res.tag, mapa });
 		}
 
 		return newjs;
