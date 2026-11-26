@@ -89,7 +89,10 @@ Cada uma é visível ao código do site, e o desafio do caso de referência pass
   entre os nomes do global e o relógio de 5 µs (o passo do `performance.now()` é 100 µs). O motor
   põe COOP e COEP nos documentos proxiados quando a página que o hospeda é isolada
   (`handler.crossOriginIsolated`), e a bancada mede isso servindo a página dela com os dois
-  cabeçalhos: o quadro do Turnstile passa a responder `true`. O shell do ambiente não é isolado.
+  cabeçalhos: o quadro do Turnstile passa a responder `true`, com `require-corp` e com
+  `credentialless`, e um Worker de `blob:` nasce isolado. O shell do ambiente só é isolado na
+  amostra de `VSSH_ISOLAMENTO` (`src/utils/isolamento.ts` do vssh-sso), e nela ele abre os links
+  numa aba do navegador no lugar do navegador embutido.
 - `'prepareStackTrace' in Error` é `true`. O V8 lê o formatador do próprio `Error`, e o operador
   `in` não passa por nenhuma função que o motor troque.
 - A folha `<style id="__vssh_ext_css">` do shell (a barra de rolagem do ambiente e o cosmético das
@@ -107,6 +110,16 @@ Cada uma é visível ao código do site, e o desafio do caso de referência pass
 - A primeira linha da pilha de um `TypeError` do Blink (`setAttribute()` sem argumentos) traz a
   frase curta no Chrome (`2 arguments required, but only 0 present.`) e a frase inteira pelo motor,
   que monta o cabeçalho quando a pilha é lida. Medido sob o playwright, dos dois lados.
+
+## O que a página do artigo ainda acusa
+
+Depois do desafio, o artigo abre com dois erros não tratados no console, pelo motor da `main` e
+por qualquer variante medida aqui: `String.prototype.startsWith called on null or undefined`, no
+gerenciador de consentimento do site (`transcend-cdn.com/cm/<id>/airgap.js`), e em seguida
+`window.airgap.getConsent is not a function`. O script guarda os nativos na carga e os chama por
+fora dos objetos, e algum deles devolve `null` pelo motor onde o Chrome devolve texto. O
+`sem-automacao.mjs` com `CONSOLE=1` mostra os dois. O caminho para achar a chamada é o do traço,
+com o script numa página sem desafio.
 
 ## Onde não está a diferença
 
