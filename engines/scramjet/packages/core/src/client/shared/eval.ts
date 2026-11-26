@@ -3,6 +3,7 @@ import { ScramjetClient } from "@client/index";
 import { Object_defineProperty, String } from "@/shared/snapshot";
 import { comoOriginal } from "@/shared/confiavel";
 import { registrarCompilacao } from "@client/pilha";
+import { registrarScript } from "@client/posicoes";
 
 export default function (client: ScramjetClient, self: Self) {
 	// used for proxying *direct eval*
@@ -15,7 +16,8 @@ export default function (client: ScramjetClient, self: Self) {
 			if (client.box.instanceof(js, "TrustedScript")) js = String(js);
 			if (typeof js !== "string") return js;
 
-			return comoOriginal(
+			client.box.mapas.ultimaTag = null;
+			const codigo = comoOriginal(
 				client,
 				"TrustedScript",
 				original,
@@ -23,6 +25,18 @@ export default function (client: ScramjetClient, self: Self) {
 					rewriteJs(texto, "(direct eval proxy)", client.context, client.meta),
 				"eval",
 			);
+			const tag = client.box.mapas.ultimaTag;
+			if (tag)
+				registrarScript(client, () => String(codigo), {
+					tag,
+					ini: 0,
+					d: 0,
+					dl: 0,
+					primeira: -1,
+					col0: 0,
+				});
+
+			return codigo;
 		},
 		writable: false,
 		configurable: false,
@@ -40,6 +54,7 @@ export function createIndirectEval(client: ScramjetClient) {
 			if (client.box.instanceof(js, "TrustedScript")) js = String(js);
 			if (typeof js !== "string") return js;
 
+			client.box.mapas.ultimaTag = null;
 			const codigo = comoOriginal(
 				client,
 				"TrustedScript",
@@ -54,6 +69,16 @@ export function createIndirectEval(client: ScramjetClient) {
 				"eval",
 			);
 			registrarCompilacao(client, () => String(codigo));
+			const tag = client.box.mapas.ultimaTag;
+			if (tag)
+				registrarScript(client, () => String(codigo), {
+					tag,
+					ini: 0,
+					d: 0,
+					dl: 0,
+					primeira: -1,
+					col0: 0,
+				});
 
 			return indirection(codigo);
 		},

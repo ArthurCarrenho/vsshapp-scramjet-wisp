@@ -3,6 +3,7 @@ import { SCRAMJETCLIENT } from "@/symbols";
 import { ScramjetClient } from "@client/index";
 // import { argdbg } from "@client/shared/err";
 import { Object_defineProperty } from "@/shared/snapshot";
+import { vistaDe } from "@client/janela-cruzada";
 
 export function createWrapFn(client: ScramjetClient, self: GlobalThis) {
 	// `parent` e `top` são resolvidos SOB DEMANDA, não uma vez na construção do client — e a
@@ -94,9 +95,9 @@ export function createWrapFn(client: ScramjetClient, self: GlobalThis) {
 		}
 		if (iswindow) {
 			if (identifier === self.parent) {
-				return resolveParent();
+				return vistaDe(client, resolveParent());
 			} else if (identifier === self.top) {
-				return resolveTop();
+				return vistaDe(client, resolveTop());
 			}
 		}
 		return identifier;

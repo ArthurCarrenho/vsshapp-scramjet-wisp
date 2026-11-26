@@ -4,6 +4,7 @@ import { ScramjetClient } from "@client/index";
 import { _URL, Object_defineProperty } from "@/shared/snapshot";
 import { POLLUTANT } from "./realm";
 import { embrulhar } from "@/shared/confiavel";
+import { ehVista } from "@client/janela-cruzada";
 
 // O `targetOrigin` que o nativo aceita: `*`, `/`, ou uma URL absoluta, pelo mesmo parser de URL.
 // O resto ele recusa com SyntaxError.
@@ -169,6 +170,7 @@ export default function (client: ScramjetClient, self: Self) {
 	// `postMessage` chamado depois sem passar por aqui não herda o realm de quem chamou antes.
 	Object_defineProperty(self, client.config.globals.wrappostmessagefn, {
 		value: function (obj: any) {
+			if (ehVista(obj)) return obj;
 			if (!obj || typeof obj.postMessage !== "function") return obj;
 			const doRealm = {};
 			return {

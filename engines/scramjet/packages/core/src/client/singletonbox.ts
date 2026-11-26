@@ -2,6 +2,7 @@ import { IncrementalHtmlRewriter } from "@/shared";
 import { ScramjetClient } from "./client";
 import { SourceMaps } from "./shared/sourcemaps";
 import { Compilacoes } from "./pilha";
+import { MapasDeScript } from "./posicoes";
 import {
 	Object_getOwnPropertyNames,
 	Object_getOwnPropertyDescriptor,
@@ -24,6 +25,7 @@ export class SingletonBox {
 	// o `Function` nativo devolveu para os argumentos do site (ver `shared/function.ts`).
 	fontesDinamicas = new WeakMap<Function, string>();
 	compilacoes = new Compilacoes();
+	mapas = new MapasDeScript();
 
 	constructor(public ownerclient: ScramjetClient) {}
 

@@ -1,6 +1,7 @@
 import { unrewriteUrl } from "@rewriters/url";
 import { ScramjetClient } from "@client/index";
 import { lendoPilhaCrua, origemCitaMotor, origemRegistrada } from "@client/pilha";
+import { posicaoOriginal } from "@client/posicoes";
 import {
 	Object_defineProperty,
 	String_startsWith,
@@ -113,6 +114,17 @@ export default function (client: ScramjetClient, self: Self) {
 			} catch {}
 			const troca = registrada ?? origemDoEval(i);
 			if (troca) texto = texto.replace(troca[0], troca[1]);
+			// A posição do quadro é a do texto reescrito; ela volta à da fonte do site.
+			try {
+				const pos = posicaoOriginal(client, stack[i]);
+				if (pos) {
+					const velha = `:${pos[0]}:${pos[1]}`;
+					const k = texto.lastIndexOf(velha);
+					if (k >= 0)
+						texto =
+							texto.slice(0, k) + `:${pos[2]}:${pos[3]}` + texto.slice(k + velha.length);
+				}
+			} catch {}
 			// Um quadro de código avaliado não tem arquivo, e a origem dele carrega o endereço da
 			// página como o motor o serve; cada endereço sob o prefixo volta ao do site.
 			if (!arquivo) {

@@ -112,7 +112,8 @@ function rewriteJsMapeado(
 	url: string | null,
 	context: ScramjetContext,
 	meta: URLMeta,
-	isModule = false
+	isModule = false,
+	inicio?: [number, number]
 ): string | Uint8Array {
 	{
 		const res = rewriteJsInner(js, url, context, meta, isModule);
@@ -121,20 +122,25 @@ function rewriteJsMapeado(
 		if (flagEnabled("sourcemaps", context, meta.base)) {
 			const pushmap = globalThis[context.config.globals.pushsourcemapfn];
 			if (pushmap) {
-				pushmap(Array_from(res.map), res.tag);
+				pushmap(Array_from(res.map), res.tag, -1);
 			} else {
 				// TODO: how do we check instanceof here?
 				if (typeof newjs !== "string") {
 					newjs = TextDecoder_decode(newjs);
 				}
-				const sourcemapfn = `${context.config.globals.pushsourcemapfn}([${res.map.join(",")}], "${res.tag}");`;
+				// vssh fork: a chamada fica na mesma linha do código do site, sem quebra, e leva a
+				// linha e a coluna em que o script começa no documento do site. Com ela o cliente
+				// devolve a posição da fonte do site a cada quadro da pilha (ver
+				// `client/posicoes.ts`).
+				const [linha, coluna] = inicio ?? [1, 0];
+				const sourcemapfn = `${context.config.globals.pushsourcemapfn}([${res.map.join(",")}], "${res.tag}", ${linha}, ${coluna});`;
 
 				// don't put the sourcemap call before "use strict"
 				const strictMode = new _RegExp(/^\s*(['"])use strict\1;?/);
 				if (strictMode.test(newjs)) {
-					newjs = newjs.replace(strictMode, `$&\n${sourcemapfn}`);
+					newjs = newjs.replace(strictMode, `$&;${sourcemapfn}`);
 				} else {
-					newjs = `${sourcemapfn}\n${newjs}`;
+					newjs = `${sourcemapfn}${newjs}`;
 				}
 			}
 		}
@@ -154,7 +160,8 @@ export function rewriteJs(
 	url: string | null,
 	context: ScramjetContext,
 	meta: URLMeta,
-	isModule = false
+	isModule = false,
+	inicio?: [number, number]
 ): string | Uint8Array {
 	// vssh fork: duas falhas MUITO diferentes chegavam aqui como uma só, e o `allowInvalidJs`
 	// deixava as duas passarem devolvendo a fonte intacta.
@@ -175,7 +182,7 @@ export function rewriteJs(
 	// sabendo. Fonte que não parseia sai na hora — na segunda daria exatamente o mesmo.
 	for (let tentativa = 0; tentativa < 2; tentativa++) {
 		try {
-			return rewriteJsMapeado(js, url, context, meta, isModule);
+			return rewriteJsMapeado(js, url, context, meta, isModule, inicio);
 		} catch (err) {
 			erro = err;
 			if (err?.scramjetSourceFault === true) break;

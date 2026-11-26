@@ -20,6 +20,8 @@ import {
 } from "@/shared/mime";
 import { ForeignContext } from "@/shared/rewriters/html";
 import { comoOriginal } from "@/shared/confiavel";
+import { vistaDe } from "@client/janela-cruzada";
+import { allowNativo } from "@/shared/permissoes";
 
 export function foreignContextForElement(
 	client: ScramjetClient,
@@ -129,6 +131,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 		poster: [self.HTMLVideoElement],
 		imagesrcset: [self.HTMLLinkElement],
 		content: [self.HTMLMetaElement],
+		allow: [self.HTMLIFrameElement],
 	};
 
 	const urlinterfaces = [
@@ -166,7 +169,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 						return unrewriteUrl(descriptor.get.call(this), client.context);
 					}
 					// O `content` de um `<meta>` só muda numa CSP, e o do site está no atributo guardado.
-					if (attr === "content") {
+					if (attr === "content" || attr === "allow") {
 						return this.getAttribute(attr) ?? "";
 					}
 
@@ -349,6 +352,21 @@ export default function (client: ScramjetClient, self: typeof window) {
 				}
 				ctx.args[1] = ret;
 				ctx.fn.call(ctx.this, `scramjet-attr-${ctx.args[0]}`, value);
+				// O `allow` que vai ao navegador depende do endereço do quadro, e é refeito antes de
+				// o `src` novo navegar.
+				if (tagName === "iframe" && name.toLowerCase() === "src") {
+					const allow = client.natives.call(
+						"Element.prototype.getAttribute",
+						ctx.this,
+						"scramjet-attr-allow",
+					);
+					if (allow != null)
+						ctx.fn.call(
+							ctx.this,
+							"allow",
+							allowNativo(allow, ret, client.context, client.meta),
+						);
+				}
 			}
 		},
 	});
@@ -980,7 +998,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 					return realwin;
 				}
 
-				return realwin;
+				return vistaDe(client, realwin);
 			},
 		},
 	);
@@ -1003,6 +1021,8 @@ export default function (client: ScramjetClient, self: typeof window) {
 				if (!(SCRAMJETCLIENT in realwin)) {
 					client.init.hookSubcontext(realwin, ctx.this);
 				}
+				// o documento de um quadro de outra origem é `null`, como no Chrome
+				if (vistaDe(client, realwin) !== realwin) return null;
 
 				return realwin.document;
 			},

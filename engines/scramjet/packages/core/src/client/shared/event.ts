@@ -2,6 +2,7 @@ import { iswindow } from "@client/entry";
 import { ScramjetClient } from "@client/index";
 import { AnyFunction } from "@/types";
 import { getOwnPropertyDescriptorHandler } from "@client/helpers";
+import { vistaDe } from "@client/janela-cruzada";
 import {
 	_Map,
 	Object_defineProperty,
@@ -98,11 +99,7 @@ export default function (client: ScramjetClient, self: Self) {
 			source() {
 				if (this.source === null) return null;
 
-				// const scram: ScramjetClient = this.source[SCRAMJETCLIENT];
-
-				// if (scram) return scram.globalProxy;
-
-				return this.source;
+				return vistaDe(client, this.source);
 			},
 			origin() {
 				if (!iswindow) return "";

@@ -119,16 +119,8 @@ function lugarDe(client: ScramjetClient, quadro: any): string {
 	return arquivo ? desreescrito(client, arquivo) + posicao : posicao;
 }
 
-/**
- * Guarda a origem do código que o motor vai compilar agora em nome do site. `fonte` devolve o
- * texto exato que o compilador nativo recebe, montado só se uma pilha precisar dele.
- */
-export function registrarCompilacao(
-	client: ScramjetClient,
-	fonte: () => string,
-) {
-	if (!client.flagEnabled("cleanErrors")) return;
-
+/** Os CallSites da pilha de quem chama, sem passar pelo `prepareStackTrace` do motor. */
+export function quadrosCrus(client: ScramjetClient): any[] | null {
 	const E = client.global.Error as any;
 	let quadros: any[] | undefined;
 	let limite: PropertyDescriptor | undefined;
@@ -153,7 +145,22 @@ export function registrarCompilacao(
 			} catch {}
 		}
 	}
-	if (!Array_isArray(quadros)) return;
+
+	return Array_isArray(quadros) ? quadros : null;
+}
+
+/**
+ * Guarda a origem do código que o motor vai compilar agora em nome do site. `fonte` devolve o
+ * texto exato que o compilador nativo recebe, montado só se uma pilha precisar dele.
+ */
+export function registrarCompilacao(
+	client: ScramjetClient,
+	fonte: () => string,
+) {
+	if (!client.flagEnabled("cleanErrors")) return;
+
+	const quadros = quadrosCrus(client);
+	if (!quadros) return;
 
 	let i = 0;
 	while (i < quadros.length && mascarado(client, quadros[i].getFileName?.()))

@@ -4,6 +4,7 @@ import { rewriteUrl, unrewriteBlob, URLMeta } from "@rewriters/url";
 import { ScramjetContext } from "@/shared";
 import { _URL } from "./snapshot";
 import { politicaDoMeta } from "@/fetch/headers";
+import { allowNativo } from "@/shared/permissoes";
 
 export const htmlRules: {
 	[key: string]: "*" | string[] | ((...any: any[]) => string | null);
@@ -79,6 +80,13 @@ export const htmlRules: {
 			return null;
 		},
 		sandbox: ["iframe"],
+	},
+	{
+		// vssh fork: os recursos que um quadro de outra origem não recebe sem pedir (ver
+		// `shared/permissoes.ts`). A regra vem depois da do `src`, que já guardou o endereço do site.
+		fn: (value, context, meta, attrs) =>
+			allowNativo(value, attrs?.["scramjet-attr-src"] ?? attrs?.src, context, meta),
+		allow: ["iframe"],
 	},
 	{
 		fn: (value, context, meta) => {

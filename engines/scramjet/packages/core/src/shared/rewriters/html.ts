@@ -62,6 +62,25 @@ function isElementNode(node: ChildNode): node is Element {
 	);
 }
 
+// O começo de cada linha do documento que `rewriteHtmlInner` está reescrevendo agora, para a linha
+// e a coluna em que um script inline começa (ver `posicaoNoDocumento`).
+let inicioDasLinhas: number[] | null = null;
+
+function posicaoNoDocumento(no: any): [number, number] | undefined {
+	const linhas = inicioDasLinhas;
+	const pos = no?.startIndex;
+	if (!linhas || typeof pos !== "number") return undefined;
+	let lo = 0,
+		hi = linhas.length - 1;
+	while (lo < hi) {
+		const mid = (lo + hi + 1) >> 1;
+		if (linhas[mid] <= pos) lo = mid;
+		else hi = mid - 1;
+	}
+
+	return [lo + 1, pos - linhas[lo]];
+}
+
 export class IncrementalHtmlRewriter {
 	private readonly handler: DomHandler;
 	private readonly parser: Parser;
@@ -157,17 +176,24 @@ function rewriteHtmlInner(
 	meta: URLMeta,
 	htmlcontext: HtmlContext
 ) {
+	// Só um documento inteiro dá a linha e a coluna de um script no documento do site.
+	const doDocumento = typeof html === "string";
 	if (typeof html !== "string") {
 		html = serializeHtmlNode(html);
 	}
 
-	const handler = new DomHandler((err, dom) => dom);
+	const handler = new DomHandler((err, dom) => dom, { withStartIndices: true });
 	const parser = new Parser(handler, {
 		startingForeignContext: htmlcontext.foreignContext,
 	});
 
 	parser.write(html);
 	parser.end();
+	const linhasAntes = inicioDasLinhas;
+	inicioDasLinhas = doDocumento ? [0] : null;
+	if (inicioDasLinhas)
+		for (let i = html.indexOf("\n"); i >= 0; i = html.indexOf("\n", i + 1))
+			inicioDasLinhas.push(i + 1);
 	Tap.dispatch(
 		context.hooks!.rewriter.html.pre,
 		{
@@ -178,7 +204,11 @@ function rewriteHtmlInner(
 		},
 		undefined
 	);
-	traverseParsedHtml(handler.root, context, meta);
+	try {
+		traverseParsedHtml(handler.root, context, meta);
+	} finally {
+		inicioDasLinhas = linhasAntes;
+	}
 
 	let htmlRoot: Element | undefined;
 	let headElement: Element | undefined;
@@ -440,7 +470,8 @@ function traverseParsedHtml(
 				"(inline script element)",
 				context,
 				meta,
-				module
+				module,
+				posicaoNoDocumento(node.children[0])
 			);
 		}
 	}

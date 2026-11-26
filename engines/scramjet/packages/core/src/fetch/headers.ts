@@ -95,8 +95,12 @@ export async function rewriteResponseHeaders(
 		headers.set("content-type", "text/event-stream");
 	}
 
-	// scramjet runtime can use features that permissions-policy blocks
-	headers.delete("permissions-policy");
+	const permissoes = headers.get("permissions-policy");
+	if (permissoes != null) {
+		const traduzida = politicaDePermissoes(permissoes);
+		if (traduzida) headers.set("permissions-policy", traduzida);
+		else headers.delete("permissions-policy");
+	}
 
 	// we handle this ourselves
 	headers.delete("set-cookie");
@@ -716,3 +720,29 @@ function computeSameSiteContext(
 // duas tratavam `folha.com.br` e `uol.com.br` como o MESMO site. Daí `computeSameSiteContext`
 // respondia "same-site" para sites sem relação, o `CookieJar` deixava de filtrar por
 // `SameSite`, e o jar é ÚNICO para todas as origens proxiadas.
+
+/**
+ * vssh fork: o `Permissions-Policy` do site, com as listas na origem do motor.
+ *
+ * `*` e `()` valem igual dos dois lados. Para o navegador a página e todos os quadros dela têm a
+ * origem do motor, e uma lista com `self` vira `(self)`: os quadros de outra origem lógica já
+ * chegam sem os recursos de lista `'self'` pelo `allow` (ver `shared/permissoes.ts`). Uma lista só
+ * com origens de terceiros nega o recurso à página, que é o que ela pede para a página.
+ */
+export function politicaDePermissoes(valor: string): string {
+	const saida: string[] = [];
+	for (const bruto of valor.split(",")) {
+		const m = /^\s*([a-z0-9-]+)\s*=\s*(.*?)\s*$/i.exec(bruto);
+		if (!m) continue;
+		const [, recurso, lista] = m;
+		if (lista === "*") saida.push(`${recurso}=*`);
+		else if (/^\(.*\)$/.test(lista)) {
+			const itens = lista.slice(1, -1).trim().split(/\s+/).filter(Boolean);
+			if (itens.includes("*")) saida.push(`${recurso}=*`);
+			else if (itens.includes("self")) saida.push(`${recurso}=(self)`);
+			else saida.push(`${recurso}=()`);
+		} else if (lista === "self") saida.push(`${recurso}=(self)`);
+	}
+
+	return saida.join(", ");
+}

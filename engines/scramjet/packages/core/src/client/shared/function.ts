@@ -2,6 +2,7 @@ import { rewriteJs } from "@rewriters/js";
 import { ScramjetClient, ProxyCtx, Proxy } from "@client/index";
 import { Math_random, Reflect_apply, String } from "@/shared/snapshot";
 import { registrarCompilacao } from "@client/pilha";
+import { registrarScript } from "@client/posicoes";
 import { ehConfiavel, embrulhar, exigeConfiavel, podeRodar } from "@/shared/confiavel";
 
 // vssh fork: o `Function` do site, compilado pelo `Function` nativo.
@@ -41,6 +42,7 @@ function compilarNativo(
 	if (!p) return null;
 	const [cabeca, parametros, corpo] = p;
 
+	client.box.mapas.ultimaTag = null;
 	const reescrito = rewriteJs(
 		`(${cabeca}${parametros}${MARCA}) {\n${corpo}\n})`,
 		"(function proxy)",
@@ -69,6 +71,18 @@ function compilarNativo(
 	);
 	criada = Reflect_apply(ctx.fn, undefined, tipados) as Function;
 	client.box.fontesDinamicas.set(criada, original);
+	// O script que o V8 compila é `(cabeça parâmetros\n) {\ncorpo\n})`; o corpo começa em outro
+	// ponto do texto que o rewriter devolveu.
+	const tag = client.box.mapas.ultimaTag;
+	if (tag) {
+		const ini = 1 + cabeca.length + novosParametros.length + 5;
+		const feita = criada;
+		registrarScript(
+			client,
+			() => `(${client.natives.call("Function.prototype.toString", feita)})`,
+			{ tag, ini, d: abre + 2 - ini, dl: 0, primeira: -1, col0: 0 },
+		);
+	}
 
 	return criada;
 }
