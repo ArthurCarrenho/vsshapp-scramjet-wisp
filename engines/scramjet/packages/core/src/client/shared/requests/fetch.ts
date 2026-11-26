@@ -1,6 +1,9 @@
 import { ScramjetClient } from "@client/index";
-import { unrewriteLinkHeader } from "./xmlhttprequest";
+import { semMarcaDeRede, unrewriteLinkHeader } from "./xmlhttprequest";
 import { String } from "@/shared/snapshot";
+import { unrewriteBlob } from "@rewriters/url";
+import { enderecoDeConexao } from "@client/csp";
+import { MARCA_DE_REDE } from "@/shared/rede";
 
 /**
  * Capture the page's intended `init.mode` / `init.credentials` and forward
@@ -28,15 +31,38 @@ export function ehUrlDeDados(url: unknown): boolean {
 	return /^\s*data:/i.test(String(url));
 }
 
+/**
+ * Um `blob:` segue o mesmo caminho: o pedido vai ao navegador com o endereço do blob na origem do
+ * motor, onde ele mora. O `connect-src` do site sem `blob:` o recusa como no Chrome, e com
+ * `blob:` ou sem CSP o navegador o lê da memória. Devolve `null` para o que não é `blob:`.
+ */
+export function blobNativo(client: ScramjetClient, url: unknown): string | null {
+	const texto = String(url).trim();
+	if (!/^blob:/i.test(texto)) return null;
+	try {
+		return unrewriteBlob(texto, client.context, client.meta);
+	} catch {
+		return null;
+	}
+}
+
 export default function (client: ScramjetClient) {
 	client.Proxy("fetch", {
 		apply(ctx) {
 			if (client.box.instanceof(ctx.args[0], "Request")) return;
 			if (ehUrlDeDados(ctx.args[0])) return;
+			const blob = blobNativo(client, ctx.args[0]);
+			if (blob) {
+				ctx.args[0] = blob;
+
+				return;
+			}
 			const url = String(ctx.args[0]);
-			ctx.args[0] = client.rewriteUrl(
-				url,
-				rewriteUrlOptionsForFetch(ctx.args[1] as RequestInit | undefined)
+			ctx.args[0] = enderecoDeConexao(client, url, () =>
+				client.rewriteUrl(
+					url,
+					rewriteUrlOptionsForFetch(ctx.args[1] as RequestInit | undefined)
+				)
 			);
 		},
 	});
@@ -45,10 +71,18 @@ export default function (client: ScramjetClient) {
 		construct(ctx) {
 			if (client.box.instanceof(ctx.args[0], "Request")) return;
 			if (ehUrlDeDados(ctx.args[0])) return;
+			const blob = blobNativo(client, ctx.args[0]);
+			if (blob) {
+				ctx.args[0] = blob;
+
+				return;
+			}
 			const url = String(ctx.args[0]);
-			ctx.args[0] = client.rewriteUrl(
-				url,
-				rewriteUrlOptionsForFetch(ctx.args[1] as RequestInit | undefined)
+			ctx.args[0] = enderecoDeConexao(client, url, () =>
+				client.rewriteUrl(
+					url,
+					rewriteUrlOptionsForFetch(ctx.args[1] as RequestInit | undefined)
+				)
 			);
 		},
 	});
@@ -59,19 +93,34 @@ export default function (client: ScramjetClient) {
 		},
 	});
 
-	// TODO: this needs to be only for response objects created from a fetch
+	// vssh fork: os cabeçalhos de uma resposta são o mesmo objeto a cada leitura, e o nativo quando
+	// não há o que desfazer: no Chrome `r.headers === r.headers`, e o objeto recusa `append`. Uma
+	// cópia sai só quando o `Link` leva endereços do motor ou o `Server-Timing` leva a marca da rede
+	// (ver `marcarRede` em `fetch/fetch.ts`).
+	const copias = new WeakMap<object, Headers>();
 	client.Trap("Response.prototype.headers", {
 		get(ctx) {
 			const headers = ctx.get() as Headers;
-			const newHeaders = new Headers();
+			const guardada = copias.get(ctx.this as object);
+			if (guardada) return guardada;
+			const link = headers.get("link");
+			const tempo = headers.get("server-timing");
+			const comLink = !!link && link.includes(client.context.prefix.href);
+			const comMarca = !!tempo && tempo.includes(MARCA_DE_REDE);
+			if (!comLink && !comMarca) return headers;
 
+			const newHeaders = new Headers();
 			for (const [key, value] of headers.entries()) {
-				if (key.toLowerCase() === "link") {
+				if (key === "link") {
 					newHeaders.append(key, unrewriteLinkHeader(value, client.context));
+				} else if (key === "server-timing") {
+					const limpo = semMarcaDeRede(value);
+					if (limpo) newHeaders.append(key, limpo);
 				} else {
 					newHeaders.append(key, value);
 				}
 			}
+			copias.set(ctx.this as object, newHeaders);
 
 			return newHeaders;
 		},

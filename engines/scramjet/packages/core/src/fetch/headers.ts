@@ -1,3 +1,4 @@
+import { aplicarDicas } from "./dicas";
 import {
 	rewriteUrl,
 	ScramjetContext,
@@ -14,6 +15,7 @@ import {
 import { RawHeaders } from "@mercuryworkshop/proxy-transports";
 import { _URL, _Set } from "@/shared/snapshot";
 import { createReferrerString } from "./util";
+import { POLITICA_DO_MOTOR } from "@/shared/confiavel";
 
 /**
  * Headers for security policy features that haven't been emulated yet
@@ -66,13 +68,24 @@ export async function rewriteResponseHeaders(
 	rawHeaders: RawHeaders
 ): Promise<ScramjetHeaders> {
 	const headers = ScramjetHeaders.fromRawHeaders(rawHeaders);
+	// vssh fork: a resposta de um `fetch` ou de um XHR não vira documento, e as políticas dela não
+	// valem no navegador. Ela chega ao site com os cabeçalhos que o servidor mandou, como no Chrome.
+	const soDados = !parsed.destination;
 
-	const politica = headers.get("content-security-policy");
-	for (const cspHeader of SEC_HEADERS) {
+	const politica = soDados ? null : headers.get("content-security-policy");
+	if (!soDados) for (const cspHeader of SEC_HEADERS) {
 		headers.delete(cspHeader);
 	}
-	const conexao = politica ? politicaDeConexao(politica) : null;
-	if (conexao) headers.set("Content-Security-Policy", conexao);
+	const traduzida = politica
+		? politica
+				.split(",")
+				.map((uma) => politicaDoCabecalho(uma, handler.context.prefix.href))
+				.filter(Boolean)
+				.join(", ")
+		: null;
+	const caixa = politica ? caixaDaPolitica(politica) : null;
+	const doCabecalho = [traduzida, caixa].filter(Boolean).join("; ");
+	if (doCabecalho) headers.set("Content-Security-Policy", doCabecalho);
 
 	for (const urlHeader of URL_HEADERS) {
 		if (headers.has(urlHeader)) {
@@ -92,8 +105,12 @@ export async function rewriteResponseHeaders(
 		headers.set("content-type", "text/event-stream");
 	}
 
-	// scramjet runtime can use features that permissions-policy blocks
-	headers.delete("permissions-policy");
+	const permissoes = soDados ? null : headers.get("permissions-policy");
+	if (permissoes != null) {
+		const traduzida = politicaDePermissoes(permissoes);
+		if (traduzida) headers.set("permissions-policy", traduzida);
+		else headers.delete("permissions-policy");
+	}
 
 	// we handle this ourselves
 	headers.delete("set-cookie");
@@ -153,6 +170,134 @@ export function politicaDeConexao(cabecalho: string): string | null {
 	return saida.length ? saida.join(", ") : null;
 }
 
+/**
+ * vssh fork: o `sandbox` da CSP do site, que um `<meta>` não aplica.
+ *
+ * O quadro do Turnstile chega com `sandbox allow-same-origin allow-scripts …` no cabeçalho, e o
+ * documento dele roda sem modais, sem navegar o topo e sem baixar arquivos. A diretiva vale igual
+ * sob o prefixo do motor, desde que deixe o mesmo-origem e os scripts, sem os quais o motor não
+ * roda no documento; sem os dois, ela fica de fora.
+ */
+export function caixaDaPolitica(cabecalho: string): string | null {
+	for (const politica of cabecalho.split(",")) {
+		for (const bruta of politica.split(";")) {
+			const partes = bruta.trim().split(/\s+/).filter(Boolean);
+			if (partes[0]?.toLowerCase() !== "sandbox") continue;
+			const marcas = partes.slice(1).map((m) => m.toLowerCase());
+			if (!marcas.includes("allow-same-origin") || !marcas.includes("allow-scripts")) return null;
+
+			return ["sandbox", ...marcas].join(" ");
+		}
+	}
+
+	return null;
+}
+
+/**
+ * vssh fork: a CSP de um `<meta http-equiv>`, traduzida diretiva por diretiva.
+ *
+ * Uma política de `<meta>` só vale para o que o parser encontra depois dela, e os scripts do motor
+ * vêm antes, no começo do `<head>`. Por isso ela pode ir ao navegador quase inteira, ao contrário da
+ * do cabeçalho, que valeria também para eles. Palavras-chave, nonces, hashes, esquemas e as
+ * diretivas de Trusted Types ficam como o site escreveu. Toda fonte de host, e o `'self'`, vira o
+ * `'self'` do motor, porque todo endereço proxiado mora nele; `data:` e `blob:` também ganham o
+ * `'self'` fora do `connect-src`, porque o motor os serve pelo prefixo. O `connect-src` segue
+ * `politicaDeConexao`. O código do motor compila WebAssembly, e a diretiva que governa os scripts
+ * ganha `'wasm-unsafe-eval'` quando o site não deu `'unsafe-eval'`.
+ *
+ * O que um `<meta>` não aplica (`frame-ancestors`, `sandbox`, relatórios) sai, e o
+ * `upgrade-insecure-requests` sai porque reescreveria os endereços do próprio motor.
+ *
+ * O quadro do Turnstile traz a política dele assim e confere que ela vale: o `eval` recusado, o
+ * script e o atributo de evento sem nonce que não rodam.
+ */
+const DIRETIVAS_DE_BUSCA = new Set([
+	"default-src",
+	"script-src",
+	"script-src-elem",
+	"script-src-attr",
+	"style-src",
+	"style-src-elem",
+	"style-src-attr",
+	"img-src",
+	"font-src",
+	"media-src",
+	"object-src",
+	"frame-src",
+	"child-src",
+	"worker-src",
+	"manifest-src",
+	"base-uri",
+	"form-action",
+]);
+const DIRETIVAS_COMO_ESTAO = new Set([
+	"require-trusted-types-for",
+	"trusted-types",
+]);
+
+export function politicaDoMeta(valor: string, prefixo?: string): string | null {
+	const diretivas = new Map<string, string[]>();
+	for (const bruta of valor.split(";")) {
+		const partes = bruta.trim().split(/\s+/).filter(Boolean);
+		if (!partes.length) continue;
+		const nome = partes[0].toLowerCase();
+		if (!diretivas.has(nome)) diretivas.set(nome, partes.slice(1));
+	}
+
+	const saida: string[] = [];
+	for (const [nome, fontes] of diretivas) {
+		if (DIRETIVAS_COMO_ESTAO.has(nome)) {
+			// a política com que o motor devolve o código reescrito precisa caber na lista do site
+			const lista =
+				nome === "trusted-types"
+					? [
+							...fontes.filter((f) => f.toLowerCase() !== "'none'"),
+							POLITICA_DO_MOTOR,
+							...(fontes.some((f) => f.toLowerCase() === "'allow-duplicates'")
+								? []
+								: ["'allow-duplicates'"]),
+						]
+					: fontes;
+			saida.push([nome, ...lista].join(" "));
+			continue;
+		}
+		if (!DIRETIVAS_DE_BUSCA.has(nome)) continue;
+
+		const guardadas: string[] = [];
+		let proprio = false;
+		for (const fonte of fontes) {
+			const minuscula = fonte.toLowerCase();
+			if (minuscula === "'self'") proprio = true;
+			else if (fonte.startsWith("'")) guardadas.push(fonte);
+			else if (/^[a-z][a-z0-9+.-]*:$/i.test(fonte)) {
+				guardadas.push(fonte);
+				proprio = true;
+			} else proprio = true;
+		}
+		// No `worker-src` o `'self'` do motor vale só sob o prefixo dele. O worker que a política do
+		// site recusa vai ao navegador num endereço da origem do motor fora do prefixo (ver
+		// `client/csp.ts`), e o navegador o recusa como o Chrome: sem exceção, com o evento `error`
+		// e o `securitypolicyviolation`.
+		if (proprio) guardadas.unshift(nome === "worker-src" && prefixo ? prefixo : "'self'");
+		const semNone = guardadas.filter((f) => f.toLowerCase() !== "'none'");
+		saida.push([nome, ...(semNone.length ? semNone : ["'none'"])].join(" "));
+	}
+
+	const conexao = politicaDeConexao(valor);
+	const semConexao = saida.filter((d) => !d.startsWith("connect-src"));
+	if (conexao) semConexao.push(conexao);
+
+	// a diretiva que governa os scripts precisa deixar o motor compilar o WebAssembly dele
+	const governa = semConexao.findIndex((d) => d.startsWith("script-src "));
+	const i =
+		governa >= 0 ? governa : semConexao.findIndex((d) => d.startsWith("default-src "));
+	if (i >= 0 && !/'unsafe-eval'|'wasm-unsafe-eval'/i.test(semConexao[i])) {
+		semConexao[i] = semConexao[i].replace(/ 'none'$/i, "") + " 'wasm-unsafe-eval'";
+	}
+
+	return semConexao.length ? semConexao.join("; ") : null;
+}
+
 export function rewriteRequestHeaders(
 	request: ScramjetFetchRequest,
 	handler: ScramjetFetchHandler,
@@ -190,11 +335,17 @@ export function rewriteRequestHeaders(
 		if (!metodoSimples || corsDeFora) headers.set("Origin", originUrl.origin);
 		else headers.delete("Origin");
 
-		const referer = createReferrerString(
-			originUrl,
-			parsed.url,
-			parsed.referrerPolicy ?? null
-		);
+		// vssh fork: um pedido que a página fez sem referenciador (`referrerPolicy: "no-referrer"`,
+		// `referrer: ""`) chega ao service worker com `referrer` vazio, e sai sem `Referer`. O de um
+		// worker de blob: ou de um documento de blob: ou data: também, porque um endereço de
+		// esquema local não vira referenciador (https://w3c.github.io/webappsec-referrer-policy/#determine-requests-referrer).
+		const semReferenciador =
+			(parsed.referrerSourceUrl === undefined && request.referrer === "") ||
+			originUrl.protocol === "blob:" ||
+			originUrl.protocol === "data:";
+		const referer = semReferenciador
+			? null
+			: createReferrerString(originUrl, parsed.url, parsed.referrerPolicy ?? null);
 		if (referer) headers.set("Referer", referer);
 	}
 
@@ -205,7 +356,11 @@ export function rewriteRequestHeaders(
 		sameSiteContext
 	);
 
-	if (cookies.length) {
+	// vssh fork: os cookies vão só quando o modo de credenciais do pedido os leva: `include`, ou
+	// `same-origin` para a mesma origem de quem pede. Um `<script crossorigin>` de outro site ou um
+	// `fetch` com `credentials: "omit"` sai sem eles, como no Chrome.
+	headers.delete("Cookie");
+	if (cookies.length && levaCredenciais(request, parsed, originUrl)) {
 		headers.set("Cookie", cookies);
 	}
 
@@ -218,7 +373,80 @@ export function rewriteRequestHeaders(
 
 	applyFetchMetadataHeaders(headers, request, parsed, handler);
 
+	aplicarDicas(
+		headers,
+		parsed.url,
+		parsed.destination === "document" ||
+			(parsed.destination === "iframe" && !parsed.isIframe),
+		originUrl ? originUrl.origin : null
+	);
+
+	// vssh fork: o `Cache-Control` e o `Pragma` que o Chrome escreve a partir do modo de cache do
+	// pedido, na pilha de rede, depois do service worker: `no-cache` e `max-age=0` numa leitura que
+	// revalida (o `cache: "no-cache"` de um fetch, o envio de um formulário), e `no-cache` nos dois
+	// quando o cache fica de fora. O `Cache-Control` vai na frente dos outros, como no Chrome.
+	if (!headers.has("cache-control")) {
+		let controle: string | null = null;
+		if (request.cache === "no-store" || request.cache === "reload") {
+			controle = "no-cache";
+			if (!headers.has("pragma")) headers.set("Pragma", "no-cache");
+		} else if (
+			request.cache === "no-cache" ||
+			(request.method === "POST" && computeFetchMode(request, parsed) === "navigate")
+		) {
+			controle = "max-age=0";
+		}
+		if (controle) headers.headers = { "cache-control": controle, ...headers.headers };
+	}
+
+	const prioridade = prioridadeDe(parsed);
+	headers.delete("priority");
+	if (prioridade && parsed.url.protocol === "https:") headers.set("Priority", prioridade);
+
 	return headers;
+}
+
+function levaCredenciais(
+	request: ScramjetFetchRequest,
+	parsed: ScramjetFetchParsed,
+	originUrl: URL | undefined
+): boolean {
+	if (parsed.fetchCredentialsInclude) return true;
+	switch (request.credentials) {
+		case "omit":
+			return false;
+		case "same-origin":
+			return !originUrl || originUrl.origin === parsed.url.origin;
+		default:
+			return true;
+	}
+}
+
+/**
+ * vssh fork: o `Priority` (RFC 9218) que o Chrome escreve num pedido HTTP/2 ou HTTP/3, depois de
+ * todos os outros. Ele sai da prioridade que a pilha de rede dá ao pedido, que o service worker não
+ * vê; o valor aqui é o do caso comum de cada destino. A urgência 3 sem `i` é o padrão do
+ * protocolo, e aí o Chrome não manda o cabeçalho: um script assíncrono ou de outra origem sai sem
+ * ele.
+ */
+function prioridadeDe(parsed: ScramjetFetchParsed): string | null {
+	switch (parsed.destination) {
+		case "document":
+		case "iframe":
+		case "frame":
+			return "u=0, i";
+		case "style":
+			return "u=0";
+		case "font":
+			return "u=1";
+		case "image":
+			return "i";
+		case "":
+		case undefined:
+			return "u=1, i";
+		default:
+			return null;
+	}
 }
 
 /**
@@ -334,18 +562,47 @@ function applyFetchMetadataHeaders(
 		headers.set("Sec-Fetch-User", "?1");
 	}
 
-	// Sec-Fetch-Storage-Access: per https://privacycg.github.io/storage-access-headers/.
-	// Sent on cross-site credentialed requests so the destination knows whether
-	// unpartitioned storage access has been granted. We never grant storage
-	// access through the proxy, so the value is always "none" when sent.
+	// Sec-Fetch-Storage-Access (https://privacycg.github.io/storage-access-headers/) vai num pedido
+	// com credenciais a outro site. `event.request.credentials` no service worker não é confiável, e
+	// o motor decide pelo `sj$cred` que a página marca e pelo padrão de cada destino. Ele manda os
+	// cookies sem partição, como o Chrome com os cookies de terceiros liberados, que é o padrão dele
+	// no desktop, e o valor é o do Chrome nesse caso: `active`.
 	//
-	// `event.request.credentials` inside a service worker isn't reliable, so we
-	// rely on signals propagated from the page (the `sj$cred` URL param set by
-	// the client-side fetch proxy) plus destination-based defaults for request
-	// types that always include credentials.
-	if (site === "cross-site" && requestIncludesCredentials(request, parsed)) {
-		headers.set("Sec-Fetch-Storage-Access", "none");
+	// O contexto é o do site de cima: um pedido de um quadro de outro site à própria origem leva o
+	// cabeçalho também. O site de cima de cada documento fica guardado no cliente dele quando a
+	// navegação passa por aqui; quando o motor não o conhece, vale a relação com quem pede.
+	const topo = sitioDoTopo(parsed, initiatorUrl);
+	const deTerceiro =
+		topo !== null
+			? topo !== `${parsed.url.protocol}//${registrableDomain(parsed.url.hostname)}`
+			: site === "cross-site";
+	if (deTerceiro && requestIncludesCredentials(request, parsed)) {
+		headers.set("Sec-Fetch-Storage-Access", "active");
 	}
+}
+
+/**
+ * vssh fork: o site de cima do documento que faz o pedido, `esquema//domínio registrável`. Uma
+ * navegação de nível de cima é o próprio site; a de um quadro herda o do documento que o abre, e
+ * na falta dele o site desse documento.
+ */
+function sitioDoTopo(parsed: ScramjetFetchParsed, iniciador: URL | undefined): string | null {
+	const sitio = (u: URL) => `${u.protocol}//${registrableDomain(u.hostname)}`;
+	const cliente = parsed.trackedClient;
+	if (parsed.destination === "document" || (parsed.destination === "iframe" && !parsed.isIframe)) {
+		const topo = sitio(parsed.url);
+		if (cliente) cliente.sitioDoTopo = topo;
+
+		return topo;
+	}
+	if (parsed.destination === "iframe" || parsed.destination === "frame") {
+		const topo = iniciador ? sitio(iniciador) : null;
+		if (cliente && topo) cliente.sitioDoTopo = topo;
+
+		return topo;
+	}
+
+	return cliente?.sitioDoTopo ?? null;
 }
 
 /**
@@ -368,6 +625,7 @@ function requestIncludesCredentials(
 	parsed: ScramjetFetchParsed
 ): boolean {
 	if (parsed.fetchCredentialsInclude) return true;
+	if (request.credentials) return request.credentials === "include";
 	const dest = parsed.destination;
 	// fetch(): destination is "" (empty). XHR / report: destination is
 	// "report". Both default to credentials="same-origin", so cross-site
@@ -589,3 +847,75 @@ function computeSameSiteContext(
 // duas tratavam `folha.com.br` e `uol.com.br` como o MESMO site. Daí `computeSameSiteContext`
 // respondia "same-site" para sites sem relação, o `CookieJar` deixava de filtrar por
 // `SameSite`, e o jar é ÚNICO para todas as origens proxiadas.
+
+/**
+ * vssh fork: o `Permissions-Policy` do site, com as listas na origem do motor.
+ *
+ * `*` e `()` valem igual dos dois lados. Para o navegador a página e todos os quadros dela têm a
+ * origem do motor, e uma lista com `self` vira `(self)`: os quadros de outra origem lógica já
+ * chegam sem os recursos de lista `'self'` pelo `allow` (ver `shared/permissoes.ts`). Uma lista só
+ * com origens de terceiros nega o recurso à página, que é o que ela pede para a página.
+ */
+export function politicaDePermissoes(valor: string): string {
+	const saida: string[] = [];
+	for (const bruto of valor.split(",")) {
+		const m = /^\s*([a-z0-9-]+)\s*=\s*(.*?)\s*$/i.exec(bruto);
+		if (!m) continue;
+		const [, recurso, lista] = m;
+		if (lista === "*") saida.push(`${recurso}=*`);
+		else if (/^\(.*\)$/.test(lista)) {
+			const itens = lista.slice(1, -1).trim().split(/\s+/).filter(Boolean);
+			if (itens.includes("*")) saida.push(`${recurso}=*`);
+			else if (itens.includes("self")) saida.push(`${recurso}=(self)`);
+			else saida.push(`${recurso}=()`);
+		} else if (lista === "self") saida.push(`${recurso}=(self)`);
+	}
+
+	return saida.join(", ");
+}
+
+// As diretivas de busca que o `default-src` governa e que não tocam os scripts do motor.
+const SEM_SCRIPT = [
+	"style-src",
+	"img-src",
+	"font-src",
+	"media-src",
+	"object-src",
+	"frame-src",
+	"child-src",
+	"manifest-src",
+	"connect-src",
+];
+
+/**
+ * vssh fork: a CSP do cabeçalho do site, na parte que não alcança os scripts do motor.
+ *
+ * Os scripts que o motor põe no começo do documento rodam antes de qualquer `<meta>`, e uma
+ * política de cabeçalho os governa desde o primeiro byte; por isso o `script-src` do cabeçalho
+ * fica com o cliente (ver `client/csp.ts`). O resto vai ao navegador como o `<meta>` vai
+ * (`politicaDoMeta`), com o `default-src` escrito em cada diretiva que ele governaria. Com duas
+ * políticas de pé, uma no cabeçalho e outra no `<meta>`, o navegador recusa pelas duas e dispara um
+ * `securitypolicyviolation` por política, como no Chrome.
+ */
+export function politicaDoCabecalho(valor: string, prefixo: string): string | null {
+	const diretivas = new Map<string, string[]>();
+	for (const bruta of valor.split(";")) {
+		const partes = bruta.trim().split(/\s+/).filter(Boolean);
+		if (!partes.length) continue;
+		const nome = partes[0].toLowerCase();
+		if (!diretivas.has(nome)) diretivas.set(nome, partes.slice(1));
+	}
+	const padrao = diretivas.get("default-src");
+	const script = diretivas.get("script-src");
+	if (!diretivas.has("worker-src")) {
+		const recuo = diretivas.get("child-src") ?? script ?? padrao;
+		if (recuo) diretivas.set("worker-src", recuo);
+	}
+	if (padrao)
+		for (const nome of SEM_SCRIPT) if (!diretivas.has(nome)) diretivas.set(nome, padrao);
+	for (const nome of ["default-src", "script-src", "script-src-elem", "script-src-attr"])
+		diretivas.delete(nome);
+	const texto = [...diretivas].map(([n, f]) => [n, ...f].join(" ")).join("; ");
+
+	return texto ? politicaDoMeta(texto, prefixo) : null;
+}

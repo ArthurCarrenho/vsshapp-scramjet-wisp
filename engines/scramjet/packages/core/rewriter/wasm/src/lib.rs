@@ -62,19 +62,33 @@ fn get_js_config(config: &Object) -> Result<Config> {
 	})
 }
 
-fn get_js_flags(obj: &Object, base: String, is_module: bool) -> Result<Flags> {
-	Ok(Flags {
+// As cinco flags booleanas, na ordem do `Flags`.
+type FlagsLidas = [bool; 5];
+
+fn ler_js_flags(obj: &Object) -> Result<FlagsLidas> {
+	Ok([
+		get_bool(obj, "sourcemaps")?,
+		get_bool(obj, "captureErrors")?,
+		get_bool(obj, "scramitize")?,
+		get_bool(obj, "disableComputedWrap")?,
+		get_bool(obj, "destructureRewrites")?,
+	])
+}
+
+fn get_js_flags(lidas: FlagsLidas, base: String, is_module: bool) -> Flags {
+	let [do_sourcemaps, capture_errors, scramitize, disable_computed_wrap, destructure_rewrites] =
+		lidas;
+	Flags {
 		base,
 		sourcetag: scramtag(),
 		is_module,
 
-		do_sourcemaps: get_bool(obj, "sourcemaps")?,
-		capture_errors: get_bool(obj, "captureErrors")?,
-		scramitize: get_bool(obj, "scramitize")?,
-		disable_computed_wrap: get_bool(obj, "disableComputedWrap")?,
-		destructure_rewrites: get_bool(obj, "destructureRewrites")?,
-
-	})
+		do_sourcemaps,
+		capture_errors,
+		scramitize,
+		disable_computed_wrap,
+		destructure_rewrites,
+	}
 }
 
 #[wasm_bindgen]
@@ -82,6 +96,36 @@ pub struct Rewriter {
 	alloc: Allocator,
 
 	js: JsRewriter,
+
+	// vssh fork: a configuração e as flags lidas da última chamada, com o objeto de onde vieram.
+	// Ler cada campo atravessa a fronteira com o JS duas vezes (o nome e o valor), e o cliente
+	// manda o mesmo objeto a cada reescrita; o mesmo objeto devolve o que já foi lido.
+	config_lida: Option<(JsValue, Config)>,
+	flags_lidas: Option<(JsValue, FlagsLidas)>,
+}
+
+impl Rewriter {
+	fn config_de(&mut self, jsconfig: &Object) -> Result<Config> {
+		if let Some((obj, cfg)) = &self.config_lida {
+			if Object::is(obj, jsconfig) {
+				return Ok(cfg.clone());
+			}
+		}
+		let cfg = get_js_config(jsconfig)?;
+		self.config_lida = Some((jsconfig.clone().into(), cfg.clone()));
+		Ok(cfg)
+	}
+
+	fn flags_de(&mut self, jsflags: &Object, base: String, module: bool) -> Result<Flags> {
+		if let Some((obj, lidas)) = &self.flags_lidas {
+			if Object::is(obj, jsflags) {
+				return Ok(get_js_flags(*lidas, base, module));
+			}
+		}
+		let lidas = ler_js_flags(jsflags)?;
+		self.flags_lidas = Some((jsflags.clone().into(), lidas));
+		Ok(get_js_flags(lidas, base, module))
+	}
 }
 
 #[wasm_bindgen]
@@ -91,7 +135,10 @@ impl Rewriter {
 		Ok(Self {
 			alloc: Allocator::default(),
 
-			js: create_js()?
+			js: create_js()?,
+
+			config_lida: None,
+			flags_lidas: None,
 		})
 	}
 
@@ -106,8 +153,8 @@ impl Rewriter {
 		url: String,
 		module: bool,
 	) -> Result<JsRewriterOutput> {
-		let config = get_js_config(jsconfig)?;
-		let flags = get_js_flags(jsflags, base, module)?;
+		let config = self.config_de(jsconfig)?;
+		let flags = self.flags_de(jsflags, base, module)?;
 		let rewriter = get_url_rewriter(encode_url)?;
 
 		let out = match self.js.rewrite(&self.alloc, &js, config, flags, &rewriter) {

@@ -35,6 +35,15 @@ macro_rules! skip_field { ($($t:tt)*) => {}; }
 // maybe move this out of this lib?
 const UNSAFE_GLOBALS: &[&str] = &["parent", "top", "location", "eval"];
 
+// vssh fork: propriedades que só se reescrevem como membro de um objeto. O `Error.prepareStackTrace`
+// que o motor instala é o que o V8 chama para formatar a pilha, e num Chrome sem o motor ele não
+// existe: o site lê e escreve o dele em `$scramjet__prepareStackTrace` (ver `client/shared/wrap.ts`).
+const UNSAFE_MEMBERS: &[&str] = &["prepareStackTrace"];
+
+fn propriedade_insegura(nome: &str) -> bool {
+	UNSAFE_GLOBALS.contains(&nome) || UNSAFE_MEMBERS.contains(&nome)
+}
+
 pub struct Visitor<'alloc, 'data, E>
 where
 	E: UrlRewriter,
@@ -101,7 +110,7 @@ where
 			| Expression::RegExpLiteral(_)
 			| Expression::BooleanLiteral(_) => {}
 			Expression::StringLiteral(lit) => {
-				if UNSAFE_GLOBALS.contains(&lit.value.as_str()) {
+				if propriedade_insegura(lit.value.as_str()) {
 					self.jschanges
 						.add(rewrite!(it.expression.span(), WrapProperty,));
 				}
@@ -470,7 +479,7 @@ where
 		s: &oxc::ast::ast::StaticMemberExpression<'data>,
 	) {
 		// window.location = ...
-		if UNSAFE_GLOBALS.contains(&s.property.name.as_str()) {
+		if propriedade_insegura(s.property.name.as_str()) {
 			self.jschanges.add(rewrite!(
 				s.property.span(),
 				RewriteProperty {
@@ -609,7 +618,7 @@ where
 					return; // unwise to walk the rest of the tree
 				}
 
-				if UNSAFE_GLOBALS.contains(&s.property.name.as_str()) {
+				if propriedade_insegura(s.property.name.as_str()) {
 					self.jschanges.add(rewrite!(
 						s.property.span(),
 						RewriteProperty {

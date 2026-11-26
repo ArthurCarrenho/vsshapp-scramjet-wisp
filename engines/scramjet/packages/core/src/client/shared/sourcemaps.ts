@@ -5,6 +5,7 @@ import {
 } from "@/shared/snapshot";
 import { SCRAMJETCLIENT, SCRAMJETCLIENTNAME } from "@/symbols";
 import { ProxyCtx, ScramjetClient } from "@client/index";
+import { registrarDoServiceWorker } from "@client/posicoes";
 
 enum RewriteType {
 	Insert = 0,
@@ -171,9 +172,13 @@ export const enabled = (client: ScramjetClient) =>
 export default function (client: ScramjetClient, self: Self) {
 	// every script will push a sourcemap
 	Object_defineProperty(self, client.config.globals.pushsourcemapfn, {
-		value: (buf: Array<number>, tag: string) => {
+		value: (buf: Array<number>, tag: string, linha?: number, coluna?: number) => {
 			// const before = performance.now();
 			registerRewrites(client, buf, tag);
+			client.box.mapas.ultimaTag = tag;
+			// A chamada que o service worker escreveu no começo do script diz qual script é este.
+			if (linha !== -1 && client.flagEnabled("cleanErrors"))
+				registrarDoServiceWorker(client, buf, tag, linha ?? 1, coluna ?? 0);
 			// if (client.flagEnabled("rewriterLogs")) {
 			// 	dbg.time(client.meta, before, `scramtag parse for ${tag}`);
 			// }
@@ -187,6 +192,8 @@ export default function (client: ScramjetClient, self: Self) {
 	// this can lead to double rewrites which is bad
 	client.Proxy("Function.prototype.toString", {
 		apply(ctx) {
+			const dinamica = client.box.fontesDinamicas.get(ctx.this);
+			if (dinamica !== undefined) return ctx.return(dinamica);
 			if (client.box.unproxy.has(ctx.this)) {
 				// toString is being called on a proxy of a native function
 				// `this` will then be the proxy, which has the wrong [[SourceText]]

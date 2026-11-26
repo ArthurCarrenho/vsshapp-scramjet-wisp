@@ -22,6 +22,7 @@ import {
 } from "@/shared";
 import { iswindow } from "./entry";
 import { SingletonBox } from "./singletonbox";
+import { cspRecusa } from "./csp";
 import { ScramjetConfig } from "@/types";
 import { Tap } from "@/Tap";
 import {
@@ -46,6 +47,9 @@ import {
 	_WeakMap,
 } from "@/shared/snapshot";
 import { createIndirectEval } from "./shared/eval";
+
+const protoDe = Object.getPrototypeOf;
+const ehProtoDe = Object.prototype.isPrototypeOf;
 
 // https://github.com/Microsoft/TypeScript/issues/27024#issuecomment-421529650
 type IfEquals<T, U, Y = unknown, N = never> =
@@ -200,6 +204,8 @@ export class ScramjetClient {
 	bare: BareCompatibleClient;
 
 	natives: NativeStore;
+	/** O `Error.prepareStackTrace` que o site pôs (ver `shared/wrap.ts`). */
+	pstDoSite: unknown = undefined;
 	descriptors: DescriptorStore;
 	wrapfn: (i: any, ...args: any) => any;
 
@@ -372,6 +378,7 @@ export class ScramjetClient {
 			get origin() {
 				return client.url;
 			},
+			recusaImagem: (url: string) => cspRecusa(client, "img-src", url),
 			get base() {
 				if (iswindow) {
 					const base = client.natives.call(
@@ -576,15 +583,33 @@ export class ScramjetClient {
 			return aorder - border;
 		});
 
+		// vssh fork: um módulo que falha não leva os outros junto. Num quadro em sandbox sem
+		// `allow-scripts` o motor instala o cliente de fora, e o que precisa compilar código no
+		// realm do quadro (o `eval` dele) é recusado pelo navegador. Os módulos seguintes, como os
+		// acessores de `wrap.ts` que o código reescrito do pai usa para ler `eval`, `location`,
+		// `top` e `parent` desse quadro, continuam valendo para ele.
 		for (const module of modules) {
-			if (!module.enabled || module.enabled(this))
-				module.default(this, this.global);
-			else if (module.disabled) module.disabled(this, this.global);
+			try {
+				if (!module.enabled || module.enabled(this))
+					module.default(this, this.global);
+				else if (module.disabled) module.disabled(this, this.global);
+			} catch (e) {
+				dbg.error("módulo do cliente falhou", e);
+			}
 		}
 	}
 
+	// vssh fork: o endereço do site é lido a cada reescrita, e desfazer a reescrita do `location`
+	// custa um decode do codec. O texto desfeito fica guardado enquanto o `location` nativo não muda;
+	// cada leitura recebe um `URL` novo, que quem chama pode alterar.
+	private urlLida: [string, string] | null = null;
+
 	get url(): _URL {
-		return new _URL(this.unrewriteUrl(this.global.location.href));
+		const nativo = this.global.location.href;
+		if (this.urlLida === null || this.urlLida[0] !== nativo)
+			this.urlLida = [nativo, this.unrewriteUrl(nativo)];
+
+		return new _URL(this.urlLida[1]);
 	}
 
 	set url(url: _URL | string) {
@@ -639,10 +664,19 @@ export class ScramjetClient {
 		if (!target) return;
 		if (!prop) return;
 		if (!Reflect_has(target, prop)) return;
+		let alcance: any;
+		[target, alcance] = this.donoDe(target, prop);
+		const fora = (t: any) =>
+			alcance !== null &&
+			t !== alcance &&
+			!(t == null && alcance === this.global) &&
+			!Reflect_apply(ehProtoDe, alcance, [t]);
 
 		const value = Reflect_get(target, prop);
 		const originalDescriptor = Object_getOwnPropertyDescriptor(target, prop);
-		delete target[prop];
+		// vssh fork: a propriedade é redefinida no lugar, sem `delete` antes. Apagar e definir de
+		// novo a manda para o fim da lista de chaves, onde o `Object.getOwnPropertyNames(window)`
+		// mostraria em sequência os globais que o motor intercepta.
 
 		const h: ProxyHandler<any> = {};
 
@@ -737,6 +771,7 @@ return { apply, construct };
 
 		if (handler.apply) {
 			h.apply = (fn: any, that: any, args: any[]) => {
+				if (fora(that)) return Reflect_apply(fn, that, args);
 				let returnValue: any = undefined;
 				let earlyreturn = false;
 
@@ -856,10 +891,35 @@ return { apply, construct };
 
 		this.RawTrap(target, prop, descriptor);
 	}
+	/**
+	 * vssh fork: num worker, `setTimeout`, `fetch` e o resto do `WorkerGlobalScope` moram no
+	 * protótipo do global, e a troca do motor fica lá.
+	 *
+	 * Onde a troca de `prop` mora, e a quem ela vale. No Chrome `Text.prototype` não
+	 * tem `appendData` próprio, nem `Attr.prototype` tem `nodeValue`: os dois moram mais acima
+	 * (`CharacterData`, `Node`). A troca fica no dono, como o nativo, e só vale para quem descende
+	 * do alvo pedido; o resto recebe o nativo. A troca de um membro do global vale também para a
+	 * chamada sem `this`, que é como o site chama `setTimeout(...)`.
+	 */
+	donoDe(target: any, prop: string): [any, any] {
+		if (Object_getOwnPropertyDescriptor(target, prop)) return [target, null];
+		let o = protoDe(target);
+		while (o && !Object_getOwnPropertyDescriptor(o, prop)) o = protoDe(o);
+		if (!o) return [target, null];
+
+		return [o, target];
+	}
 	RawTrap(target: any, prop: string, descriptor: Trap<any>) {
 		if (!target) return;
 		if (!prop) return;
 		if (!Reflect_has(target, prop)) return;
+		let alcance: any;
+		[target, alcance] = this.donoDe(target, prop);
+		const fora = (t: any) =>
+			alcance !== null &&
+			t !== alcance &&
+			!(t == null && alcance === this.global) &&
+			!Reflect_apply(ehProtoDe, alcance, [t]);
 
 		const oldDescriptor = this.natives.call(
 			"Object.getOwnPropertyDescriptor",
@@ -879,8 +939,7 @@ return { apply, construct };
 			},
 		};
 
-		delete target[prop];
-
+		// Redefinida no lugar, pela mesma razão do `RawProxy`.
 		const desc: PropertyDescriptor = {};
 
 		// vssh fork: o acessor que entra no lugar do nativo se apresenta como ele. Uma página lê o
@@ -899,6 +958,7 @@ return { apply, construct };
 		if (descriptor.get) {
 			desc.get = {
 				get() {
+					if (fora(this)) return oldDescriptor?.get?.call(this);
 					ctx.this = this;
 
 					return descriptor.get(ctx);
@@ -916,6 +976,11 @@ return { apply, construct };
 		if (descriptor.set && !soLeitura) {
 			desc.set = {
 				set(v: any) {
+					if (fora(this)) {
+						oldDescriptor?.set?.call(this, v);
+
+						return;
+					}
 					ctx.this = this;
 
 					descriptor.set(ctx, v);

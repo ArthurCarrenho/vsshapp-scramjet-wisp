@@ -1,9 +1,101 @@
 import { unrewriteUrl } from "@rewriters/url";
 import { ScramjetClient } from "@client/index";
 import {
+	lendoPilhaCrua,
+	mascarado as quadroDoMotor,
+	origemCitaMotor,
+	origemRegistrada,
+} from "@client/pilha";
+import { posicaoOriginal } from "@client/posicoes";
+import {
 	Object_defineProperty,
+	Reflect_apply,
 	String_startsWith,
 } from "@/shared/snapshot";
+
+type Quadro = {
+	cru: any;
+	origem: [string, string] | null;
+	pos: [number, number, number, number] | null;
+	arquivo: string | null;
+	texto?: string;
+};
+
+const METODOS_DO_SITIO = [
+	"getThis",
+	"getTypeName",
+	"getFunction",
+	"getFunctionName",
+	"getMethodName",
+	"getFileName",
+	"getLineNumber",
+	"getColumnNumber",
+	"getEvalOrigin",
+	"isToplevel",
+	"isEval",
+	"isNative",
+	"isConstructor",
+	"isAsync",
+	"isPromiseAll",
+	"getPromiseIndex",
+	"getScriptNameOrSourceURL",
+	"getScriptHash",
+	"getEnclosingColumnNumber",
+	"getEnclosingLineNumber",
+	"getPosition",
+	"toString",
+];
+
+const crus = new WeakMap<object, Quadro>();
+const prototipos = new WeakMap<ScramjetClient, object>();
+
+/**
+ * O CallSite que o formatador do site recebe: os métodos do V8, com o arquivo, a linha, a coluna
+ * e a origem do eval do site no lugar dos do motor.
+ */
+function sitioDe(client: ScramjetClient, q: Quadro): object {
+	let proto = prototipos.get(client);
+	if (!proto) {
+		proto = {};
+		for (const nome of METODOS_DO_SITIO) {
+			const fn = {
+				[nome](this: object) {
+					const d = crus.get(this);
+					if (!d) throw new TypeError(`CallSite method ${nome} expects CallSite as receiver`);
+					switch (nome) {
+						case "getFileName":
+						case "getScriptNameOrSourceURL":
+							return d.arquivo ?? d.cru[nome]();
+						case "getLineNumber":
+							return d.pos ? d.pos[2] : d.cru.getLineNumber();
+						case "getColumnNumber":
+							return d.pos ? d.pos[3] : d.cru.getColumnNumber();
+						case "getEvalOrigin": {
+							const o = d.cru.getEvalOrigin();
+							return d.origem && typeof o === "string" ? o.replace(d.origem[0], d.origem[1]) : o;
+						}
+						case "toString":
+							return d.texto ?? String(d.cru);
+					}
+
+					return d.cru[nome]();
+				},
+			}[nome];
+			client.box.fontesDinamicas.set(fn, `function ${nome}() { [native code] }`);
+			Object_defineProperty(proto, nome, {
+				value: fn,
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			});
+		}
+		prototipos.set(client, proto);
+	}
+	const sitio = Object.create(proto);
+	crus.set(sitio, q);
+
+	return sitio;
+}
 
 export const enabled = (client: ScramjetClient) =>
 	client.flagEnabled("cleanErrors");
@@ -19,6 +111,8 @@ export default function (client: ScramjetClient, self: Self) {
 	// `.stack` que o site enxerga, então errar aqui é entregar pilha vazia ou `undefined` a todo
 	// código que lê pilha. Montar a partir de `stack` é o caminho documentado e é estável.
 	const closure = (error: any, stack: any[]) => {
+		if (lendoPilhaCrua()) return stack;
+
 		let cabecalho = "Error";
 		try {
 			const nome = error?.name === undefined ? "Error" : String(error.name);
@@ -28,13 +122,8 @@ export default function (client: ScramjetClient, self: Self) {
 			// getters do site em `name`/`message` podem lançar; o V8 também os chamaria
 		}
 
-		const mascarado = (arquivo: string | null | undefined) => {
-			try {
-				return !!arquivo && client.config.maskedfiles.some((f) => arquivo!.endsWith(f));
-			} catch {
-				return false;
-			}
-		};
+		const mascarado = (arquivo: string | null | undefined) =>
+			quadroDoMotor(client, arquivo);
 		const arquivoDe = (i: number) => {
 			try {
 				return stack[i].getFileName() as string | null;
@@ -84,6 +173,7 @@ export default function (client: ScramjetClient, self: Self) {
 		};
 
 		const linhas: string[] = [];
+		const quadros: Quadro[] = [];
 		for (let i = 0; i < stack.length; i++) {
 			const arquivo = arquivoDe(i);
 
@@ -97,8 +187,32 @@ export default function (client: ScramjetClient, self: Self) {
 				continue;
 			}
 
-			const troca = origemDoEval(i);
+			// A origem guardada na compilação vale para o código que roda depois dela, quando o
+			// invólucro que compilou já saiu da pilha; o quadro de baixo só serve ao que roda
+			// dentro do invólucro.
+			let registrada: [string, string] | null = null;
+			try {
+				const origem = stack[i].isEval() ? stack[i].getEvalOrigin() : null;
+				if (origem && origemCitaMotor(client, origem)) {
+					const achada = origemRegistrada(client, stack[i]);
+					if (achada) registrada = [origem, achada];
+				}
+			} catch {}
+			const troca = registrada ?? origemDoEval(i);
 			if (troca) texto = texto.replace(troca[0], troca[1]);
+			const quadro: Quadro = { cru: stack[i], origem: troca, pos: null, arquivo: null };
+			// A posição do quadro é a do texto reescrito; ela volta à da fonte do site.
+			try {
+				const pos = posicaoOriginal(client, stack[i]);
+				quadro.pos = pos;
+				if (pos) {
+					const velha = `:${pos[0]}:${pos[1]}`;
+					const k = texto.lastIndexOf(velha);
+					if (k >= 0)
+						texto =
+							texto.slice(0, k) + `:${pos[2]}:${pos[3]}` + texto.slice(k + velha.length);
+				}
+			} catch {}
 			// Um quadro de código avaliado não tem arquivo, e a origem dele carrega o endereço da
 			// página como o motor o serve; cada endereço sob o prefixo volta ao do site.
 			if (!arquivo) {
@@ -136,12 +250,20 @@ export default function (client: ScramjetClient, self: Self) {
 			// Todos os outros passos deste laço já são guardados pela mesma razão.
 			try {
 				if (arquivo && String_startsWith(arquivo, client.context.prefix.href)) {
-					texto = texto.replaceAll(arquivo, unrewriteUrl(arquivo, client.context));
+					quadro.arquivo = unrewriteUrl(arquivo, client.context);
+					texto = texto.replaceAll(arquivo, quadro.arquivo);
 				}
 			} catch {}
 
 			linhas.push("    at " + texto);
+			quadro.texto = texto;
+			quadros.push(quadro);
 		}
+
+		// O formatador que o site pôs recebe os quadros como o Chrome os daria a ele.
+		const doSite = client.pstDoSite;
+		if (typeof doSite === "function")
+			return Reflect_apply(doSite, self.Error, [error, quadros.map((q) => sitioDe(client, q))]);
 
 		return linhas.length ? cabecalho + "\n" + linhas.join("\n") : cabecalho;
 	};

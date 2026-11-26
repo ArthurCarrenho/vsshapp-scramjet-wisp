@@ -71,6 +71,9 @@ node cabecalhos.mjs         # o site recebe do motor os cabeçalhos que receberi
 node link-degradado.mjs     # com o link da estação perdendo pacotes, a navegação termina, e em quanto tempo?
 ```
 
+As sondas do desafio do Cloudflare ficam em `sondas/`, com o próprio documento:
+[desafio-cloudflare.md](desafio-cloudflare.md).
+
 Cada script termina com `=== veredito ===` e um `process.exitCode`, no mesmo vocabulário da bancada
 irmã: **controle** é o mesmo cenário sem o gatilho, **direto** é sem o proxy, e **INCONCLUSIVO não
 é "está tudo certo"**.
@@ -161,8 +164,9 @@ Está escrito para não ser confundido com "medido e certo":
   que existe um alvo local que permite dar veredito;
 - **egresso de extensão** — o que um bundle remoto alcança de dentro do portal, medido em vez de
   deduzido do gate;
-- **a forma de um captcha** — o fixture `terceiro.teste` já existe (iframe de outra origem,
-  `postMessage` com `targetOrigin` conferido, `location.origin` lido de dentro), e falta a sonda que
-  monta a tabela do que um desafio veria;
+- **a forma de um captcha num sítio local**: o fixture `terceiro.teste` já existe (iframe de outra
+  origem, `postMessage` com `targetOrigin` conferido, `location.origin` lido de dentro). O desafio de
+  verdade, contra a internet, tem as sondas de `sondas/` e o
+  [desafio-cloudflare.md](desafio-cloudflare.md);
 - **`ShadowRoot.innerHTML`** — o fixture `/shadow` existe; o buraco é do rewriter, declarado no fork,
   e medi-lo aqui só diz se ele alcança a camada do portal.

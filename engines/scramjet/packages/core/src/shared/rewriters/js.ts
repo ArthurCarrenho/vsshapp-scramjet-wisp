@@ -18,6 +18,45 @@ type RewriterResult = {
 	tag: string;
 	errors: string[];
 };
+// vssh fork: as flags que vão ao rewriter, calculadas uma vez por configuração e endereço.
+const flagsGuardadas = new WeakMap<object, Map<string, Record<string, boolean>>>();
+
+function flagsDe(context: ScramjetContext, meta: URLMeta): Record<string, boolean> {
+	let porEndereco = flagsGuardadas.get(context.config);
+	if (!porEndereco) flagsGuardadas.set(context.config, (porEndereco = new Map()));
+	const href = meta.base.href;
+	let flags = porEndereco.get(href);
+	if (!flags) {
+		flags = {};
+		for (const flag of Object_keys(context.config.flags))
+			flags[flag] = flagEnabled(flag as any, context, meta.base);
+		if (porEndereco.size >= 64) porEndereco.delete(porEndereco.keys().next().value!);
+		porEndereco.set(href, flags);
+	}
+
+	return flags;
+}
+
+// vssh fork: o objeto de configuração que vai ao rewriter é sempre o mesmo para os mesmos globais
+// e o mesmo prefixo. O lado Rust guarda o que leu do último objeto e não o lê de novo quando
+// recebe o mesmo (ver `config_de` em `rewriter/wasm/src/lib.rs`).
+const configsGuardadas = new WeakMap<object, Map<string, Record<string, string>>>();
+
+function configDe(context: ScramjetContext): Record<string, string> {
+	const globais = context.config.globals as unknown as Record<string, string>;
+	let porPrefixo = configsGuardadas.get(globais);
+	if (!porPrefixo) configsGuardadas.set(globais, (porPrefixo = new Map()));
+	const prefixo = context.prefix.pathname;
+	let config = porPrefixo.get(prefixo);
+	if (!config) {
+		config = { ...globais, prefix: prefixo };
+		if (porPrefixo.size >= 16) porPrefixo.delete(porPrefixo.keys().next().value!);
+		porPrefixo.set(prefixo, config);
+	}
+
+	return config;
+}
+
 function rewriteJsWasm(
 	input: string | Uint8Array,
 	source: string | null,
@@ -27,10 +66,7 @@ function rewriteJsWasm(
 ): RewriterResult {
 	const [rewriter, ret] = getRewriter(context, meta);
 
-	const flagsobj = {};
-	for (const flag of Object_keys(context.config.flags)) {
-		flagsobj[flag] = flagEnabled(flag as any, context, meta.base);
-	}
+	const flagsobj = flagsDe(context, meta);
 
 	try {
 		let out: JsRewriterOutput;
@@ -38,10 +74,7 @@ function rewriteJsWasm(
 		// try {
 		if (typeof input === "string") {
 			out = rewriter.rewrite_js(
-				{
-					...context.config.globals,
-					prefix: context.prefix.pathname,
-				},
+				configDe(context),
 				flagsobj,
 				context.interface.codecEncode,
 				input,
@@ -51,10 +84,7 @@ function rewriteJsWasm(
 			);
 		} else {
 			out = rewriter.rewrite_js_bytes(
-				{
-					...context.config.globals,
-					prefix: context.prefix.pathname,
-				},
+				configDe(context),
 				flagsobj,
 				context.interface.codecEncode,
 				input,
@@ -107,34 +137,62 @@ export function rewriteJsInner(
 	return rewriteJsWasm(js, url, context, meta, isModule);
 }
 
+const CACHE_MAX = 512;
+const CACHE_TEXTO_MAX = 64 * 1024;
+const cacheDeReescrita = new Map<
+	string,
+	{ js: string; tag: string; mapa: number[] | null }
+>();
+
 function rewriteJsMapeado(
 	js: string | Uint8Array,
 	url: string | null,
 	context: ScramjetContext,
 	meta: URLMeta,
-	isModule = false
+	isModule = false,
+	inicio?: [number, number]
 ): string | Uint8Array {
 	{
+		// vssh fork: no cliente, a mesma fonte pedida de novo (o `Function` e o `eval` de um laço)
+		// sai da reescrita já feita, com o mesmo mapa e a mesma tag.
+		const pushmap = globalThis[context.config.globals.pushsourcemapfn];
+		const chave =
+			pushmap && typeof js === "string" && js.length <= CACHE_TEXTO_MAX
+				? `${isModule ? 1 : 0}\u0000${url}\u0000${meta.base.href}\u0000${meta.origin.href}\u0000${js}`
+				: null;
+		const guardada = chave !== null ? cacheDeReescrita.get(chave) : undefined;
+		if (guardada) {
+			if (guardada.mapa) pushmap(guardada.mapa, guardada.tag, -1);
+
+			return guardada.js;
+		}
+
 		const res = rewriteJsInner(js, url, context, meta, isModule);
 		let newjs = res.js;
+		let mapa: number[] | null = null;
 
 		if (flagEnabled("sourcemaps", context, meta.base)) {
-			const pushmap = globalThis[context.config.globals.pushsourcemapfn];
 			if (pushmap) {
-				pushmap(Array_from(res.map), res.tag);
+				mapa = Array_from(res.map);
+				pushmap(mapa, res.tag, -1);
 			} else {
 				// TODO: how do we check instanceof here?
 				if (typeof newjs !== "string") {
 					newjs = TextDecoder_decode(newjs);
 				}
-				const sourcemapfn = `${context.config.globals.pushsourcemapfn}([${res.map.join(",")}], "${res.tag}");`;
+				// vssh fork: a chamada fica na mesma linha do código do site, sem quebra, e leva a
+				// linha e a coluna em que o script começa no documento do site. Com ela o cliente
+				// devolve a posição da fonte do site a cada quadro da pilha (ver
+				// `client/posicoes.ts`).
+				const [linha, coluna] = inicio ?? [1, 0];
+				const sourcemapfn = `${context.config.globals.pushsourcemapfn}([${res.map.join(",")}], "${res.tag}", ${linha}, ${coluna});`;
 
 				// don't put the sourcemap call before "use strict"
 				const strictMode = new _RegExp(/^\s*(['"])use strict\1;?/);
 				if (strictMode.test(newjs)) {
-					newjs = newjs.replace(strictMode, `$&\n${sourcemapfn}`);
+					newjs = newjs.replace(strictMode, `$&;${sourcemapfn}`);
 				} else {
-					newjs = `${sourcemapfn}\n${newjs}`;
+					newjs = `${sourcemapfn}${newjs}`;
 				}
 			}
 		}
@@ -143,6 +201,12 @@ function rewriteJsMapeado(
 			for (const error of res.errors) {
 				dbg.error("oxc parse error", error);
 			}
+		}
+
+		if (chave !== null && typeof newjs === "string") {
+			if (cacheDeReescrita.size >= CACHE_MAX)
+				cacheDeReescrita.delete(cacheDeReescrita.keys().next().value!);
+			cacheDeReescrita.set(chave, { js: newjs, tag: res.tag, mapa });
 		}
 
 		return newjs;
@@ -154,7 +218,8 @@ export function rewriteJs(
 	url: string | null,
 	context: ScramjetContext,
 	meta: URLMeta,
-	isModule = false
+	isModule = false,
+	inicio?: [number, number]
 ): string | Uint8Array {
 	// vssh fork: duas falhas MUITO diferentes chegavam aqui como uma só, e o `allowInvalidJs`
 	// deixava as duas passarem devolvendo a fonte intacta.
@@ -175,7 +240,7 @@ export function rewriteJs(
 	// sabendo. Fonte que não parseia sai na hora — na segunda daria exatamente o mesmo.
 	for (let tentativa = 0; tentativa < 2; tentativa++) {
 		try {
-			return rewriteJsMapeado(js, url, context, meta, isModule);
+			return rewriteJsMapeado(js, url, context, meta, isModule, inicio);
 		} catch (err) {
 			erro = err;
 			if (err?.scramjetSourceFault === true) break;

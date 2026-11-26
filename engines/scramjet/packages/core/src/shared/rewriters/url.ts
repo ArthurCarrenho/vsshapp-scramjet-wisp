@@ -35,6 +35,8 @@ export type URLMeta = {
 	topFrameName?: string;
 	parentFrameName?: string;
 	referrerPolicy?: string;
+	/** No cliente: verdadeiro quando o `img-src` do site recusa o endereço (ver `client/csp.ts`). */
+	recusaImagem?: (url: string) => boolean;
 };
 
 function tryCanParseURL(url: string, origin?: string | URL): _URL | null {

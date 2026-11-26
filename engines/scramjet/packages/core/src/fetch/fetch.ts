@@ -24,6 +24,8 @@ import {
 	worstFetchSite,
 } from "./headers";
 import { _URL } from "@/shared/snapshot";
+import { MARCA_DE_REDE } from "@/shared/rede";
+import { aprenderDicas, prepararDicas } from "./dicas";
 
 export async function doHandleFetch(
 	handler: ScramjetFetchHandler,
@@ -63,13 +65,34 @@ export async function doHandleFetch(
 		}
 	}
 
-	const newheaders = rewriteRequestHeaders(request, handler, parsed);
+	await prepararDicas();
+	let newheaders = rewriteRequestHeaders(request, handler, parsed);
 
 	let responseBody: BodyType;
-	const response = await doNetworkFetch(handler, request, parsed, newheaders);
+	let response = await doNetworkFetch(handler, request, parsed, newheaders);
 
 	// set-cookie needs to take the raw headers. after this, we can flatten the headers into a ScramjetHeaders object
 	await handleCookies(handler, request, parsed, response.rawHeaders);
+
+	// vssh fork: o `Critical-CH` de uma navegação de nível de cima refaz o pedido uma vez, com os
+	// hints que ela pediu (ver `fetch/dicas.ts`). O corpo da primeira resposta é descartado, e os
+	// cookies dela já valem para a segunda, como na pilha de rede do Chrome.
+	let reiniciou = false;
+	const topo =
+		parsed.destination === "document" ||
+		(parsed.destination === "iframe" && !parsed.isIframe);
+	if (topo && aprenderDicas(parsed.url, newheaders, response.rawHeaders)) {
+		if (request.method === "GET" || request.method === "HEAD") {
+			try {
+				await (response.body as any)?.cancel?.();
+			} catch {}
+			newheaders = rewriteRequestHeaders(request, handler, parsed);
+			response = await doNetworkFetch(handler, request, parsed, newheaders);
+			await handleCookies(handler, request, parsed, response.rawHeaders);
+			aprenderDicas(parsed.url, newheaders, response.rawHeaders);
+			reiniciou = true;
+		}
+	}
 
 	if (isDocument(parsed)) {
 		// for document.referer
@@ -150,7 +173,9 @@ export async function doHandleFetch(
 	}
 
 	if (response.body && !isRedirect(response)) {
+		const tamanho = medirCorpo(response);
 		responseBody = await rewriteBody(handler, request, parsed, response);
+		marcarRede(responseHeaders, response, tamanho(), parsed.meta.origin.origin, reiniciou);
 
 		// After rewriting HTML, the body is a JS string which will be encoded as
 		// UTF-8 by the Response constructor. Normalize the Content-Type charset so
@@ -320,3 +345,60 @@ async function handleCookies(
 		destination: parsed.destination,
 	});
 }
+
+// vssh fork: o que o navegador mediria do pedido de verdade, para a linha do tempo da página.
+//
+// A resposta que a página recebe vem do service worker, com o corpo reescrito e já descomprimido,
+// e o registro dela em `performance` diz isso: `transferSize` 0, `deliveryType` "cache", o
+// `decodedBodySize` do HTML reescrito. O motor manda numa entrada `Server-Timing` própria o tamanho
+// do corpo original, o `Content-Length` e a codificação do servidor, e se o `Timing-Allow-Origin`
+// dele deixa a página ver os detalhes; o cliente (ver
+// `client/dom/performance.ts`) a tira da lista e responde com esses números.
+
+function medirCorpo(response: BareResponse): () => number | null {
+	let tamanho: number | null = null;
+	try {
+		const ler = response.arrayBuffer.bind(response);
+		response.arrayBuffer = async () => {
+			const corpo = await ler();
+			tamanho = corpo.byteLength;
+
+			return corpo;
+		};
+		response.text = async () => new TextDecoder().decode(await response.arrayBuffer());
+	} catch {}
+
+	return () => tamanho;
+}
+
+function marcarRede(
+	headers: ScramjetHeaders,
+	response: BareResponse,
+	tamanho: number | null,
+	origem: string,
+	reiniciou: boolean
+) {
+	const original = ScramjetHeaders.fromRawHeaders(response.rawHeaders);
+	const comprimento = Number(original.get("content-length"));
+	const codificacao = (original.get("content-encoding") || "").replace(/[^a-z0-9,-]/gi, "");
+	const tao = original.get("timing-allow-origin");
+	const permitido =
+		!!tao &&
+		tao.split(",").some((o) => {
+			const t = o.trim();
+
+			return t === "*" || t === origem;
+		});
+	const partes = [
+		`t${permitido ? 1 : 0}`,
+		`d${tamanho ?? ""}`,
+		`e${Number.isFinite(comprimento) && comprimento > 0 ? comprimento : ""}`,
+		`c${codificacao}`,
+		`r${reiniciou ? 1 : 0}`,
+		`q${/(^|[\s,])h3=/.test(original.get("alt-svc") || "") ? 1 : 0}`,
+	];
+	const marca = `${MARCA_DE_REDE};desc="${partes.join(" ")}"`;
+	const existente = headers.get("server-timing");
+	headers.set("server-timing", existente ? `${existente}, ${marca}` : marca);
+}
+

@@ -214,7 +214,7 @@ ${scripts}
  * `server.js` de produção passa ao `routeRequest`. Sem ela vale o socket do wisp-js, que conecta
  * direto; `turnstile.mjs` passa uma que sai por um túnel CONNECT quando a máquina só tem proxy.
  */
-export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null, motorParavel = false, subidaMs = 800, TCPSocket = null }) {
+export async function subirPortal({ porta = 0, portaSites, statusDosAssets = null, motorParavel = false, subidaMs = 800, TCPSocket = null, apendiceDaApi = "" }) {
 	// O motor como o supervisor o trata. `pararMotor()` é o motor descendo por ociosidade: as
 	// conexões do wisp caem, e o portal recusa o app com o 409 "App Not Running", que é o que o
 	// de verdade responde quando o túnel até o app também caiu. O `ensureRunning` da página passa
@@ -243,7 +243,9 @@ export async function subirPortal({ porta = 0, portaSites, statusDosAssets = nul
 		}
 		if (caminho === "/s/proxy/vssh-desktop/bancada-api.js") {
 			res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-store" });
-			return res.end(readFileSync(path.join(AQUI, "bancada-api.js"), "utf8"));
+			// `apendiceDaApi` é código de uma sonda que roda na página da bancada sem o CDP, como o
+			// registro de `sondas/sem-automacao.mjs`.
+			return res.end(readFileSync(path.join(AQUI, "bancada-api.js"), "utf8") + apendiceDaApi);
 		}
 
 		if (statusDosAssets && caminho.startsWith(PREFIXO_DO_APP)) {

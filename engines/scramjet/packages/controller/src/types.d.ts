@@ -16,6 +16,7 @@ export type TransferRequest = {
 	method: string;
 	body: BodyType | null;
 	cache: RequestCache;
+	credentials?: RequestCredentials;
 	forceCrossOriginIsolated: boolean;
 	initialHeaders: RawHeaders;
 	rawClientUrl?: string;

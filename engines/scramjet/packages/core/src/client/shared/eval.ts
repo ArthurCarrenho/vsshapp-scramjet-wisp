@@ -1,6 +1,9 @@
 import { rewriteJs } from "@rewriters/js";
 import { ScramjetClient } from "@client/index";
 import { Object_defineProperty, String } from "@/shared/snapshot";
+import { comoOriginal } from "@/shared/confiavel";
+import { registrarCompilacao } from "@client/pilha";
+import { registrarScript } from "@client/posicoes";
 
 export default function (client: ScramjetClient, self: Self) {
 	// used for proxying *direct eval*
@@ -9,17 +12,31 @@ export default function (client: ScramjetClient, self: Self) {
 		value: function (js: any) {
 			// if eval is called on anything other than a string, we should just return it unchanged
 			// the one exception is TrustedScript, which can just be stringified and rewritten
+			const original = js;
 			if (client.box.instanceof(js, "TrustedScript")) js = String(js);
 			if (typeof js !== "string") return js;
 
-			const rewritten = rewriteJs(
-				js,
-				"(direct eval proxy)",
-				client.context,
-				client.meta
+			client.box.mapas.ultimaTag = null;
+			const codigo = comoOriginal(
+				client,
+				"TrustedScript",
+				original,
+				(texto) =>
+					rewriteJs(texto, "(direct eval proxy)", client.context, client.meta),
+				"eval",
 			);
+			const tag = client.box.mapas.ultimaTag;
+			if (tag)
+				registrarScript(client, () => String(codigo), {
+					tag,
+					ini: 0,
+					d: 0,
+					dl: 0,
+					primeira: -1,
+					col0: 0,
+				});
 
-			return rewritten;
+			return codigo;
 		},
 		writable: false,
 		configurable: false,
@@ -31,19 +48,39 @@ export function createIndirectEval(client: ScramjetClient) {
 	const proxy = new Proxy(client.global.eval, {
 		apply(_target, _thisArg, args) {
 			let js = args[0];
+			const original = js;
 			// > If the argument of eval() is not a string, eval() returns the argument unchanged
 			// the one exception is TrustedScript, which can just be stringified and rewritten
 			if (client.box.instanceof(js, "TrustedScript")) js = String(js);
 			if (typeof js !== "string") return js;
 
-			return indirection(
-				rewriteJs(
-					js,
-					"(indirect eval proxy)",
-					client.context,
-					client.meta
-				) as string
+			client.box.mapas.ultimaTag = null;
+			const codigo = comoOriginal(
+				client,
+				"TrustedScript",
+				original,
+				(texto) =>
+					rewriteJs(
+						texto,
+						"(indirect eval proxy)",
+						client.context,
+						client.meta,
+					) as string,
+				"eval",
 			);
+			registrarCompilacao(client, () => String(codigo));
+			const tag = client.box.mapas.ultimaTag;
+			if (tag)
+				registrarScript(client, () => String(codigo), {
+					tag,
+					ini: 0,
+					d: 0,
+					dl: 0,
+					primeira: -1,
+					col0: 0,
+				});
+
+			return indirection(codigo);
 		},
 	});
 	client.box.unproxy.set(proxy, client.global.eval);

@@ -3,6 +3,8 @@ import { SCRAMJETCLIENT } from "@/symbols";
 import { ScramjetClient } from "@client/index";
 import { _URL, Object_defineProperty } from "@/shared/snapshot";
 import { POLLUTANT } from "./realm";
+import { embrulhar } from "@/shared/confiavel";
+import { ehVista } from "@client/janela-cruzada";
 
 // O `targetOrigin` que o nativo aceita: `*`, `/`, ou uma URL absoluta, pelo mesmo parser de URL.
 // O resto ele recusa com SyntaxError.
@@ -69,14 +71,20 @@ export default function (client: ScramjetClient, self: Self) {
 					constructor: { constructor: Function },
 				} = pollutant;
 
+				// vssh fork: os argumentos destas duas funções vão todos como TrustedScript, que o `Function`
+				// do motor reconhece como dele (ver `function.ts`). Num documento que exige Trusted Types,
+				// uma string aqui iria à política padrão do site, que a recusa, e todo `postMessage` da
+				// página morreria com EvalError.
+				const codigo = (texto: string) => embrulhar(client, "TrustedScript", texto);
+
 				// invoking stolen function will give us the caller's globalThis, remember scramjet has already proxied it!!!
-				const callerGlobalThisProxied: Self = Function("return globalThis")();
+				const callerGlobalThisProxied: Self = Function(codigo("return globalThis"))();
 				const callerClient = callerGlobalThisProxied[SCRAMJETCLIENT];
 
 				// this WOULD be enough but the source argument of MessageEvent has to return the caller's window
 				// and if we just call it normally it would be coming from here, which WILL NOT BE THE CALLER'S because the accessor is from the parent
 				// so with the stolen function we wrap postmessage so the source will truly be the caller's window (remember that function is scramjet's!!!)
-				const wrappedPostMessage = Function("...args", "this(...args)");
+				const wrappedPostMessage = Function(codigo("...args"), codigo("this(...args)"));
 
 				// console.log(
 				// 	callerClient,
@@ -162,6 +170,7 @@ export default function (client: ScramjetClient, self: Self) {
 	// `postMessage` chamado depois sem passar por aqui não herda o realm de quem chamou antes.
 	Object_defineProperty(self, client.config.globals.wrappostmessagefn, {
 		value: function (obj: any) {
+			if (ehVista(obj)) return obj;
 			if (!obj || typeof obj.postMessage !== "function") return obj;
 			const doRealm = {};
 			return {

@@ -1,0 +1,16 @@
+--- a/lib/vtls/openssl.c
++++ b/lib/vtls/openssl.c
+@@ -4714,8 +4714,12 @@
+   /* curl-impersonate: Disable TLS GREASE for HTTP/3 (QUIC). */
+   if(peer->transport == TRNSPRT_QUIC)
+     SSL_CTX_set_grease_enabled(octx->ssl_ctx, 0);
+-  else if(data->set.tls_grease)
++  else if(data->set.tls_grease) {
+     SSL_CTX_set_grease_enabled(octx->ssl_ctx, 1);
++    /* vssh fork: o Chrome também põe um GREASE na lista de algoritmos de
++     * assinatura, e o BoringSSL só o faz quando alguém pede. */
++    SSL_CTX_set_grease_sigalgs_enabled(octx->ssl_ctx, 1);
++  }
+ 
+   if(conn_config->trust_anchors) {
+     CURLcode result = set_trust_anchors(data, octx->ssl_ctx,

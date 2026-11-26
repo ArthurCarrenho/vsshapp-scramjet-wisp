@@ -1,0 +1,1 @@
+(async () => { const r = {}; for (const k of Object.getOwnPropertyNames(window)) { let v; try { v = window[k]; } catch { continue; } if (typeof v !== 'function' || !v.prototype) continue; try { if (v.prototype.constructor !== v) r[k] = 'diff'; } catch (e) { r[k] = 'THROW'; } } r.F = (function () {}).constructor === Function; r.E = new Error().constructor === Error; return r; })()

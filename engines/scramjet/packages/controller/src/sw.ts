@@ -406,6 +406,7 @@ export async function route(event: FetchEvent): Promise<Response> {
 				method: event.request.method,
 				body: event.request.body,
 				cache: event.request.cache,
+				credentials: event.request.credentials,
 				forceCrossOriginIsolated: false,
 				initialHeaders: rawheaders,
 				rawClientUrl: client ? client.url : undefined,

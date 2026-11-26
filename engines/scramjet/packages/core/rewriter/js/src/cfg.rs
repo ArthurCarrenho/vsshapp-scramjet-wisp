@@ -13,6 +13,7 @@ pub trait UrlRewriter {
 	) -> Result<(), Box<dyn Error + Sync + Send>>;
 }
 
+#[derive(Clone)]
 pub struct Config {
 	pub prefix: String,
 

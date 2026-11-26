@@ -2,6 +2,7 @@ import { IncrementalHtmlRewriter, rewriteHtml } from "@rewriters/html";
 import { ScramjetClient } from "@client/index";
 import { String, _URL } from "@/shared/snapshot";
 import { createReferrerString } from "@/fetch/util";
+import { comoOriginal, ehConfiavel, embrulhar } from "@/shared/confiavel";
 
 export default function (client: ScramjetClient, _self: Self) {
 	function resetDocumentWriter(document: Document) {
@@ -29,29 +30,44 @@ export default function (client: ScramjetClient, _self: Self) {
 		},
 	});
 
+	// vssh fork: o HTML reescrito vai ao navegador com o tipo que o do site teria. Num documento
+	// que exige Trusted Types, o `write` aceita TrustedHTML, ou uma string que a política padrão do
+	// site aprova; o navegador junta os argumentos e consulta a política uma vez, com o sink
+	// "Document write" ou "Document writeln".
+	function escrever(ctx: any, sink: string, fim: string) {
+		const writer = getDocumentWriter(ctx.this);
+		const args: unknown[] = ctx.args;
+		const todosConfiaveis =
+			args.length > 0 &&
+			args.every((a) => ehConfiavel(client, a, "TrustedHTML"));
+		const juntos = args.map((a) => String(a)).join("") + fim;
+		// Com TrustedHTML o texto é a junção deles, e a política padrão não é consultada. Uma string
+		// vai à política uma vez, e o texto é o que ela devolver.
+		const original = todosConfiaveis ? args[0] : juntos;
+		ctx.return(
+			client.natives.call(
+				"Document.prototype.write",
+				ctx.this,
+				comoOriginal(
+					client,
+					"TrustedHTML",
+					original,
+					(texto) => writer.write(todosConfiaveis ? juntos : texto),
+					sink,
+				),
+			),
+		);
+	}
+
 	client.Proxy("Document.prototype.write", {
 		apply(ctx) {
-			const writer = getDocumentWriter(ctx.this);
-			ctx.return(
-				client.natives.call(
-					"Document.prototype.write",
-					ctx.this,
-					writer.write(ctx.args.join(""))
-				)
-			);
+			escrever(ctx, "Document write", "");
 		},
 	});
 
 	client.Proxy("Document.prototype.writeln", {
 		apply(ctx) {
-			const writer = getDocumentWriter(ctx.this);
-			ctx.return(
-				client.natives.call(
-					"Document.prototype.write",
-					ctx.this,
-					writer.write(ctx.args.join("") + "\n")
-				)
-			);
+			escrever(ctx, "Document writeln", "\n");
 		},
 	});
 
@@ -65,7 +81,11 @@ export default function (client: ScramjetClient, _self: Self) {
 			try {
 				const remaining = writer.end();
 				if (remaining) {
-					client.natives.call("Document.prototype.write", ctx.this, remaining);
+					client.natives.call(
+						"Document.prototype.write",
+						ctx.this,
+						embrulhar(client, "TrustedHTML", remaining),
+					);
 				}
 			} finally {
 				resetDocumentWriter(ctx.this);
@@ -85,12 +105,25 @@ export default function (client: ScramjetClient, _self: Self) {
 		},
 	});
 
+	// vssh fork: o setter faz as conferências do Chrome na ordem dele. Um documento em sandbox
+	// recusa qualquer valor, e quem sabe disso é o setter nativo: num agrupamento por origem, que
+	// é o padrão, atribuir ao documento o domínio que ele já tem não muda nada, e só lança em
+	// sandbox. Depois vem o sufixo, conferido contra o host do site. Passadas as duas, a
+	// atribuição é ignorada, como num agrupamento por origem.
 	client.Trap("Document.prototype.domain", {
 		get() {
 			return client.url.hostname;
 		},
-		set() {
-			return false;
+		set(ctx, valor) {
+			if ((client.global as any).originAgentCluster === true) ctx.set(ctx.get());
+			const host = client.url.hostname;
+			const pedido = String(valor).toLowerCase();
+			if (pedido !== host && !(pedido.includes(".") && host.endsWith(`.${pedido}`))) {
+				throw new DOMException(
+					`Failed to set the 'domain' property on 'Document': '${String(valor)}' is not a suffix of '${host}'.`,
+					"SecurityError"
+				);
+			}
 		},
 	});
 
@@ -121,7 +154,7 @@ export default function (client: ScramjetClient, _self: Self) {
 			return createReferrerString(
 				referrerURL,
 				client.url,
-				lastState.refererPolicy
+				lastState.refererPolicy,
 			);
 		},
 	});
@@ -132,9 +165,9 @@ export default function (client: ScramjetClient, _self: Self) {
 			apply(ctx) {
 				ctx.args[0] = String(ctx.args[0]).replace(
 					/((?:^|\s)\b\w+\[(?:src|href|data-href))[\^]?(=['"]?(?:https?[:])?\/\/)/,
-					"$1*$2"
+					"$1*$2",
 				);
 			},
-		}
+		},
 	);
 }

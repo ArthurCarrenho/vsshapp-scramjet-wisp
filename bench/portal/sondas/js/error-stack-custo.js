@@ -1,0 +1,1 @@
+(async () => { const c = window[Symbol.for('scramjet client global')]; const b0 = JSON.stringify(c && c.box.__perf); const t = performance.now(); for (let i = 0; i < 30; i++) new Error('x').stack; const dt = performance.now() - t; const p = c && c.box.__perf; return { dt, b0, p: JSON.stringify(p), depth: new Error('x').stack.split('\n').length }; })()

@@ -1,5 +1,6 @@
 import { ScramjetClient } from "@client/index";
 import { String, String_startsWith } from "@/shared/snapshot";
+import { doRecusado } from "@client/csp";
 
 /**
  * vssh fork: a recusa do `connect-src` (ver `politicaDeConexao` em `fetch/headers.ts`) dispara o
@@ -15,6 +16,8 @@ export default function (client: ScramjetClient, self: Self) {
 		client.Trap(`SecurityPolicyViolationEvent.prototype.${campo}`, {
 			get(ctx) {
 				const valor = String(ctx.get());
+				const recusado = doRecusado(client, valor);
+				if (recusado !== null) return recusado;
 				return String_startsWith(valor, prefixo)
 					? client.unrewriteUrl(valor)
 					: valor;

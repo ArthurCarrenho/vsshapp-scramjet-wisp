@@ -3,6 +3,7 @@ import { SCRAMJETCLIENT } from "@/symbols";
 import { ScramjetClient } from "@client/index";
 // import { argdbg } from "@client/shared/err";
 import { Object_defineProperty } from "@/shared/snapshot";
+import { vistaDe } from "@client/janela-cruzada";
 
 export function createWrapFn(client: ScramjetClient, self: GlobalThis) {
 	// `parent` e `top` são resolvidos SOB DEMANDA, não uma vez na construção do client — e a
@@ -94,9 +95,9 @@ export function createWrapFn(client: ScramjetClient, self: GlobalThis) {
 		}
 		if (iswindow) {
 			if (identifier === self.parent) {
-				return resolveParent();
+				return vistaDe(client, resolveParent());
 			} else if (identifier === self.top) {
-				return resolveTop();
+				return vistaDe(client, resolveTop());
 			}
 		}
 		return identifier;
@@ -117,7 +118,8 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 				str === "location" ||
 				str === "parent" ||
 				str === "top" ||
-				str === "eval"
+				str === "eval" ||
+				str === "prepareStackTrace"
 			)
 				return client.config.globals.wrappropertybase + str;
 
@@ -199,6 +201,32 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 			},
 			set(value: any) {
 				this.eval = value;
+			},
+			configurable: false,
+			enumerable: false,
+		}
+	);
+
+	// vssh fork: o `Error.prepareStackTrace` do site. O formatador que o `cleanErrors` instala no
+	// `Error` (ver `error.ts`) é o que o V8 chama, e num Chrome sem o motor a propriedade não
+	// existe. O site lê e escreve a dele aqui: `undefined` até ele mesmo pôr um valor.
+	const ocultaPst = client.flagEnabled("cleanErrors");
+	Object_defineProperty(
+		self.Object.prototype,
+		client.config.globals.wrappropertybase + "prepareStackTrace",
+		{
+			get: function () {
+				if (ocultaPst && this === self.Error) return client.pstDoSite;
+
+				return this.prepareStackTrace;
+			},
+			set(value: any) {
+				if (ocultaPst && this === self.Error) {
+					client.pstDoSite = value;
+
+					return;
+				}
+				this.prepareStackTrace = value;
 			},
 			configurable: false,
 			enumerable: false,

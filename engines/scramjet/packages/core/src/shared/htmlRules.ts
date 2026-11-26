@@ -3,6 +3,8 @@ import { rewriteHtml, rewriteSrcset } from "@rewriters/html";
 import { rewriteUrl, unrewriteBlob, URLMeta } from "@rewriters/url";
 import { ScramjetContext } from "@/shared";
 import { _URL } from "./snapshot";
+import { politicaDoMeta } from "@/fetch/headers";
+import { allowNativo } from "@/shared/permissoes";
 
 export const htmlRules: {
 	[key: string]: "*" | string[] | ((...any: any[]) => string | null);
@@ -18,13 +20,33 @@ export const htmlRules: {
 			rewriteUrl(value, context, meta, { navigateType: "location" }),
 
 		// url rewrites
-		src: ["embed", "img", "frame", "input", "track"],
+		src: ["embed", "frame", "input", "track"],
 		href: ["a", "area", "image"],
 		data: ["object"],
 		action: ["form"],
 		formaction: ["button", "input", "textarea", "submit"],
 		poster: ["video"],
 		"xlink:href": ["image"],
+	},
+	{
+		// vssh fork: uma imagem `data:` ou `blob:` não sai para a rede, e vai ao navegador como
+		// está. Assim o `img-src` do site (ver `politicaDoMeta`) a recusa ou aceita como o Chrome:
+		// pelo prefixo ela seria uma imagem da origem do motor, que o `'self'` deixa passar.
+		fn: (value, context, meta) => {
+			const texto = value.trim();
+			if (/^data:/i.test(texto)) return value;
+			if (/^blob:/i.test(texto)) return unrewriteBlob(texto, context, meta);
+			// O que o `img-src` do site recusa vai com o endereço de verdade, que a política do
+			// motor também recusa (ver `client/csp.ts`).
+			if (meta.recusaImagem?.(texto)) {
+				try {
+					return new _URL(texto, meta.base).href;
+				} catch {}
+			}
+
+			return rewriteUrl(value, context, meta, { navigateType: "location" });
+		},
+		src: ["img"],
 	},
 	{
 		fn: (value, context, meta, attrs) => {
@@ -60,6 +82,13 @@ export const htmlRules: {
 		sandbox: ["iframe"],
 	},
 	{
+		// vssh fork: os recursos que um quadro de outra origem não recebe sem pedir (ver
+		// `shared/permissoes.ts`). A regra vem depois da do `src`, que já guardou o endereço do site.
+		fn: (value, context, meta, attrs) =>
+			allowNativo(value, attrs?.["scramjet-attr-src"] ?? attrs?.src, context, meta),
+		allow: ["iframe"],
+	},
+	{
 		fn: (value, context, meta) => {
 			if (value.startsWith("blob:")) {
 				// for media elements specifically they must take the original blob
@@ -80,7 +109,9 @@ export const htmlRules: {
 		fn: () => null,
 
 		// csp stuff that must be deleted
-		nonce: "*",
+		//
+		// vssh fork: o `nonce` fica. A CSP de um `<meta>` chega ao navegador com os nonces dela
+		// (`politicaDoMeta`), e um script sem o nonce dele não rodaria.
 		csp: ["iframe"],
 		credentialless: ["iframe"],
 	},
@@ -127,6 +158,19 @@ export const htmlRules: {
 			else return value;
 		},
 		target: ["a", "base"],
+	},
+	{
+		// vssh fork: a CSP de um `<meta http-equiv>` vai ao navegador traduzida por `politicaDoMeta`.
+		// O elemento continua no documento, e `getAttribute("content")` e `.content` devolvem a
+		// política do site. O quadro do Turnstile traz a CSP dele assim e confere que ela vale; sem
+		// ela, o desafio responde `fail`.
+		fn: (value, context, _meta, attrs) => {
+			if (attrs?.["http-equiv"]?.toLowerCase() !== "content-security-policy")
+				return value;
+
+			return politicaDoMeta(value, context.prefix.href) ?? "";
+		},
+		content: ["meta"],
 	},
 	{
 		// svg elements with an href property

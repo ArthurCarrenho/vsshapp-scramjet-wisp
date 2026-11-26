@@ -9,25 +9,49 @@ import {
 	Object_defineProperty,
 } from "@/shared/snapshot";
 
+const URLPROPS = [
+	"protocol",
+	"hash",
+	"host",
+	"hostname",
+	"href",
+	"origin",
+	"pathname",
+	"port",
+	"search",
+];
+
+/**
+ * vssh fork: o `location` de um worker. No Chrome o `WorkerLocation` não tem propriedade própria:
+ * os acessores e o `toString` moram no protótipo. O objeto do site também não tem, e os acessores
+ * do protótipo respondem por ele com o endereço do site.
+ */
+function localDoWorker(client: ScramjetClient, self: GlobalThis) {
+	const falso = Object.create(self.WorkerLocation.prototype);
+	for (const prop of URLPROPS)
+		client.Trap(`WorkerLocation.prototype.${prop}`, {
+			get(ctx) {
+				return ctx.this === falso ? client.url[prop] : ctx.get();
+			},
+		});
+	client.Proxy("WorkerLocation.prototype.toString", {
+		apply(ctx) {
+			if (ctx.this === falso) ctx.return(client.url.href);
+		},
+	});
+
+	return falso;
+}
+
 export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
-	const Location = iswindow ? self.Location : self.WorkerLocation;
+	if (!iswindow) return localDoWorker(client, self);
+	const Location = self.Location;
 	// location cannot be Proxy()d
-	const fakeLocation: any = {};
+	let fakeLocation: any = {};
 	Object_setPrototypeOf(fakeLocation, Location.prototype);
 
-	// for some reason it's on the object for Location and on the prototype for WorkerLocation??
-	const descriptorSource = iswindow ? self.location : Location.prototype;
-	const urlprops = [
-		"protocol",
-		"hash",
-		"host",
-		"hostname",
-		"href",
-		"origin",
-		"pathname",
-		"port",
-		"search",
-	];
+	const descriptorSource = self.location;
+	const urlprops = URLPROPS;
 	for (const prop of urlprops) {
 		const native = client.natives.call(
 			"Object.getOwnPropertyDescriptor",
@@ -157,7 +181,7 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 		}
 	}
 
-	// vssh fork: os métodos são do próprio objeto, somente leitura, como no `Location` do Chrome
+	// vssh fork: os métodos são do próprio objeto, com o descritor do `Location` do Chrome
 	// ([LegacyUnforgeable]), e o `toString` de cada um é o do nativo que ele envolve: um
 	// `function () { [native code] }` sem nome denuncia o invólucro.
 	for (const nome of ["toString", "valueOf", "assign", "reload", "replace"]) {
@@ -166,14 +190,36 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 			continue;
 		const nativo = (self.location as any)[nome];
 		if (nativo) client.box.unproxy.set(fn, nativo);
+		const d = iswindow
+			? client.natives.call("Object.getOwnPropertyDescriptor", null, self.location, nome)
+			: null;
 		delete fakeLocation[nome];
 		Object_defineProperty(fakeLocation, nome, {
 			value: fn,
-			writable: false,
-			enumerable: true,
+			writable: d ? d.writable : false,
+			enumerable: d ? d.enumerable : true,
 			configurable: false,
 		});
 	}
+	// O `Symbol.toPrimitive` próprio do `Location`, que no Chrome vale `undefined`.
+	if (iswindow) {
+		const d = client.natives.call(
+			"Object.getOwnPropertyDescriptor",
+			null,
+			self.location,
+			Symbol.toPrimitive
+		);
+		if (d) Object_defineProperty(fakeLocation, Symbol.toPrimitive, { ...d, configurable: false });
+	}
+
+	// As chaves saem na ordem do `Location` do Chrome, que começa por `valueOf` e
+	// `ancestorOrigins`.
+	const ordenado = Object.create(Location.prototype);
+	const chaves = Reflect.ownKeys(fakeLocation);
+	const ordem = client.natives.call("Reflect.ownKeys", null, self.location) as (string | symbol)[];
+	for (const k of [...ordem.filter((k) => chaves.includes(k)), ...chaves.filter((k) => !ordem.includes(k))])
+		Object_defineProperty(ordenado, k, Object.getOwnPropertyDescriptor(fakeLocation, k)!);
+	fakeLocation = ordenado;
 
 	return fakeLocation;
 }

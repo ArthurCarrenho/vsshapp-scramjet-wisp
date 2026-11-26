@@ -1,5 +1,6 @@
 import { type BareCompatibleWebSocket } from "@mercuryworkshop/proxy-transports";
 import { ScramjetClient } from "@client/index";
+import { cspRecusa } from "@client/csp";
 import {
 	Object_setPrototypeOf,
 	Reflect_get,
@@ -37,10 +38,6 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 		new _WeakMap() as WeakMap<WebSocketStream, FakeWebSocketStreamState>;
 	client.Proxy("WebSocket", {
 		construct(ctx) {
-			const fakeWebSocket = new EventTarget() as WebSocket;
-			Object_setPrototypeOf(fakeWebSocket, ctx.fn.prototype);
-			fakeWebSocket.constructor = ctx.fn;
-
 			// websockets can take relative URLs
 			let rawurl = new _URL(ctx.args[0], client.url.href);
 			if (rawurl.protocol === "http:") {
@@ -53,6 +50,16 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 				);
 			}
 			const url = rawurl.href;
+			// vssh fork: o `connect-src` do site que recusa o endereço recusa o socket nativo, como
+			// no Chrome: o socket nasce fechado, com o `error`, o `close` e a violação da política.
+			if (cspRecusa(client, "connect-src", url)) {
+				ctx.args[0] = url;
+
+				return;
+			}
+
+			const fakeWebSocket = new EventTarget() as WebSocket;
+			Object_setPrototypeOf(fakeWebSocket, ctx.fn.prototype);
 
 			const trustEvent = (ev: Event) =>
 				new Proxy(ev, {
@@ -273,7 +280,6 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 		construct(ctx) {
 			const fakeWebSocket = {};
 			Object_setPrototypeOf(fakeWebSocket, ctx.fn.prototype);
-			fakeWebSocket.constructor = ctx.fn;
 
 			const barews = client.bare.createWebSocket(ctx.args[0], ctx.args[1], [
 				["User-Agent", self.navigator.userAgent],

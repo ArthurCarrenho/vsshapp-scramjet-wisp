@@ -7,13 +7,12 @@ import { rewriteJs } from "@rewriters/js";
 import { ScramjetContext } from "@/shared";
 import { htmlRules } from "@/shared/htmlRules";
 import { parseDeclarativeRefresh } from "@/shared/refresh";
-import { bytesToBase64 } from "@/shared/util";
+import { base64Decode, bytesToBase64 } from "@/shared/util";
 import { Tap } from "@/Tap";
 import { RawHeaders } from "@mercuryworkshop/proxy-transports";
 import { TrackedHistoryState } from "@/fetch";
 import {
 	Performance_now,
-	atob,
 	Object_entries,
 	JSON_parse,
 	JSON_stringify,
@@ -61,6 +60,25 @@ function isElementNode(node: ChildNode): node is Element {
 		node.type === ElementType.Script ||
 		node.type === ElementType.Style
 	);
+}
+
+// O começo de cada linha do documento que `rewriteHtmlInner` está reescrevendo agora, para a linha
+// e a coluna em que um script inline começa (ver `posicaoNoDocumento`).
+let inicioDasLinhas: number[] | null = null;
+
+function posicaoNoDocumento(no: any): [number, number] | undefined {
+	const linhas = inicioDasLinhas;
+	const pos = no?.startIndex;
+	if (!linhas || typeof pos !== "number") return undefined;
+	let lo = 0,
+		hi = linhas.length - 1;
+	while (lo < hi) {
+		const mid = (lo + hi + 1) >> 1;
+		if (linhas[mid] <= pos) lo = mid;
+		else hi = mid - 1;
+	}
+
+	return [lo + 1, pos - linhas[lo]];
 }
 
 export class IncrementalHtmlRewriter {
@@ -158,17 +176,24 @@ function rewriteHtmlInner(
 	meta: URLMeta,
 	htmlcontext: HtmlContext
 ) {
+	// Só um documento inteiro dá a linha e a coluna de um script no documento do site.
+	const doDocumento = typeof html === "string";
 	if (typeof html !== "string") {
 		html = serializeHtmlNode(html);
 	}
 
-	const handler = new DomHandler((err, dom) => dom);
+	const handler = new DomHandler((err, dom) => dom, { withStartIndices: true });
 	const parser = new Parser(handler, {
 		startingForeignContext: htmlcontext.foreignContext,
 	});
 
 	parser.write(html);
 	parser.end();
+	const linhasAntes = inicioDasLinhas;
+	inicioDasLinhas = doDocumento ? [0] : null;
+	if (inicioDasLinhas)
+		for (let i = html.indexOf("\n"); i >= 0; i = html.indexOf("\n", i + 1))
+			inicioDasLinhas.push(i + 1);
 	Tap.dispatch(
 		context.hooks!.rewriter.html.pre,
 		{
@@ -179,7 +204,11 @@ function rewriteHtmlInner(
 		},
 		undefined
 	);
-	traverseParsedHtml(handler.root, context, meta);
+	try {
+		traverseParsedHtml(handler.root, context, meta);
+	} finally {
+		inicioDasLinhas = linhasAntes;
+	}
 
 	let htmlRoot: Element | undefined;
 	let headElement: Element | undefined;
@@ -314,9 +343,13 @@ export function unrewriteHtml(html: string, foreignContext?: ForeignContext) {
 	function traverse(node: ChildNode) {
 		if ("attribs" in node) {
 			for (const key in node.attribs) {
+				// O texto original do script volta para dentro dele, e o atributo que o guardava sai: ele
+				// traz o script inteiro em base64, e o `outerHTML` do script ficava com mais que o dobro
+				// do tamanho.
 				if (key == "scramjet-attr-script-source-src") {
 					if (node.children[0] && "data" in node.children[0])
-						node.children[0].data = atob(node.attribs[key]);
+						node.children[0].data = base64Decode(node.attribs[key]);
+					delete node.attribs[key];
 					continue;
 				}
 
@@ -336,8 +369,10 @@ export function unrewriteHtml(html: string, foreignContext?: ForeignContext) {
 
 	traverse(handler.root);
 
+	// O Chrome serializa um atributo vazio como `nonce=""`, e nunca como `nonce` sozinho.
 	return render(handler.root, {
 		...renderOptions,
+		emptyAttrs: true,
 	});
 }
 
@@ -435,28 +470,15 @@ function traverseParsedHtml(
 				"(inline script element)",
 				context,
 				meta,
-				module
+				module,
+				posicaoNoDocumento(node.children[0])
 			);
 		}
 	}
 
 	if (node.name === "meta" && node.attribs["http-equiv"] !== undefined) {
-		if (
-			node.attribs["http-equiv"].toLowerCase() === "content-security-policy"
-		) {
-			// just delete it. this needs to be emulated eventually but like
-			//
-			// vssh fork: **o conteúdo do site NÃO entra mais no comentário.** O
-			// `dom-serializer` emite o dado verbatim, como `<!--${data}-->`; um `-->`
-			// dentro do atributo `content` fechava o comentário mais cedo e o resto virava
-			// MARCAÇÃO — injeção controlada pelo site, no documento onde todas as origens
-			// proxiadas compartilham uma origem real.
-			//
-			// Marcador fixo: preserva o motivo para quem inspeciona o DOM e não tem como
-			// carregar dado de terceiro. (O `content` também podia estar ausente, e aí o
-			// comentário virava o texto "undefined".)
-			node = new Comment(" scramjet: <meta> CSP removida ");
-		} else if (node.attribs["http-equiv"].toLowerCase() === "refresh") {
+		// A CSP de um `<meta>` é traduzida pela regra de `content` em `htmlRules`.
+		if (node.attribs["http-equiv"].toLowerCase() === "refresh") {
 			const refresh = parseDeclarativeRefresh(node.attribs.content || "");
 			if (refresh && refresh.url !== null && refresh.url.length > 0) {
 				const rewritten = rewriteUrl(refresh.url.trim(), context, meta);

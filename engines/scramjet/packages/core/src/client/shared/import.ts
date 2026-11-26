@@ -1,13 +1,22 @@
 import { ScramjetClient } from "@client/index";
 import { Object_defineProperty, _URL } from "@/shared/snapshot";
+import { embrulhar } from "@/shared/confiavel";
 
 export default function (client: ScramjetClient, self: Self) {
-	const boundimport = client.natives.call(
-		"Function",
-		null,
-		"url",
-		"return import(url)"
-	);
+	// vssh fork: compilada pelo `eval` com um TrustedScript, na primeira vez que o código reescrito
+	// a chama. O `Function` nativo, com strings, vai à política padrão do site num documento que
+	// exige Trusted Types, e ela recusa o código do motor. Um realm que não roda código (quadro
+	// sandbox sem 'allow-scripts') nunca chega a chamá-la.
+	let importar: ((url: string) => Promise<unknown>) | null = null;
+	const boundimport = (url: string) => {
+		importar ??= client.natives.call(
+			"eval",
+			null,
+			embrulhar(client, "TrustedScript", "(function (url) {\n\treturn import(url);\n})")
+		);
+
+		return importar(url);
+	};
 
 	Object_defineProperty(self, client.config.globals.importfn, {
 		value: function (base: string, url: string) {
