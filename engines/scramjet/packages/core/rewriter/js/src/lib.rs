@@ -515,6 +515,23 @@ mod tests {
 		assert!(saida.contains("$temploc"), "saiu `{saida}`");
 	}
 
+	/// `var { location: a } = self` liga `a`, e a chave `location` é o nome lido do objeto. Ela sai
+	/// como `$sj_location`, a mesma de `const`, e nada é atribuído ao `location` do escopo. Com o
+	/// nome temporário na chave, `a` recebia `undefined`: um script que guarda os globais de uma vez
+	/// (`var {parent: p, location: l, navigator: n} = globalThis`) ficava sem o endereço da página.
+	#[test]
+	fn chave_location_de_var_desestruturado_le_o_location_do_objeto() {
+		let saida = reescrever("var {location: a} = self; f(a);", true);
+		assert_eq!(saida, "var {$sj_location: a} = self; f(a);");
+
+		let saida = reescrever("var {top: t, location: {href: h}} = self;", true);
+		assert_eq!(saida, "var {$sj_top: t, $sj_location: {href: h}} = self;");
+
+		// O valor que é o identificador `location` continua indo para o nome temporário.
+		let saida = reescrever("var {x: location} = self;", true);
+		assert!(saida.contains("{x: $temploc}"), "saiu `{saida}`");
+	}
+
 	/// `[location = 1] = x` aplicava o `TempVar` sobre o span do `location = 1` INTEIRO e saía
 	/// `[$temploc] = x`: o default sumia, e `location` recebia `undefined` em vez de 1 quando `x[0]`
 	/// não existe. Sobre o span do alvo vira `[$temploc = 1]`, que é o que o lado do OBJETO

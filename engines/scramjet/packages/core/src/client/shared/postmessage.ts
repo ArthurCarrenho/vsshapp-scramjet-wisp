@@ -5,7 +5,7 @@ import { _URL, Object_defineProperty, Reflect_apply } from "@/shared/snapshot";
 import { AnyFunction } from "@/types";
 import { POLLUTANT } from "./realm";
 import { embrulhar } from "@/shared/confiavel";
-import { ehVista } from "@client/janela-cruzada";
+import { ehVista, origemDe } from "@client/janela-cruzada";
 
 // O `targetOrigin` que o nativo aceita: `*`, `/`, ou uma URL absoluta, pelo mesmo parser de URL.
 // O resto ele recusa com SyntaxError.
@@ -133,6 +133,27 @@ export default function (client: ScramjetClient, self: Self) {
 				ctx.return(wrappedPostMessage.call(ctx.fn, ...ctx.args));
 			},
 		});
+
+	// vssh fork: um `BroadcastChannel` só alcança a própria origem. Todo documento do motor mora
+	// na origem do motor, e o canal de mesmo nome de dois sites seria um só: a mensagem de um
+	// chegaria ao outro. O nome que vai ao navegador leva a origem do site na frente, e o `name`
+	// que o site lê é o que ele deu.
+	const origemDoCanal = () => (iswindow ? origemDe(self) : null) ?? client.url.origin;
+	client.Proxy("BroadcastChannel", {
+		construct(ctx) {
+			const args = ctx.args as unknown[];
+			if (args.length === 0) return;
+			args[0] = `${origemDoCanal()}@${args[0] as string}`;
+		},
+	});
+	client.Trap("BroadcastChannel.prototype.name", {
+		get(ctx) {
+			const nome = ctx.get() as string;
+			const corte = nome.indexOf("@");
+
+			return corte < 0 ? nome : nome.slice(corte + 1);
+		},
+	});
 
 	client.Proxy("BroadcastChannel.prototype.postMessage", {
 		apply(ctx) {

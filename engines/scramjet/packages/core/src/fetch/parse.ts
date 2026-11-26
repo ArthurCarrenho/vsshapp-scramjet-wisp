@@ -111,9 +111,17 @@ export function parseRequest(
 	)
 		? params.mode
 		: undefined;
+	// vssh fork: o módulo que um worker de módulo importa chega com o destino do worker, e sem o
+	// `$dest` que o cliente põe no endereço do script de entrada. Ele é um módulo comum: com o
+	// carregador do worker na frente, o cliente subiria de novo e os `export` ficariam num módulo
+	// de dentro, fora do alcance de quem importou.
+	const dependenciaDeWorker =
+		!params.destination &&
+		params.isModule === "module" &&
+		(request.rawDestination === "worker" || request.rawDestination === "sharedworker");
 	const destination =
 		(params.destination as RequestDestination | undefined) ||
-		request.rawDestination;
+		(dependenciaDeWorker ? "script" : request.rawDestination);
 
 	const meta: URLMeta = {
 		origin: url,

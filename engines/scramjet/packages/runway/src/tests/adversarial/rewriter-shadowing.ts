@@ -49,6 +49,25 @@ export default [
 			assertEqual((function () { class location {} return typeof location; })(), "function", "class declaration named location");
 		`,
 	}),
+	// `var { location: here } = globalThis` binds `here`, not `location`: the key is only the
+	// name read from the object. Consent managers and tag loaders grab the globals this way in
+	// one declaration, and a key rewritten to the temporary name left them with `undefined`.
+	basicTest({
+		name: "shadowing-var-destructured-location-key",
+		js: `
+			var { location: here, parent: above } = globalThis;
+			assertEqual(typeof here, "object", "the location key reads the page location");
+			assertEqual(here.href, location.href, "same address as location");
+			assert(above !== undefined, "the neighbour key still binds");
+			(function () {
+				var { location: { hostname } } = globalThis;
+				assertEqual(hostname, location.hostname, "nested pattern under the key");
+			})();
+			var { location: plain = 1 } = { location: 7 };
+			assertEqual(plain, 7, "plain object with a location key");
+			for (var { location: each } of [{ location: "a" }]) assertEqual(each, "a", "for-of declaration");
+		`,
+	}),
 	basicTest({
 		name: "shadowing-var-top-parent",
 		js: `
