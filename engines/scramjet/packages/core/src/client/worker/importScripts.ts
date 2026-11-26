@@ -13,7 +13,7 @@ export default function (client: ScramjetClient) {
 					client,
 					"TrustedScriptURL",
 					original,
-					client.rewriteUrl(url)
+					(texto) => client.rewriteUrl(texto),
 				);
 			}
 		},

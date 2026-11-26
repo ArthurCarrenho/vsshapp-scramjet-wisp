@@ -1,6 +1,8 @@
 import { ScramjetClient } from "@client/index";
 import { unrewriteLinkHeader } from "./xmlhttprequest";
 import { String } from "@/shared/snapshot";
+import { unrewriteBlob } from "@rewriters/url";
+import { enderecoDeConexao } from "@client/csp";
 
 /**
  * Capture the page's intended `init.mode` / `init.credentials` and forward
@@ -28,15 +30,38 @@ export function ehUrlDeDados(url: unknown): boolean {
 	return /^\s*data:/i.test(String(url));
 }
 
+/**
+ * Um `blob:` segue o mesmo caminho: o pedido vai ao navegador com o endereço do blob na origem do
+ * motor, onde ele mora. O `connect-src` do site sem `blob:` o recusa como no Chrome, e com
+ * `blob:` ou sem CSP o navegador o lê da memória. Devolve `null` para o que não é `blob:`.
+ */
+export function blobNativo(client: ScramjetClient, url: unknown): string | null {
+	const texto = String(url).trim();
+	if (!/^blob:/i.test(texto)) return null;
+	try {
+		return unrewriteBlob(texto, client.context, client.meta);
+	} catch {
+		return null;
+	}
+}
+
 export default function (client: ScramjetClient) {
 	client.Proxy("fetch", {
 		apply(ctx) {
 			if (client.box.instanceof(ctx.args[0], "Request")) return;
 			if (ehUrlDeDados(ctx.args[0])) return;
+			const blob = blobNativo(client, ctx.args[0]);
+			if (blob) {
+				ctx.args[0] = blob;
+
+				return;
+			}
 			const url = String(ctx.args[0]);
-			ctx.args[0] = client.rewriteUrl(
-				url,
-				rewriteUrlOptionsForFetch(ctx.args[1] as RequestInit | undefined)
+			ctx.args[0] = enderecoDeConexao(client, url, () =>
+				client.rewriteUrl(
+					url,
+					rewriteUrlOptionsForFetch(ctx.args[1] as RequestInit | undefined)
+				)
 			);
 		},
 	});
@@ -45,10 +70,18 @@ export default function (client: ScramjetClient) {
 		construct(ctx) {
 			if (client.box.instanceof(ctx.args[0], "Request")) return;
 			if (ehUrlDeDados(ctx.args[0])) return;
+			const blob = blobNativo(client, ctx.args[0]);
+			if (blob) {
+				ctx.args[0] = blob;
+
+				return;
+			}
 			const url = String(ctx.args[0]);
-			ctx.args[0] = client.rewriteUrl(
-				url,
-				rewriteUrlOptionsForFetch(ctx.args[1] as RequestInit | undefined)
+			ctx.args[0] = enderecoDeConexao(client, url, () =>
+				client.rewriteUrl(
+					url,
+					rewriteUrlOptionsForFetch(ctx.args[1] as RequestInit | undefined)
+				)
 			);
 		},
 	});

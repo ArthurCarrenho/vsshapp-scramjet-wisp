@@ -73,7 +73,9 @@ export async function rewriteResponseHeaders(
 		headers.delete(cspHeader);
 	}
 	const conexao = politica ? politicaDeConexao(politica) : null;
-	if (conexao) headers.set("Content-Security-Policy", conexao);
+	const caixa = politica ? caixaDaPolitica(politica) : null;
+	const doCabecalho = [conexao, caixa].filter(Boolean).join("; ");
+	if (doCabecalho) headers.set("Content-Security-Policy", doCabecalho);
 
 	for (const urlHeader of URL_HEADERS) {
 		if (headers.has(urlHeader)) {
@@ -152,6 +154,29 @@ export function politicaDeConexao(cabecalho: string): string | null {
 	}
 
 	return saida.length ? saida.join(", ") : null;
+}
+
+/**
+ * vssh fork: o `sandbox` da CSP do site, que um `<meta>` não aplica.
+ *
+ * O quadro do Turnstile chega com `sandbox allow-same-origin allow-scripts …` no cabeçalho, e o
+ * documento dele roda sem modais, sem navegar o topo e sem baixar arquivos. A diretiva vale igual
+ * sob o prefixo do motor, desde que deixe o mesmo-origem e os scripts, sem os quais o motor não
+ * roda no documento; sem os dois, ela fica de fora.
+ */
+export function caixaDaPolitica(cabecalho: string): string | null {
+	for (const politica of cabecalho.split(",")) {
+		for (const bruta of politica.split(";")) {
+			const partes = bruta.trim().split(/\s+/).filter(Boolean);
+			if (partes[0]?.toLowerCase() !== "sandbox") continue;
+			const marcas = partes.slice(1).map((m) => m.toLowerCase());
+			if (!marcas.includes("allow-same-origin") || !marcas.includes("allow-scripts")) return null;
+
+			return ["sandbox", ...marcas].join(" ");
+		}
+	}
+
+	return null;
 }
 
 /**

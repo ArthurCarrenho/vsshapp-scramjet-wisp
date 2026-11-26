@@ -24,6 +24,7 @@ import {
 	worstFetchSite,
 } from "./headers";
 import { _URL } from "@/shared/snapshot";
+import { MARCA_DE_REDE } from "@/shared/rede";
 
 export async function doHandleFetch(
 	handler: ScramjetFetchHandler,
@@ -150,7 +151,9 @@ export async function doHandleFetch(
 	}
 
 	if (response.body && !isRedirect(response)) {
+		const tamanho = medirCorpo(response);
 		responseBody = await rewriteBody(handler, request, parsed, response);
+		marcarRede(responseHeaders, response, tamanho(), parsed.meta.origin.origin);
 
 		// After rewriting HTML, the body is a JS string which will be encoded as
 		// UTF-8 by the Response constructor. Normalize the Content-Type charset so
@@ -320,3 +323,57 @@ async function handleCookies(
 		destination: parsed.destination,
 	});
 }
+
+// vssh fork: o que o navegador mediria do pedido de verdade, para a linha do tempo da página.
+//
+// A resposta que a página recebe vem do service worker, com o corpo reescrito e já descomprimido,
+// e o registro dela em `performance` diz isso: `transferSize` 0, `deliveryType` "cache", o
+// `decodedBodySize` do HTML reescrito. O motor manda numa entrada `Server-Timing` própria o tamanho
+// do corpo original, o `Content-Length` e a codificação do servidor, e se o `Timing-Allow-Origin`
+// dele deixa a página ver os detalhes; o cliente (ver
+// `client/dom/performance.ts`) a tira da lista e responde com esses números.
+
+function medirCorpo(response: BareResponse): () => number | null {
+	let tamanho: number | null = null;
+	try {
+		const ler = response.arrayBuffer.bind(response);
+		response.arrayBuffer = async () => {
+			const corpo = await ler();
+			tamanho = corpo.byteLength;
+
+			return corpo;
+		};
+		response.text = async () => new TextDecoder().decode(await response.arrayBuffer());
+	} catch {}
+
+	return () => tamanho;
+}
+
+function marcarRede(
+	headers: ScramjetHeaders,
+	response: BareResponse,
+	tamanho: number | null,
+	origem: string
+) {
+	const original = ScramjetHeaders.fromRawHeaders(response.rawHeaders);
+	const comprimento = Number(original.get("content-length"));
+	const codificacao = (original.get("content-encoding") || "").replace(/[^a-z0-9,-]/gi, "");
+	const tao = original.get("timing-allow-origin");
+	const permitido =
+		!!tao &&
+		tao.split(",").some((o) => {
+			const t = o.trim();
+
+			return t === "*" || t === origem;
+		});
+	const partes = [
+		`t${permitido ? 1 : 0}`,
+		`d${tamanho ?? ""}`,
+		`e${Number.isFinite(comprimento) && comprimento > 0 ? comprimento : ""}`,
+		`c${codificacao}`,
+	];
+	const marca = `${MARCA_DE_REDE};desc="${partes.join(" ")}"`;
+	const existente = headers.get("server-timing");
+	headers.set("server-timing", existente ? `${existente}, ${marca}` : marca);
+}
+

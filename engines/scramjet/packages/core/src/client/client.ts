@@ -22,6 +22,7 @@ import {
 } from "@/shared";
 import { iswindow } from "./entry";
 import { SingletonBox } from "./singletonbox";
+import { cspRecusa } from "./csp";
 import { ScramjetConfig } from "@/types";
 import { Tap } from "@/Tap";
 import {
@@ -372,6 +373,7 @@ export class ScramjetClient {
 			get origin() {
 				return client.url;
 			},
+			recusaImagem: (url: string) => cspRecusa(client, "img-src", url),
 			get base() {
 				if (iswindow) {
 					const base = client.natives.call(
@@ -651,7 +653,9 @@ export class ScramjetClient {
 
 		const value = Reflect_get(target, prop);
 		const originalDescriptor = Object_getOwnPropertyDescriptor(target, prop);
-		delete target[prop];
+		// vssh fork: a propriedade é redefinida no lugar, sem `delete` antes. Apagar e definir de
+		// novo a manda para o fim da lista de chaves, onde o `Object.getOwnPropertyNames(window)`
+		// mostraria em sequência os globais que o motor intercepta.
 
 		const h: ProxyHandler<any> = {};
 
@@ -888,8 +892,7 @@ return { apply, construct };
 			},
 		};
 
-		delete target[prop];
-
+		// Redefinida no lugar, pela mesma razão do `RawProxy`.
 		const desc: PropertyDescriptor = {};
 
 		// vssh fork: o acessor que entra no lugar do nativo se apresenta como ele. Uma página lê o

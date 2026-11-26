@@ -4,19 +4,28 @@ import { String } from "@/shared/snapshot";
 import { comoOriginal } from "@/shared/confiavel";
 
 export default function (client: ScramjetClient, self: Self) {
-	client.Proxy(["setTimeout", "setInterval"], {
-		apply(ctx) {
-			if (typeof ctx.args[0] !== "function") {
-				const code = String(ctx.args[0]);
-				// @ts-expect-error - for some reason it doesn't recognize setTimeout(string, number)
-				ctx.args[0] = comoOriginal(
-					client,
-					"TrustedScript",
-					ctx.args[0],
-					rewriteJs(code, "(setTimeout string eval)", client.context, client.meta),
-					"Window setTimeout"
-				);
-			}
-		},
-	});
+	for (const [nome, sink] of [
+		["setTimeout", "Window setTimeout"],
+		["setInterval", "Window setInterval"],
+	]) {
+		client.Proxy(nome, {
+			apply(ctx) {
+				if (typeof ctx.args[0] !== "function") {
+					ctx.args[0] = comoOriginal(
+						client,
+						"TrustedScript",
+						ctx.args[0],
+						(texto) =>
+							rewriteJs(
+								texto,
+								"(setTimeout string eval)",
+								client.context,
+								client.meta,
+							),
+						sink,
+					);
+				}
+			},
+		});
+	}
 }

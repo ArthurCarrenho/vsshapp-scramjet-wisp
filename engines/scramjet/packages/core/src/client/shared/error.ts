@@ -1,5 +1,6 @@
 import { unrewriteUrl } from "@rewriters/url";
 import { ScramjetClient } from "@client/index";
+import { lendoPilhaCrua, origemCitaMotor, origemRegistrada } from "@client/pilha";
 import {
 	Object_defineProperty,
 	String_startsWith,
@@ -19,6 +20,8 @@ export default function (client: ScramjetClient, self: Self) {
 	// `.stack` que o site enxerga, então errar aqui é entregar pilha vazia ou `undefined` a todo
 	// código que lê pilha. Montar a partir de `stack` é o caminho documentado e é estável.
 	const closure = (error: any, stack: any[]) => {
+		if (lendoPilhaCrua()) return stack;
+
 		let cabecalho = "Error";
 		try {
 			const nome = error?.name === undefined ? "Error" : String(error.name);
@@ -97,7 +100,18 @@ export default function (client: ScramjetClient, self: Self) {
 				continue;
 			}
 
-			const troca = origemDoEval(i);
+			// A origem guardada na compilação vale para o código que roda depois dela, quando o
+			// invólucro que compilou já saiu da pilha; o quadro de baixo só serve ao que roda
+			// dentro do invólucro.
+			let registrada: [string, string] | null = null;
+			try {
+				const origem = stack[i].isEval() ? stack[i].getEvalOrigin() : null;
+				if (origem && origemCitaMotor(client, origem)) {
+					const achada = origemRegistrada(client, stack[i]);
+					if (achada) registrada = [origem, achada];
+				}
+			} catch {}
+			const troca = registrada ?? origemDoEval(i);
 			if (troca) texto = texto.replace(troca[0], troca[1]);
 			// Um quadro de código avaliado não tem arquivo, e a origem dele carrega o endereço da
 			// página como o motor o serve; cada endereço sob o prefixo volta ao do site.

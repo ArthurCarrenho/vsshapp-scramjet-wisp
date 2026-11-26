@@ -18,7 +18,10 @@ import { Object_defineProperty } from "@/shared/snapshot";
 // tradução da CSP acrescenta o nome da política do motor à diretiva `trusted-types` do site.
 export const POLITICA_DO_MOTOR = "scramjet";
 
-export type TipoConfiavel = "TrustedScript" | "TrustedHTML" | "TrustedScriptURL";
+export type TipoConfiavel =
+	| "TrustedScript"
+	| "TrustedHTML"
+	| "TrustedScriptURL";
 
 const politicas = new WeakMap<object, { politica: any; identidade: unknown }>();
 const exigidos = new WeakSet<object>();
@@ -77,7 +80,7 @@ function metaExige(client: ScramjetClient, doc: Document): boolean {
 		metas = client.natives.call(
 			"Document.prototype.querySelectorAll",
 			doc,
-			'meta[http-equiv="content-security-policy" i]'
+			'meta[http-equiv="content-security-policy" i]',
 		);
 	} catch {
 		return false;
@@ -87,7 +90,7 @@ function metaExige(client: ScramjetClient, doc: Document): boolean {
 			client.natives.call(
 				"Element.prototype.getAttribute",
 				metas[i],
-				"scramjet-attr-content"
+				"scramjet-attr-content",
 			) || "";
 		if (/require-trusted-types-for\s+'script'/i.test(politica)) return true;
 	}
@@ -136,10 +139,12 @@ export function exigeConfiavel(client: ScramjetClient): boolean {
 export function ehConfiavel(
 	client: ScramjetClient,
 	valor: unknown,
-	tipo: TipoConfiavel
+	tipo: TipoConfiavel,
 ): boolean {
 	return (
-		valor != null && typeof valor === "object" && client.box.instanceof(valor, tipo)
+		valor != null &&
+		typeof valor === "object" &&
+		client.box.instanceof(valor, tipo)
 	);
 }
 
@@ -160,7 +165,11 @@ export function podeRodar(client: ScramjetClient): boolean {
 	}
 }
 
-export function embrulhar<T>(client: ScramjetClient, tipo: TipoConfiavel, valor: T): T {
+export function embrulhar<T>(
+	client: ScramjetClient,
+	tipo: TipoConfiavel,
+	valor: T,
+): T {
 	if (typeof valor !== "string") return valor;
 	const politica = politicaDe(client);
 	if (!politica) return valor;
@@ -178,22 +187,31 @@ export function embrulhar<T>(client: ScramjetClient, tipo: TipoConfiavel, valor:
 }
 
 /**
- * O `reescrito` com o tipo que o valor `original` teria no sink. `sink` é o nome que o navegador
- * passa à política padrão ("eval", "Element innerHTML"...); sem ele, o valor não vai a um sink.
+ * O valor reescrito com o tipo que o `original` teria no sink. `reescrever` recebe o texto que o
+ * navegador usaria e devolve a reescrita dele. `sink` é o nome que o navegador passa à política
+ * padrão ("eval", "Element innerHTML"...); sem ele, o valor não vai a um sink.
+ *
+ * O texto que a política padrão devolve é o que o navegador usa, e é ele que se reescreve. Uma
+ * política pode trocar o texto: a do quadro do Cloudflare devolve "" para tudo, e um `innerHTML`, o
+ * texto de um `<script>` ou o `setTimeout` de uma string ali ficam vazios. Reescrever o original no
+ * lugar do que ela devolveu rodaria o código que o navegador teria descartado.
  */
 export function comoOriginal<T>(
 	client: ScramjetClient,
 	tipo: TipoConfiavel,
 	original: unknown,
-	reescrito: T,
-	sink?: string
+	reescrever: (texto: string) => T,
+	sink?: string,
 ): T {
-	if (typeof reescrito !== "string") return reescrito;
-	if (ehConfiavel(client, original, tipo)) return embrulhar(client, tipo, reescrito);
-	if (!sink || typeof original === "object" || !exigeConfiavel(client)) return reescrito;
+	const tipado = (r: T): T =>
+		typeof r === "string" ? embrulhar(client, tipo, r) : r;
+	if (ehConfiavel(client, original, tipo))
+		return tipado(reescrever(String(original)));
+	if (!sink || typeof original === "object" || !exigeConfiavel(client))
+		return reescrever(String(original));
 
 	const padrao = (client.global as any).trustedTypes?.defaultPolicy;
-	if (!padrao) return reescrito;
+	if (!padrao) return reescrever(String(original));
 	const metodo =
 		tipo === "TrustedScript"
 			? "createScript"
@@ -201,7 +219,9 @@ export function comoOriginal<T>(
 				? "createHTML"
 				: "createScriptURL";
 	const aprovado = padrao[metodo](String(original), sink);
-	if (aprovado == null) return reescrito;
+	if (aprovado == null) return reescrever(String(original));
 
-	return embrulhar(client, tipo, reescrito);
+	// O `eval` é a exceção medida: o Chrome só pede a aprovação à política, e compila o texto que
+	// a página passou.
+	return tipado(reescrever(sink === "eval" ? String(original) : String(aprovado)));
 }

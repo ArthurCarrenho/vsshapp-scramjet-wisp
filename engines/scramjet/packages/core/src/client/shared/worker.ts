@@ -1,5 +1,7 @@
 import { ScramjetClient } from "@client/index";
 import { comoOriginal } from "@/shared/confiavel";
+import { cspRecusa } from "@client/csp";
+import { unrewriteBlob } from "@rewriters/url";
 
 // vssh fork: a URL reescrita de um worker vai ao navegador com o tipo que a do site teria. Num
 // documento que exige Trusted Types, uma string aqui iria à política padrão do site, que não
@@ -7,17 +9,32 @@ import { comoOriginal } from "@/shared/confiavel";
 // subia com o HTML da página no lugar do código.
 
 export default function (client: ScramjetClient, _self: GlobalThis) {
+	// O que o `worker-src` do site recusa vai ao navegador com o endereço de verdade, e a política
+	// do motor o recusa do mesmo jeito (ver `client/csp.ts`).
+	const recusado = (texto: string): string | null => {
+		if (!cspRecusa(client, "worker-src", texto)) return null;
+		const t = texto.trim();
+		if (/^blob:/i.test(t)) return unrewriteBlob(t, client.context, client.meta);
+		try {
+			return new URL(t, client.url.href).href;
+		} catch {
+			return null;
+		}
+	};
+
 	client.Proxy("Worker", {
 		construct(ctx) {
 			ctx.args[0] = comoOriginal(
 				client,
 				"TrustedScriptURL",
 				ctx.args[0],
-				client.rewriteUrl(ctx.args[0], {
-					destination: "worker",
-					isModule: ctx.args[1]?.type === "module",
-				}),
-				"Worker constructor"
+				(texto) =>
+					recusado(texto) ??
+					client.rewriteUrl(texto, {
+						destination: "worker",
+						isModule: ctx.args[1]?.type === "module",
+					}),
+				"Worker constructor",
 			);
 
 			const worker = ctx.call();
@@ -48,11 +65,12 @@ export default function (client: ScramjetClient, _self: GlobalThis) {
 				client,
 				"TrustedScriptURL",
 				ctx.args[0],
-				client.rewriteUrl(ctx.args[0], {
-					destination: "sharedworker",
-					isModule,
-				}),
-				"SharedWorker constructor"
+				(texto) =>
+					client.rewriteUrl(texto, {
+						destination: "sharedworker",
+						isModule,
+					}),
+				"SharedWorker constructor",
 			);
 
 			if (ctx.args[1] && typeof ctx.args[1] === "string")

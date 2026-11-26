@@ -7,7 +7,7 @@ import { comoOriginal } from "@/shared/confiavel";
 // TODO: this function is untested / llm slop
 function foreignContextForRange(
 	client: ScramjetClient,
-	range: Range
+	range: Range,
 ): ForeignContext {
 	const node = range.startContainer;
 	const element = node.nodeType === 1 ? node : node.parentElement;
@@ -20,19 +20,19 @@ function foreignContextForRange(
 export default function (client: ScramjetClient, _self: Self) {
 	client.Proxy("Range.prototype.createContextualFragment", {
 		apply(ctx) {
-			const html = String(ctx.args[0]);
 			ctx.args[0] = comoOriginal(
 				client,
 				"TrustedHTML",
 				ctx.args[0],
-				rewriteHtml(html, client.context, client.meta, {
-					loadScripts: false,
-					inline: true,
-					source: client.url.href,
-					apisource: "Range.prototype.createContextualFragment",
-					foreignContext: foreignContextForRange(client, ctx.this),
-				}),
-				"Range createContextualFragment"
+				(html) =>
+					rewriteHtml(html, client.context, client.meta, {
+						loadScripts: false,
+						inline: true,
+						source: client.url.href,
+						apisource: "Range.prototype.createContextualFragment",
+						foreignContext: foreignContextForRange(client, ctx.this),
+					}),
+				"Range createContextualFragment",
 			);
 		},
 	});

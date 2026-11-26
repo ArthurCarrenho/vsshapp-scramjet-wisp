@@ -44,13 +44,12 @@ export class ScramjetHeaders {
 
 	static fromRawHeaders(raw: RawHeaders): ScramjetHeaders {
 		const h = new ScramjetHeaders();
+		// vssh fork: um cabeçalho repetido vale como a lista das ocorrências separadas por vírgula,
+		// como o `Headers` do navegador o monta: duas linhas de `Server-Timing` ou de
+		// `Content-Security-Policy` chegam as duas. O `Set-Cookie` é lido das linhas cruas.
 		for (const [k, v] of raw) {
-			if (h.has(k)) {
-				// console.debug(
-				// 	`Duplicate header "${k}" found in raw headers, overwriting previous value.`
-				// );
-			}
-			h.set(k, v);
+			const anterior = h.get(k);
+			h.set(k, anterior !== null && k.toLowerCase() !== "set-cookie" ? `${anterior}, ${v}` : v);
 		}
 
 		return h;

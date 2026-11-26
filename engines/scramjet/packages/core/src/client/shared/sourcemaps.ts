@@ -187,6 +187,8 @@ export default function (client: ScramjetClient, self: Self) {
 	// this can lead to double rewrites which is bad
 	client.Proxy("Function.prototype.toString", {
 		apply(ctx) {
+			const dinamica = client.box.fontesDinamicas.get(ctx.this);
+			if (dinamica !== undefined) return ctx.return(dinamica);
 			if (client.box.unproxy.has(ctx.this)) {
 				// toString is being called on a proxy of a native function
 				// `this` will then be the proxy, which has the wrong [[SourceText]]

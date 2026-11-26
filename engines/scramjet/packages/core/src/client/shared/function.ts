@@ -1,21 +1,78 @@
 import { rewriteJs } from "@rewriters/js";
 import { ScramjetClient, ProxyCtx, Proxy } from "@client/index";
-import { String } from "@/shared/snapshot";
+import { Math_random, Reflect_apply, String } from "@/shared/snapshot";
+import { registrarCompilacao } from "@client/pilha";
 import { ehConfiavel, embrulhar, exigeConfiavel, podeRodar } from "@/shared/confiavel";
 
-// vssh fork: o `Function` num documento que exige Trusted Types.
+// vssh fork: o `Function` do site, compilado pelo `Function` nativo.
 //
-// O construtor `Function` do Chrome recusa um TrustedScript ("does not accept TrustedString
-// arguments"); com Trusted Types exigidos, ele só aceita strings que a política padrão do site
-// aprova. O `eval` aceita um TrustedScript. Daí os dois caminhos daqui:
+// O site chama o nativo uma vez, com os argumentos dele, como sem o motor: num documento que exige
+// Trusted Types, é a política padrão do site que recebe o código e decide. O texto que esse nativo
+// devolve no `toString` dá os parâmetros e o corpo. Os dois passam pelo rewriter juntos, como uma
+// função só, e o motor compila o resultado com o mesmo construtor nativo. O Chrome aceita
+// TrustedScript em todos os argumentos do `Function` sem consultar a política padrão, então o
+// código reescrito vai embrulhado pela política do motor e não volta à do site.
 //
-// - Strings do site vão ao `Function` nativo uma vez, como sem o motor: a política padrão do site
-//   recebe o mesmo código e decide. O código reescrito é compilado pelo `eval` nativo indireto
-//   (escopo global, como o do `Function`), embrulhado pela política do motor, para não voltar à
-//   do site, que recusaria o código reescrito.
-// - Argumentos que já chegam todos como TrustedScript são do próprio motor (o `postMessage` rouba
-//   o `Function` de outro quadro para achar o `globalThis` dele). O nativo os recusaria, então o
-//   motor monta a fonte como o `Function` monta e segue pelo mesmo `eval`.
+// Compilar pelo construtor nativo é o que deixa a pilha igual à do Chrome: o quadro se chama
+// `eval`, a linha do corpo é a terceira do script, e a origem que o V8 escreve pode ser trocada
+// pela do chamador (ver `client/pilha.ts`). O `toString` da função devolve o texto do nativo.
+//
+// Argumentos que já chegam todos como TrustedScript são do próprio motor (o `postMessage` rouba
+// o `Function` de outro quadro para achar o `globalThis` dele) e seguem o mesmo caminho, com a
+// fonte montada como o `Function` a monta.
+const CABECA = /^(async )?function(\*)? anonymous\(/;
+const MARCA = `\n/*vssh-${Math_random().toString(36).slice(2)}*/`;
+
+function partes(texto: string): [string, string, string] | null {
+	const cabeca = CABECA.exec(texto)?.[0];
+	if (!cabeca || !texto.endsWith("\n}")) return null;
+	const corte = texto.indexOf("\n) {\n", cabeca.length);
+	if (corte < 0) return null;
+
+	return [cabeca, texto.slice(cabeca.length, corte), texto.slice(corte + 5, -2)];
+}
+
+function compilarNativo(
+	client: ScramjetClient,
+	ctx: ProxyCtx<any, any>,
+	original: string
+): Function | null {
+	const p = partes(original);
+	if (!p) return null;
+	const [cabeca, parametros, corpo] = p;
+
+	const reescrito = rewriteJs(
+		`(${cabeca}${parametros}${MARCA}) {\n${corpo}\n})`,
+		"(function proxy)",
+		client.context,
+		client.meta
+	);
+	if (typeof reescrito !== "string") return null;
+	const inicio = `(${cabeca}`;
+	const marca = reescrito.indexOf(MARCA);
+	if (!reescrito.startsWith(inicio) || marca < 0 || !reescrito.endsWith("\n})")) return null;
+	const abre = reescrito.indexOf("{\n", marca + MARCA.length);
+	// Entre a marca e a chave só cabe o `)` e o `scramtag` que o rewriter põe em toda função.
+	if (abre < 0 || !/^\)\s*(\/\*scramtag [^*]*\*\/\s*)?$/.test(reescrito.slice(marca + MARCA.length, abre)))
+		return null;
+	const novosParametros = reescrito.slice(inicio.length, marca);
+	const novoCorpo = reescrito.slice(abre + 2, -3);
+
+	const args = novosParametros ? [novosParametros, novoCorpo] : [novoCorpo];
+	const tipados = exigeConfiavel(client)
+		? args.map((a) => embrulhar(client, "TrustedScript", a))
+		: args;
+
+	let criada: Function | undefined;
+	registrarCompilacao(client, () =>
+		criada ? `(${client.natives.call("Function.prototype.toString", criada)})` : ""
+	);
+	criada = Reflect_apply(ctx.fn, undefined, tipados) as Function;
+	client.box.fontesDinamicas.set(criada, original);
+
+	return criada;
+}
+
 function rewriteFunction<T extends string, U extends "construct" | "apply">(
 	ctx: ProxyCtx<T, U>,
 	client: ScramjetClient
@@ -33,8 +90,16 @@ function rewriteFunction<T extends string, U extends "construct" | "apply">(
 		stringifiedFunction = ctx.call().toString();
 	}
 
-	// TODO: also check if the function comes from a weird realm. if so we need to completely block it or do something else weird
-	// not much point rewriting the javascript if it's executing in the top level
+	try {
+		const criada = compilarNativo(client, ctx, stringifiedFunction);
+		if (criada) {
+			ctx.return(criada as any);
+
+			return;
+		}
+	} catch (err) {
+		dbg.warn("Function: o construtor nativo recusou o código reescrito", err);
+	}
 
 	const content = rewriteJs(
 		`return ${stringifiedFunction}`,

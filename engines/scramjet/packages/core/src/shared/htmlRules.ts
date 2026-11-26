@@ -19,13 +19,33 @@ export const htmlRules: {
 			rewriteUrl(value, context, meta, { navigateType: "location" }),
 
 		// url rewrites
-		src: ["embed", "img", "frame", "input", "track"],
+		src: ["embed", "frame", "input", "track"],
 		href: ["a", "area", "image"],
 		data: ["object"],
 		action: ["form"],
 		formaction: ["button", "input", "textarea", "submit"],
 		poster: ["video"],
 		"xlink:href": ["image"],
+	},
+	{
+		// vssh fork: uma imagem `data:` ou `blob:` não sai para a rede, e vai ao navegador como
+		// está. Assim o `img-src` do site (ver `politicaDoMeta`) a recusa ou aceita como o Chrome:
+		// pelo prefixo ela seria uma imagem da origem do motor, que o `'self'` deixa passar.
+		fn: (value, context, meta) => {
+			const texto = value.trim();
+			if (/^data:/i.test(texto)) return value;
+			if (/^blob:/i.test(texto)) return unrewriteBlob(texto, context, meta);
+			// O que o `img-src` do site recusa vai com o endereço de verdade, que a política do
+			// motor também recusa (ver `client/csp.ts`).
+			if (meta.recusaImagem?.(texto)) {
+				try {
+					return new _URL(texto, meta.base).href;
+				} catch {}
+			}
+
+			return rewriteUrl(value, context, meta, { navigateType: "location" });
+		},
+		src: ["img"],
 	},
 	{
 		fn: (value, context, meta, attrs) => {

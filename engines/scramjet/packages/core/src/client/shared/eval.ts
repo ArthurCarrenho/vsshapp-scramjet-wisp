@@ -2,6 +2,7 @@ import { rewriteJs } from "@rewriters/js";
 import { ScramjetClient } from "@client/index";
 import { Object_defineProperty, String } from "@/shared/snapshot";
 import { comoOriginal } from "@/shared/confiavel";
+import { registrarCompilacao } from "@client/pilha";
 
 export default function (client: ScramjetClient, self: Self) {
 	// used for proxying *direct eval*
@@ -14,14 +15,14 @@ export default function (client: ScramjetClient, self: Self) {
 			if (client.box.instanceof(js, "TrustedScript")) js = String(js);
 			if (typeof js !== "string") return js;
 
-			const rewritten = rewriteJs(
-				js,
-				"(direct eval proxy)",
-				client.context,
-				client.meta
+			return comoOriginal(
+				client,
+				"TrustedScript",
+				original,
+				(texto) =>
+					rewriteJs(texto, "(direct eval proxy)", client.context, client.meta),
+				"eval",
 			);
-
-			return comoOriginal(client, "TrustedScript", original, rewritten, "eval");
 		},
 		writable: false,
 		configurable: false,
@@ -39,20 +40,22 @@ export function createIndirectEval(client: ScramjetClient) {
 			if (client.box.instanceof(js, "TrustedScript")) js = String(js);
 			if (typeof js !== "string") return js;
 
-			return indirection(
-				comoOriginal(
-					client,
-					"TrustedScript",
-					original,
+			const codigo = comoOriginal(
+				client,
+				"TrustedScript",
+				original,
+				(texto) =>
 					rewriteJs(
-						js,
+						texto,
 						"(indirect eval proxy)",
 						client.context,
-						client.meta
+						client.meta,
 					) as string,
-					"eval"
-				)
+				"eval",
 			);
+			registrarCompilacao(client, () => String(codigo));
+
+			return indirection(codigo);
 		},
 	});
 	client.box.unproxy.set(proxy, client.global.eval);
