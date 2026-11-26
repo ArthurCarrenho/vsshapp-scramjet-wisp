@@ -97,10 +97,17 @@ export function registrarDoServiceWorker(
 	});
 }
 
-function registroDe(client: ScramjetClient, hash: string): Registro | null {
+function registroDe(
+	client: ScramjetClient,
+	hash: string,
+	avaliado: boolean,
+): Registro | null {
 	const m = client.box.mapas;
 	const r = m.porHash.get(hash);
 	if (r) return r;
+	// Os pendentes são o código do `Function` e do `eval`, e só um quadro de código avaliado pode
+	// ser de um deles: o quadro de um script com arquivo não paga o hash de nenhum.
+	if (!avaliado) return null;
 	while (m.pendentes.length) {
 		const p = m.pendentes.pop()!;
 		let h: string;
@@ -116,29 +123,52 @@ function registroDe(client: ScramjetClient, hash: string): Registro | null {
 	return null;
 }
 
-/** Quantos caracteres o rewriter pôs entre `de` e `ate`, no texto que ele devolveu. */
-function crescimento(rewrites: any[], de: number, ate: number): number {
+/** Quanto texto uma troca acrescenta quando a posição `ate` já passou dela, ou parte dela. */
+function deUma(r: any, ate: number): number {
+	if (r.type === Tipo.Insere) return Math.min(r.size, ate - r.start);
+	if (ate >= r.end) return r.end - r.start - r.str.length;
+
+	return ate - r.start;
+}
+
+/** Quantas trocas começam antes de `pos`. */
+function antesDe(rewrites: any[], pos: number): number {
 	let lo = 0,
 		hi = rewrites.length;
 	while (lo < hi) {
 		const mid = (lo + hi) >> 1;
-		if (rewrites[mid].start < de) lo = mid + 1;
+		if (rewrites[mid].start < pos) lo = mid + 1;
 		else hi = mid;
 	}
-	let delta = 0;
-	for (let i = lo; i < rewrites.length; i++) {
-		const r = rewrites[i];
-		if (r.start >= ate) break;
-		if (r.type === Tipo.Insere) {
-			delta += Math.min(r.size, ate - r.start);
-		} else {
-			const fim = r.end;
-			if (ate >= fim) delta += fim - r.start - r.str.length;
-			else delta += ate - r.start;
-		}
-	}
 
-	return delta;
+	return lo;
+}
+
+// A soma de cada troca inteira até cada índice, feita uma vez por mapa. Um script minificado é uma
+// linha só, e somar as trocas do começo da linha até o quadro a cada pilha custaria milhares de
+// passos por quadro.
+const somas = new WeakMap<any[], Float64Array>();
+
+function somaDe(rewrites: any[]): Float64Array {
+	let s = somas.get(rewrites);
+	if (s && s.length === rewrites.length + 1) return s;
+	s = new Float64Array(rewrites.length + 1);
+	for (let i = 0; i < rewrites.length; i++)
+		s[i + 1] = s[i] + deUma(rewrites[i], Infinity);
+	somas.set(rewrites, s);
+
+	return s;
+}
+
+/** Quantos caracteres o rewriter pôs entre `de` e `ate`, no texto que ele devolveu. */
+function crescimento(rewrites: any[], de: number, ate: number): number {
+	const lo = antesDe(rewrites, de);
+	const k = antesDe(rewrites, ate);
+	if (k <= lo) return 0;
+	const s = somaDe(rewrites);
+	const ultima = rewrites[k - 1];
+
+	return s[k - 1] - s[lo] + deUma(ultima, ate);
 }
 
 /** A linha e a coluna da fonte do site para um quadro, ou `null` quando elas não mudam. */
@@ -146,10 +176,11 @@ export function posicaoOriginal(
 	client: ScramjetClient,
 	quadro: any,
 ): [number, number, number, number] | null {
-	let hash: string, p: number, L: number, C: number;
+	let hash: string, p: number, L: number, C: number, avaliado: boolean;
 	try {
 		hash = quadro.getScriptHash();
 		if (!hash) return null;
+		avaliado = !!quadro.isEval();
 		p = quadro.getPosition();
 		L = quadro.getLineNumber();
 		C = quadro.getColumnNumber();
@@ -158,7 +189,7 @@ export function posicaoOriginal(
 	}
 	if (typeof p !== "number" || typeof L !== "number" || typeof C !== "number")
 		return null;
-	const r = registroDe(client, hash);
+	const r = registroDe(client, hash, avaliado);
 	if (!r || p < r.ini) return null;
 	const rewrites = client.box.sourcemaps[r.tag];
 	if (!rewrites) return null;

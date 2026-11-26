@@ -15,7 +15,13 @@ export function setWasm(u8: Uint8Array | ArrayBuffer) {
 
 const MAGIC = "\0asm".split("").map((x) => x.charCodeAt(0));
 
+// vssh fork: o módulo compila uma vez por realm. Compilar o wasm inteiro de novo a cada reescrita
+// custava meio milissegundo por `Function` e por `eval`, quase o custo inteiro de compilar código
+// do site.
+let iniciado = false;
+
 function initWasm() {
+	if (iniciado) return;
 	if (!(wasm_u8 instanceof Uint8Array))
 		throw new Error("rewriter wasm not found (was setWasm called?)");
 
@@ -28,6 +34,7 @@ function initWasm() {
 	initSync({
 		module: new WebAssembly.Module(wasm_u8 as unknown as BufferSource),
 	});
+	iniciado = true;
 }
 
 type RewriterBox = { rewriter: Rewriter; inUse: boolean };

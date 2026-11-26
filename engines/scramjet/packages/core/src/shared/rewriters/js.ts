@@ -18,6 +18,25 @@ type RewriterResult = {
 	tag: string;
 	errors: string[];
 };
+// vssh fork: as flags que vão ao rewriter, calculadas uma vez por configuração e endereço.
+const flagsGuardadas = new WeakMap<object, Map<string, Record<string, boolean>>>();
+
+function flagsDe(context: ScramjetContext, meta: URLMeta): Record<string, boolean> {
+	let porEndereco = flagsGuardadas.get(context.config);
+	if (!porEndereco) flagsGuardadas.set(context.config, (porEndereco = new Map()));
+	const href = meta.base.href;
+	let flags = porEndereco.get(href);
+	if (!flags) {
+		flags = {};
+		for (const flag of Object_keys(context.config.flags))
+			flags[flag] = flagEnabled(flag as any, context, meta.base);
+		if (porEndereco.size >= 64) porEndereco.delete(porEndereco.keys().next().value!);
+		porEndereco.set(href, flags);
+	}
+
+	return flags;
+}
+
 function rewriteJsWasm(
 	input: string | Uint8Array,
 	source: string | null,
@@ -27,10 +46,7 @@ function rewriteJsWasm(
 ): RewriterResult {
 	const [rewriter, ret] = getRewriter(context, meta);
 
-	const flagsobj = {};
-	for (const flag of Object_keys(context.config.flags)) {
-		flagsobj[flag] = flagEnabled(flag as any, context, meta.base);
-	}
+	const flagsobj = flagsDe(context, meta);
 
 	try {
 		let out: JsRewriterOutput;
