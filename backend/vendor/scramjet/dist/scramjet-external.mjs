@@ -47,6 +47,7 @@ export const {
 	rewriteHtml,
 	rewriteImportMap,
 	rewriteJs,
+	rewriteJsDaRede,
 	rewriteJsInner,
 	rewriteSrcset,
 	rewriteUrl,
