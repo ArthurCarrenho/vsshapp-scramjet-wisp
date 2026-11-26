@@ -27,6 +27,8 @@ export type RewriteUrlOptions = {
 	mode?: string;
 	credentials?: string;
 	destination?: RequestDestination;
+	/** O worker deste endereço nasce de um documento que o site isolou (`client/shared/isolamento.ts`). */
+	isolado?: boolean;
 };
 
 export type URLMeta = {
@@ -135,7 +137,7 @@ export function rewriteUrl(
 			)
 		);
 	} else if (String_startsWith(url, "blob:")) {
-		return context.prefix.href + url;
+		return context.prefix.href + url + (options?.isolado ? "?" + QP.isolado + "=1" : "");
 	} else if (String_startsWith(url, "data:")) {
 		const URL_MAX_LENGTH = 1024 * 1024 * 2;
 		const BUFFER = 1024;
@@ -191,6 +193,7 @@ export function rewriteUrl(
 			paramsInit.set(QP.credentials, options.credentials);
 		if (options?.destination)
 			paramsInit.set(QP.destination, options.destination);
+		if (options?.isolado) paramsInit.set(QP.isolado, "1");
 
 		// specific tracking for sec-fetch-site
 		// don't send for the top level controller calling it in go()
@@ -219,7 +222,8 @@ export function unrewriteUrl(url: string | URL, context: ScramjetContext) {
 		// realistically this shouldn't happen
 		return url;
 	} else if (String_startsWith(url, context.prefix.href + "blob:")) {
-		return url.substring(context.prefix.href.length);
+		// Um endereço `blob:` não tem consulta: a que aparece aqui é do motor (`QP`).
+		return url.substring(context.prefix.href.length).replace(/\?[^#]*/, "");
 	} else if (String_startsWith(url, context.prefix.href + "data:")) {
 		return url.substring(context.prefix.href.length);
 	} else if (

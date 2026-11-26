@@ -58,6 +58,49 @@ export async function subirSites({ porta = 0 } = {}) {
 		const u = new URL(req.url, `http://${host}`);
 		pedidos.push({ host, caminho: u.pathname, metodo: req.method });
 
+		// ── isolado.localhost — o site que pede o isolamento de origem ─────────────────────
+		//
+		// O documento vem com COOP e COEP, e no Chrome roda isolado: `crossOriginIsolated` é `true`,
+		// `SharedArrayBuffer` é um nome do global e o relógio tem passo de 5 µs. Os quadros cobrem
+		// as três formas que a política de permissões separa: o da mesma origem herda, o de outra
+		// origem só é isolado com `allow="cross-origin-isolated"`, e o worker segue quem o criou.
+		// `/medida` é a mesma medida sem os cabeçalhos, para o site que não pede nada. O Chrome só
+		// isola uma origem confiável, e por isso estes hosts são `*.localhost`, que ele trata como
+		// o `https`.
+		const MEDIR = `
+			const medir = () => {
+			  let passo = 1e9, ultimo = performance.now();
+			  for (let i = 0; i < 2e5; i++) { const t = performance.now(); if (t !== ultimo) { passo = Math.min(passo, t - ultimo); ultimo = t; } }
+			  return { isolado: self.crossOriginIsolated, sab: typeof SharedArrayBuffer, nome: 'SharedArrayBuffer' in self,
+			    memoria: typeof performance.measureUserAgentSpecificMemory, passo: Math.round(passo * 1000) };
+			};`;
+		const ISOLAM = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cross-Origin-Resource-Policy": "cross-origin" };
+		if (u.pathname === "/medida/trabalho.js") {
+			res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-store", ...(u.searchParams.has("coep") ? ISOLAM : {}) });
+			return res.end(`${MEDIR}\npostMessage(medir());`);
+		}
+		if (u.pathname === "/medida/quadro") {
+			return html(res, pagina("quadro-da-medida", `<script>${MEDIR}
+				parent.postMessage({ tipo: 'medida', de: ${JSON.stringify(u.searchParams.get("de") || "")}, r: medir() }, '*');</script>`),
+			u.searchParams.has("coep") ? ISOLAM : {});
+		}
+		if (u.pathname === "/medida") {
+			const pede = host.startsWith("isolado.");
+			const terceiro = `http://terceiro.${host.split(".").slice(1).join(".")}:${P}`;
+			const q = pede ? "&coep" : "";
+			return html(res, pagina(pede ? "isolado" : "medida", `
+				<iframe src="/medida/quadro?de=mesma${q}"></iframe>
+				<iframe src="${terceiro}/medida/quadro?de=outra${q}"></iframe>
+				<iframe src="${terceiro}/medida/quadro?de=outra-com-allow${q}" allow="cross-origin-isolated"></iframe>
+				<script>${MEDIR}
+				  window.__medida = { pagina: medir(), quadros: {}, trabalho: null, trabalhoDeBlob: null };
+				  addEventListener('message', (e) => { if (e.data && e.data.tipo === 'medida') window.__medida.quadros[e.data.de] = e.data.r; });
+				  new Worker('/medida/trabalho.js?${q.slice(1)}').onmessage = (e) => { window.__medida.trabalho = e.data; };
+				  const fonte = ${JSON.stringify(MEDIR)} + '\\npostMessage(medir());';
+				  new Worker(URL.createObjectURL(new Blob([fonte], { type: 'text/javascript' }))).onmessage = (e) => { window.__medida.trabalhoDeBlob = e.data; };
+				</script>`), pede ? ISOLAM : {});
+		}
+
 		// ── anuncios.teste — o que o adblock deve derrubar ──────────────────────────────────
 		if (host === "anuncios.teste") {
 			if (u.pathname === "/pixel.gif") {
