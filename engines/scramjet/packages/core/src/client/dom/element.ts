@@ -4,6 +4,7 @@ import {
 	TextEncoder_encode,
 	Object_keys,
 	Object_defineProperty,
+	_URL,
 } from "@/shared/snapshot";
 import { base64Decode, bytesToBase64 } from "@/shared/util";
 import { rewriteCss, unrewriteCss } from "@rewriters/css";
@@ -137,8 +138,10 @@ export default function (client: ScramjetClient, self: typeof window) {
 			self.HTMLEmbedElement,
 			self.HTMLScriptElement,
 			self.HTMLSourceElement,
+			self.HTMLTrackElement,
+			self.HTMLInputElement,
 		],
-		href: [self.HTMLAnchorElement, self.HTMLLinkElement],
+		href: [self.HTMLAnchorElement, self.HTMLLinkElement, self.HTMLAreaElement, self.HTMLBaseElement],
 		data: [self.HTMLObjectElement],
 		action: [self.HTMLFormElement],
 		formaction: [self.HTMLButtonElement, self.HTMLInputElement],
@@ -170,20 +173,38 @@ export default function (client: ScramjetClient, self: typeof window) {
 
 	const attrs = Object_keys(attrObject);
 
+	// A propriedade do atributo `formaction` se chama `formAction`. Sem a troca dela, a página que
+	// escreve `botao.formAction = "/enviar"` deixa no atributo o endereço cru, e o formulário vai
+	// para a origem do motor.
+	const propriedadeDe: Record<string, string> = { formaction: "formAction" };
+
 	for (const attr of attrs) {
 		for (const element of attrObject[attr]) {
+			if (!element) continue;
+			const propriedade = propriedadeDe[attr] ?? attr;
 			const descriptor = client.natives.call(
 				"Object.getOwnPropertyDescriptor",
 				null,
 				element.prototype,
-				attr,
+				propriedade,
 			);
-			// O atributo sem propriedade no Chrome (`formaction`, `imagesrcset`: as propriedades
-			// são `formAction` e `imageSrcset`) não ganha uma.
+			// O atributo sem propriedade no Chrome (`imagesrcset`, que é `imageSrcset`) não ganha
+			// uma.
 			if (!descriptor) continue;
 			const acessores = {
 				get() {
-					if (["src", "data", "href", "action", "formaction"].includes(attr)) {
+					// O `<base>` guarda o endereço do site no atributo, e o navegador o resolveria
+					// contra o endereço do motor.
+					if (attr === "href" && element === self.HTMLBaseElement) {
+						const cru = this.getAttribute("href");
+						if (cru === null) return "";
+						try {
+							return new _URL(cru, client.url).href;
+						} catch {
+							return cru;
+						}
+					}
+					if (["src", "data", "href", "action", "formaction", "poster"].includes(attr)) {
 						return enderecoDoSite(client, descriptor.get.call(this));
 					}
 					// O `content` de um `<meta>` só muda numa CSP, e o do site está no atributo guardado.
@@ -217,7 +238,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 					configurable: true,
 				});
 			}
-			Object_defineProperty(element.prototype, attr, {
+			Object_defineProperty(element.prototype, propriedade, {
 				get: acessores.get,
 				set: acessores.set,
 			});

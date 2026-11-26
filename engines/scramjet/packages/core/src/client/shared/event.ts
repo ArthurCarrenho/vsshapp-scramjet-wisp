@@ -3,6 +3,7 @@ import { ScramjetClient } from "@client/index";
 import { AnyFunction } from "@/types";
 import { getOwnPropertyDescriptorHandler } from "@client/helpers";
 import { vistaDe } from "@client/janela-cruzada";
+import { particaoDoStorage } from "@client/dom/storage";
 import {
 	_Map,
 	Object_defineProperty,
@@ -135,7 +136,7 @@ export default function (client: ScramjetClient, self: Self) {
 				// área foi limpa". Entregar o evento seria afirmar isso.
 				if (this.key === null) return false;
 
-				return this.key.startsWith(client.url.host + "@");
+				return this.key.startsWith(particaoDoStorage(client, self));
 			},
 			key() {
 				if (this.key === null) return null;
