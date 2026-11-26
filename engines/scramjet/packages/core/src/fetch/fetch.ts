@@ -395,7 +395,6 @@ function marcarRede(
 		`e${Number.isFinite(comprimento) && comprimento > 0 ? comprimento : ""}`,
 		`c${codificacao}`,
 		`r${reiniciou ? 1 : 0}`,
-		`q${/(^|[\s,])h3=/.test(original.get("alt-svc") || "") ? 1 : 0}`,
 	];
 	const marca = `${MARCA_DE_REDE};desc="${partes.join(" ")}"`;
 	const existente = headers.get("server-timing");

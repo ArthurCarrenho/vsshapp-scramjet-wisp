@@ -80,7 +80,6 @@ export default function (client: ScramjetClient, _self: Self) {
 		e: number | null;
 		c: string;
 		r: boolean;
-		q: boolean;
 	};
 	const cache = new WeakMap<object, Rede | null>();
 	const redeDe = (entrada: any): Rede | null => {
@@ -90,7 +89,7 @@ export default function (client: ScramjetClient, _self: Self) {
 			const nome = String(client.descriptors.get("PerformanceEntry.prototype.name", entrada));
 			if (nome.startsWith(client.context.prefix.href)) {
 				const url = new _URL(client.unrewriteUrl(nome));
-				rede = { url, t: true, d: null, e: null, c: "", r: false, q: false };
+				rede = { url, t: true, d: null, e: null, c: "", r: false };
 				for (const st of nativoServidor!.call(entrada) as any[]) {
 					if (nomeDoServidor!.call(st) !== MARCA_DE_REDE) continue;
 					for (const parte of String(descricaoDoServidor!.call(st)).split(" ")) {
@@ -100,7 +99,6 @@ export default function (client: ScramjetClient, _self: Self) {
 						else if (parte[0] === "e") rede.e = v ? Number(v) : null;
 						else if (parte[0] === "c") rede.c = v;
 						else if (parte[0] === "r") rede.r = v === "1";
-						else if (parte[0] === "q") rede.q = v === "1";
 					}
 				}
 			}
@@ -134,14 +132,10 @@ export default function (client: ScramjetClient, _self: Self) {
 	const zeraFechado = (entrada: any, rede: Rede, nativo: number) =>
 		fechado(entrada, rede) ? 0 : nativo;
 
+	// O transporte pede HTTP/2 a todo servidor https e não fala HTTP/3. O servidor sabe por qual
+	// protocolo o pedido chegou, e o registro diz o mesmo.
 	campo("nextHopProtocol", (entrada, rede) =>
-		fechado(entrada, rede)
-			? ""
-			: rede.url.protocol !== "https:"
-				? "http/1.1"
-				: rede.q
-					? "h3"
-					: "h2"
+		fechado(entrada, rede) ? "" : rede.url.protocol !== "https:" ? "http/1.1" : "h2"
 	);
 	campo("deliveryType", () => "");
 	campo("workerStart", () => 0);
@@ -155,12 +149,11 @@ export default function (client: ScramjetClient, _self: Self) {
 	campo("encodedBodySize", (entrada, rede, nativo) =>
 		fechado(entrada, rede) ? 0 : codificado(rede, nativo)
 	);
-	campo("transferSize", (entrada, rede, nativo) => {
-		if (fechado(entrada, rede)) return 0;
-		const corpo = codificado(rede, nativo);
-
-		return corpo > 0 ? corpo + 300 : nativo;
-	});
+	// O Chrome soma 300 bytes de cabeçalho ao corpo de todo pedido que foi à rede, também quando
+	// a resposta não tem corpo.
+	campo("transferSize", (entrada, rede, nativo) =>
+		fechado(entrada, rede) ? 0 : codificado(rede, nativo) + 300
+	);
 	campo("secureConnectionStart", (entrada, rede) => {
 		if (fechado(entrada, rede) || rede.url.protocol !== "https:") return 0;
 

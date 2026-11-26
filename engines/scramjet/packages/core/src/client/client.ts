@@ -47,6 +47,7 @@ import {
 	_WeakMap,
 } from "@/shared/snapshot";
 import { createIndirectEval } from "./shared/eval";
+import { recusarCiclo } from "./shared/proto";
 
 const protoDe = Object.getPrototypeOf;
 const ehProtoDe = Object.prototype.isPrototypeOf;
@@ -853,6 +854,7 @@ return { apply, construct };
 		const proxy = new Proxy(value, h);
 		this.box.unproxy.set(proxy, value);
 		h.getOwnPropertyDescriptor = getOwnPropertyDescriptorHandler;
+		h.setPrototypeOf = recusarCiclo(this, () => proxy);
 		// Preserve original property descriptor (enumerable, configurable, etc.)
 		Object_defineProperty(target, prop, {
 			value: proxy,

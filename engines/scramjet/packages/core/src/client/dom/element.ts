@@ -315,6 +315,9 @@ export default function (client: ScramjetClient, self: typeof window) {
 
 	client.Proxy("Element.prototype.setAttribute", {
 		apply(ctx) {
+			// O navegador recusa a chamada sem os dois argumentos ou num `this` que não é elemento.
+			// Ela vai a ele como veio, e o erro que a página recebe é o do Chrome.
+			if (ctx.args.length < 2 || !client.box.instanceof(ctx.this, "Element")) return;
 			let [name, value] = ctx.args;
 			const tagName = ctx.this.tagName.toLowerCase();
 

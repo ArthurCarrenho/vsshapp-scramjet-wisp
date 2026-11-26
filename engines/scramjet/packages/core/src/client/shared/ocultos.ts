@@ -44,11 +44,16 @@ export default function (client: ScramjetClient, self: Self) {
 	};
 	const comGlobais = (alvo: unknown) =>
 		alvo === self || alvo === self.Object.prototype || ehJanela(alvo);
+	// O `Error` de outro quadro do motor leva o mesmo acessor. A página pede o descritor dele com
+	// o `Object` deste quadro, e o do quadro de dentro com o `Object` de lá.
+	const ehError = (alvo: unknown) =>
+		alvo === self.Error ||
+		(typeof alvo === "function" && !!client.box.ctors.Error?.includes(alvo));
 	const oculta = (alvo: unknown, k: PropertyKey) =>
 		simboloDoMotor(k) ||
 		(comGlobais(alvo) && doMotor(k)) ||
-		(ocultaNoError && alvo === self.Error && k === "prepareStackTrace");
-	const temOculta = (alvo: unknown) => comGlobais(alvo) || (ocultaNoError && alvo === self.Error);
+		(ocultaNoError && k === "prepareStackTrace" && ehError(alvo));
+	const temOculta = (alvo: unknown) => comGlobais(alvo) || (ocultaNoError && ehError(alvo));
 
 	for (const caminho of ["Object.keys", "Object.getOwnPropertyNames"]) {
 		client.Proxy(caminho, {
@@ -99,8 +104,7 @@ export default function (client: ScramjetClient, self: Self) {
 	});
 	client.Proxy("Reflect.has", {
 		apply(ctx) {
-			if (ctx.args[0] === self.Error && ctx.args[1] === "prepareStackTrace")
-				ctx.return(false);
+			if (ctx.args[1] === "prepareStackTrace" && ehError(ctx.args[0])) ctx.return(false);
 		},
 	});
 	client.Proxy("Object.prototype.hasOwnProperty", {

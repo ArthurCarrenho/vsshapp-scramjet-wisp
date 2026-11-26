@@ -1,4 +1,5 @@
 import { ScramjetClient } from "@client/index";
+import { cobrir } from "@client/shared/proto";
 import { Tap } from "@/Tap";
 import { iswindow } from "@client/entry";
 import { SCRAMJETCLIENT } from "@/symbols";
@@ -66,7 +67,7 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 			enumerable: true,
 		};
 		if (native.get) {
-			desc.get = new Proxy(native.get, {
+			desc.get = cobrir(client, native.get, {
 				apply() {
 					return client.url[prop];
 				},
@@ -74,7 +75,7 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 			client.box.unproxy.set(desc.get, native.get);
 		}
 		if (native.set) {
-			desc.set = new Proxy(native.set, {
+			desc.set = cobrir(client, native.set, {
 				apply(target, that, args) {
 					if (prop === "href") {
 						// special case
@@ -107,20 +108,20 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 	}
 
 	// functions
-	fakeLocation.toString = new Proxy(self.location.toString, {
+	fakeLocation.toString = cobrir(client, self.location.toString, {
 		apply() {
 			return client.url.href;
 		},
 	});
 
 	if (self.location.valueOf)
-		fakeLocation.valueOf = new Proxy(self.location.valueOf, {
+		fakeLocation.valueOf = cobrir(client, self.location.valueOf, {
 			apply() {
 				return fakeLocation;
 			},
 		});
 	if (self.location.assign)
-		fakeLocation.assign = new Proxy(self.location.assign, {
+		fakeLocation.assign = cobrir(client, self.location.assign, {
 			apply(target, that, args) {
 				args[0] = client.rewriteUrl(args[0]);
 				Reflect_apply(target, self.location, args);
@@ -136,13 +137,13 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 			},
 		});
 	if (self.location.reload)
-		fakeLocation.reload = new Proxy(self.location.reload, {
+		fakeLocation.reload = cobrir(client, self.location.reload, {
 			apply(target, that, args) {
 				Reflect_apply(target, self.location, args);
 			},
 		});
 	if (self.location.replace)
-		fakeLocation.replace = new Proxy(self.location.replace, {
+		fakeLocation.replace = cobrir(client, self.location.replace, {
 			apply(target, that, args) {
 				args[0] = client.rewriteUrl(args[0]);
 				Reflect_apply(target, self.location, args);
@@ -167,7 +168,7 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 			"ancestorOrigins"
 		);
 		if (native?.get) {
-			const get = new Proxy(native.get, {
+			const get = cobrir(client, native.get, {
 				apply() {
 					return origensAncestrais(client, self);
 				},
