@@ -25,6 +25,7 @@ import {
 } from "./headers";
 import { _URL } from "@/shared/snapshot";
 import { MARCA_DE_REDE } from "@/shared/rede";
+import { aprenderDicas, prepararDicas } from "./dicas";
 
 export async function doHandleFetch(
 	handler: ScramjetFetchHandler,
@@ -64,13 +65,34 @@ export async function doHandleFetch(
 		}
 	}
 
-	const newheaders = rewriteRequestHeaders(request, handler, parsed);
+	await prepararDicas();
+	let newheaders = rewriteRequestHeaders(request, handler, parsed);
 
 	let responseBody: BodyType;
-	const response = await doNetworkFetch(handler, request, parsed, newheaders);
+	let response = await doNetworkFetch(handler, request, parsed, newheaders);
 
 	// set-cookie needs to take the raw headers. after this, we can flatten the headers into a ScramjetHeaders object
 	await handleCookies(handler, request, parsed, response.rawHeaders);
+
+	// vssh fork: o `Critical-CH` de uma navegação de nível de cima refaz o pedido uma vez, com os
+	// hints que ela pediu (ver `fetch/dicas.ts`). O corpo da primeira resposta é descartado, e os
+	// cookies dela já valem para a segunda, como na pilha de rede do Chrome.
+	let reiniciou = false;
+	const topo =
+		parsed.destination === "document" ||
+		(parsed.destination === "iframe" && !parsed.isIframe);
+	if (topo && aprenderDicas(parsed.url, newheaders, response.rawHeaders)) {
+		if (request.method === "GET" || request.method === "HEAD") {
+			try {
+				await (response.body as any)?.cancel?.();
+			} catch {}
+			newheaders = rewriteRequestHeaders(request, handler, parsed);
+			response = await doNetworkFetch(handler, request, parsed, newheaders);
+			await handleCookies(handler, request, parsed, response.rawHeaders);
+			aprenderDicas(parsed.url, newheaders, response.rawHeaders);
+			reiniciou = true;
+		}
+	}
 
 	if (isDocument(parsed)) {
 		// for document.referer
@@ -153,7 +175,7 @@ export async function doHandleFetch(
 	if (response.body && !isRedirect(response)) {
 		const tamanho = medirCorpo(response);
 		responseBody = await rewriteBody(handler, request, parsed, response);
-		marcarRede(responseHeaders, response, tamanho(), parsed.meta.origin.origin);
+		marcarRede(responseHeaders, response, tamanho(), parsed.meta.origin.origin, reiniciou);
 
 		// After rewriting HTML, the body is a JS string which will be encoded as
 		// UTF-8 by the Response constructor. Normalize the Content-Type charset so
@@ -353,7 +375,8 @@ function marcarRede(
 	headers: ScramjetHeaders,
 	response: BareResponse,
 	tamanho: number | null,
-	origem: string
+	origem: string,
+	reiniciou: boolean
 ) {
 	const original = ScramjetHeaders.fromRawHeaders(response.rawHeaders);
 	const comprimento = Number(original.get("content-length"));
@@ -371,6 +394,8 @@ function marcarRede(
 		`d${tamanho ?? ""}`,
 		`e${Number.isFinite(comprimento) && comprimento > 0 ? comprimento : ""}`,
 		`c${codificacao}`,
+		`r${reiniciou ? 1 : 0}`,
+		`q${/(^|[\s,])h3=/.test(original.get("alt-svc") || "") ? 1 : 0}`,
 	];
 	const marca = `${MARCA_DE_REDE};desc="${partes.join(" ")}"`;
 	const existente = headers.get("server-timing");

@@ -1,3 +1,4 @@
+import { aplicarDicas } from "./dicas";
 import {
 	rewriteUrl,
 	ScramjetContext,
@@ -362,7 +363,46 @@ export function rewriteRequestHeaders(
 
 	applyFetchMetadataHeaders(headers, request, parsed, handler);
 
+	aplicarDicas(
+		headers,
+		parsed.url,
+		parsed.destination === "document" ||
+			(parsed.destination === "iframe" && !parsed.isIframe),
+		originUrl ? originUrl.origin : null
+	);
+
+	const prioridade = prioridadeDe(parsed);
+	headers.delete("priority");
+	if (prioridade && parsed.url.protocol === "https:") headers.set("Priority", prioridade);
+
 	return headers;
+}
+
+/**
+ * vssh fork: o `Priority` (RFC 9218) que o Chrome escreve num pedido HTTP/2 ou HTTP/3, depois de
+ * todos os outros. Ele sai da prioridade que a pilha de rede dá ao pedido, que o service worker não
+ * vê; o valor aqui é o do caso comum de cada destino. A urgência 3 sem `i` é o padrão do
+ * protocolo, e aí o Chrome não manda o cabeçalho: um script assíncrono ou de outra origem sai sem
+ * ele.
+ */
+function prioridadeDe(parsed: ScramjetFetchParsed): string | null {
+	switch (parsed.destination) {
+		case "document":
+		case "iframe":
+		case "frame":
+			return "u=0, i";
+		case "style":
+			return "u=0";
+		case "font":
+			return "u=1";
+		case "image":
+			return "i";
+		case "":
+		case undefined:
+			return "u=1, i";
+		default:
+			return null;
+	}
 }
 
 /**
