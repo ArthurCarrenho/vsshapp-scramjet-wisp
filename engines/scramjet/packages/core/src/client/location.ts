@@ -9,25 +9,49 @@ import {
 	Object_defineProperty,
 } from "@/shared/snapshot";
 
+const URLPROPS = [
+	"protocol",
+	"hash",
+	"host",
+	"hostname",
+	"href",
+	"origin",
+	"pathname",
+	"port",
+	"search",
+];
+
+/**
+ * vssh fork: o `location` de um worker. No Chrome o `WorkerLocation` não tem propriedade própria:
+ * os acessores e o `toString` moram no protótipo. O objeto do site também não tem, e os acessores
+ * do protótipo respondem por ele com o endereço do site.
+ */
+function localDoWorker(client: ScramjetClient, self: GlobalThis) {
+	const falso = Object.create(self.WorkerLocation.prototype);
+	for (const prop of URLPROPS)
+		client.Trap(`WorkerLocation.prototype.${prop}`, {
+			get(ctx) {
+				return ctx.this === falso ? client.url[prop] : ctx.get();
+			},
+		});
+	client.Proxy("WorkerLocation.prototype.toString", {
+		apply(ctx) {
+			if (ctx.this === falso) ctx.return(client.url.href);
+		},
+	});
+
+	return falso;
+}
+
 export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
-	const Location = iswindow ? self.Location : self.WorkerLocation;
+	if (!iswindow) return localDoWorker(client, self);
+	const Location = self.Location;
 	// location cannot be Proxy()d
 	const fakeLocation: any = {};
 	Object_setPrototypeOf(fakeLocation, Location.prototype);
 
-	// for some reason it's on the object for Location and on the prototype for WorkerLocation??
-	const descriptorSource = iswindow ? self.location : Location.prototype;
-	const urlprops = [
-		"protocol",
-		"hash",
-		"host",
-		"hostname",
-		"href",
-		"origin",
-		"pathname",
-		"port",
-		"search",
-	];
+	const descriptorSource = self.location;
+	const urlprops = URLPROPS;
 	for (const prop of urlprops) {
 		const native = client.natives.call(
 			"Object.getOwnPropertyDescriptor",
