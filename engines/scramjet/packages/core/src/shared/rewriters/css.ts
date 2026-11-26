@@ -1,6 +1,13 @@
 import { URLMeta, rewriteUrl, unrewriteUrl } from "@rewriters/url";
 import { flagEnabled, ScramjetContext } from "@/shared";
-import { String } from "@/shared/snapshot";
+import { String, _URL } from "@/shared/snapshot";
+import { QP } from "@/fetch/parse";
+
+// vssh fork: o endereço de um `url()` como o autor o escreveu. O CSSOM devolve o valor especificado
+// como veio (`url("/x.png")`), e a reescrita o troca por um endereço absoluto do motor. O que não é
+// absoluto vai no parâmetro `$au` do endereço reescrito, e a desreescrita o devolve. O estilo
+// computado é sempre absoluto no Chrome, e passa `absoluto` para ignorar o parâmetro.
+const ABSOLUTO = /^[a-z][a-z0-9+.-]*:/i;
 
 export function rewriteCss(
 	css: string,
@@ -10,15 +17,29 @@ export function rewriteCss(
 	return handleCss("rewrite", css, context, meta);
 }
 
-export function unrewriteCss(css: string, context: ScramjetContext) {
-	return handleCss("unrewrite", css, context);
+export function unrewriteCss(
+	css: string,
+	context: ScramjetContext,
+	opcoes?: { absoluto?: boolean }
+) {
+	return handleCss("unrewrite", css, context, undefined, opcoes?.absoluto === true);
+}
+
+function doAutor(endereco: string, context: ScramjetContext): string | null {
+	if (!endereco.startsWith(context.prefix.href)) return null;
+	try {
+		return new _URL(endereco).searchParams.get(QP.autor);
+	} catch {
+		return null;
+	}
 }
 
 function handleCss(
 	type: "rewrite" | "unrewrite",
 	css: string,
 	context: ScramjetContext,
-	meta?: URLMeta
+	meta?: URLMeta,
+	absoluto = false
 ) {
 	// vssh fork: substitui o regex compartilhado (vk6/ading2210) por um tokenizer com estado. O
 	// regex casava `url(`/`@import` DENTRO de comentários `/* */` e de strings de seletor (ex.:
@@ -26,10 +47,17 @@ function handleCss(
 	// O tokenizer varre respeitando fronteiras: só reescreve url()/@import em posição real de valor.
 	css = String(css);
 	const n = css.length;
-	const encode = (u: string) =>
-		type === "rewrite"
-			? rewriteUrl(u.trim(), context, meta!)
-			: unrewriteUrl(u.trim(), context);
+	const encode = (u: string) => {
+		const t = u.trim();
+		if (type === "rewrite")
+			return rewriteUrl(t, context, meta!, ABSOLUTO.test(t) ? undefined : { autor: t });
+		if (!absoluto) {
+			const autor = doAutor(t, context);
+			if (autor !== null) return autor;
+		}
+
+		return unrewriteUrl(t, context);
+	};
 
 	// Só na ida, e só quando há meta (o unrewrite devolve CSS pra página e não deve inventar
 	// diferença: o que foi descartado na ida já não está no CSSOM pra ser lido de volta).

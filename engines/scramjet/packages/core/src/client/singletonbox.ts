@@ -10,6 +10,8 @@ import {
 
 export class SingletonBox {
 	clients: ScramjetClient[] = [];
+	/** Os clientes dos ouvintes de evento em execução, o mais recente no fim (ver `dom/open.ts`). */
+	entradas: ScramjetClient[] = [];
 	globals: Map<Self, ScramjetClient> = new Map();
 	documents: Map<Document, ScramjetClient> = new Map();
 	histories: Map<History, ScramjetClient> = new Map();

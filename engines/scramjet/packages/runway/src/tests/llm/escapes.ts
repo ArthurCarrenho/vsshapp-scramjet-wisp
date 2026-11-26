@@ -105,7 +105,7 @@ export default [
 							}
 						} catch (error) {
 							resultEl.textContent = JSON.stringify({
-								status: "error",
+								status: error && error.name === "SecurityError" ? "blocked" : "error",
 								message: String(error && error.message || error),
 							});
 						}
@@ -141,7 +141,9 @@ export default [
 				if (parsed.status === "error") {
 					throw new Error(parsed.message);
 				}
-				if (parsed.status !== "safe") {
+				// The sender is another origin for the page: reading its `eval` throws the
+				// SecurityError, as in Chrome, and that is safe too.
+				if (parsed.status !== "safe" && parsed.status !== "blocked") {
 					throw new Error(`unexpected status: ${parsed.status}`);
 				}
 			} finally {

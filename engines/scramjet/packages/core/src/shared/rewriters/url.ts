@@ -29,6 +29,8 @@ export type RewriteUrlOptions = {
 	destination?: RequestDestination;
 	/** O worker deste endereço nasce de um documento que o site isolou (`client/shared/isolamento.ts`). */
 	isolado?: boolean;
+	/** O endereço como o autor o escreveu numa folha de estilo (ver `rewriters/css.ts`). */
+	autor?: string;
 };
 
 export type URLMeta = {
@@ -194,6 +196,7 @@ export function rewriteUrl(
 		if (options?.destination)
 			paramsInit.set(QP.destination, options.destination);
 		if (options?.isolado) paramsInit.set(QP.isolado, "1");
+		if (options?.autor !== undefined) paramsInit.set(QP.autor, options.autor);
 
 		// specific tracking for sec-fetch-site
 		// don't send for the top level controller calling it in go()

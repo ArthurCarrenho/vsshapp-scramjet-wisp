@@ -1,6 +1,64 @@
 import { ScramjetClient } from "@client/index";
 import { SCRAMJETCLIENT } from "@/symbols";
-import { String } from "@/shared/snapshot";
+import { String, _URL } from "@/shared/snapshot";
+import { quadrosCrus } from "@client/pilha";
+
+// vssh fork: o endereço relativo de um `window.open` se resolve pela página de entrada, a que
+// começou o script em execução (o "entry settings object" do HTML), e não pela janela dona do
+// método. `parent.window.open("x.html")` num quadro abre o `x.html` ao lado do quadro. A página de
+// entrada é a do ouvinte de evento em execução, quando há um; fora dele, a do quadro mais antigo da
+// pilha, achada pelo documento ou pelo `<script src>` que o carregou. Sem nenhuma das duas, vale a
+// dona do método.
+function clienteDoArquivo(client: ScramjetClient, arquivo: string): ScramjetClient | null {
+	let endereco: string;
+	try {
+		endereco = client.unrewriteUrl(arquivo);
+	} catch {
+		return null;
+	}
+	const janelas = client.box.clients.filter((c) => {
+		try {
+			return !!(c.global as any).document;
+		} catch {
+			return false;
+		}
+	});
+	for (const c of janelas) if (c.url.href === endereco) return c;
+	for (const c of janelas) {
+		try {
+			const scripts = client.natives.call(
+				"Document.prototype.querySelectorAll",
+				(c.global as any).document,
+				"script[scramjet-attr-src]",
+			) as ArrayLike<Element>;
+			for (let i = 0; i < scripts.length; i++) {
+				const src = client.natives.call("Element.prototype.getAttribute", scripts[i], "scramjet-attr-src");
+				if (src && new _URL(src, c.url.href).href === endereco) return c;
+			}
+		} catch {}
+	}
+
+	return null;
+}
+
+function clienteDeEntrada(client: ScramjetClient): ScramjetClient {
+	const doOuvinte = client.box.entradas[client.box.entradas.length - 1];
+	if (doOuvinte) return doOuvinte;
+	const quadros = quadrosCrus(client, 200);
+	if (quadros && quadros.length) {
+		const ultimo = quadros[quadros.length - 1];
+		let arquivo: string | null = null;
+		try {
+			arquivo = ultimo.getScriptNameOrSourceURL?.() || ultimo.getFileName?.() || null;
+		} catch {}
+		if (arquivo) {
+			const dono = clienteDoArquivo(client, arquivo);
+			if (dono) return dono;
+		}
+	}
+
+	return client;
+}
 
 export default function (client: ScramjetClient) {
 	client.Proxy("window.open", {
@@ -11,7 +69,8 @@ export default function (client: ScramjetClient) {
 				// blank also opens an about:blank window
 				if (url !== "") {
 					// note that null or anything else will *not* open an about:blank window
-					ctx.args[0] = client.rewriteUrl(url);
+					const entrada = clienteDeEntrada(client);
+					ctx.args[0] = entrada === client ? client.rewriteUrl(url) : client.rewriteUrl(new _URL(url, entrada.meta.base).href);
 				}
 			}
 

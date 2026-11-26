@@ -6,6 +6,9 @@ import { Object_defineProperty } from "@/shared/snapshot";
 import { vistaDe } from "@client/janela-cruzada";
 
 export function createWrapFn(client: ScramjetClient, self: GlobalThis) {
+	// vssh fork: o `eval` nativo deste realm, lido antes de o site rodar. O `window.eval` do momento
+	// pode ser uma função que o site pôs ali, e ela tem de voltar como o site a escreveu.
+	const evalNativo = self.eval;
 	// `parent` e `top` são resolvidos SOB DEMANDA, não uma vez na construção do client — e a
 	// diferença aparece na tela.
 	//
@@ -90,7 +93,7 @@ export function createWrapFn(client: ScramjetClient, self: GlobalThis) {
 
 	return function (identifier: any) {
 		if (identifier === self.location) return client.locationProxy;
-		if (identifier === self.eval) {
+		if (identifier === evalNativo) {
 			return client.indirectEval;
 		}
 		if (iswindow) {
@@ -200,7 +203,9 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 				return client.wrapfn(this.eval);
 			},
 			set(value: any) {
-				this.eval = value;
+				// O `eval` que o site leu daqui é o indireto do motor; devolvido ao lugar, ele volta
+				// a ser o nativo, e o `eval(...)` direto do resto da página continua direto.
+				this.eval = value === client.indirectEval ? client.box.unproxy.get(value) ?? value : value;
 			},
 			configurable: false,
 			enumerable: false,

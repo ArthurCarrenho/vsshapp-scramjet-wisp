@@ -5,6 +5,7 @@ import { comoOriginal } from "@/shared/confiavel";
 import { registrarCompilacao } from "@client/pilha";
 import { registrarScript } from "@client/posicoes";
 import { cobrir } from "@client/shared/proto";
+import { AnyFunction } from "@/types";
 
 // vssh fork: o começo em branco de uma fonte fica fora do rewriter.
 //
@@ -90,8 +91,25 @@ function registrar(client: ScramjetClient, r: Reescrita) {
 export default function (client: ScramjetClient, self: Self) {
 	// used for proxying *direct eval*
 	// eval("...") -> eval($scramjet$rewrite("..."))
+	// O texto de uma função como o navegador o escreve, sem o `toString` que o motor troca.
+	const fonteNativa = (fn: unknown): string => {
+		try {
+			return String(client.natives.call("Function.prototype.toString", fn as AnyFunction));
+		} catch {
+			return "";
+		}
+	};
 	Object_defineProperty(self, client.config.globals.rewritefn, {
-		value: function (js: any) {
+		value: function (js: any, chamado?: unknown) {
+			// vssh fork: o reescritor passa o `eval` chamado (`eval($rewrite(x, eval))`). Só uma função
+			// nativa compila o texto: o `eval` de um realm, ou um nativo qualquer que o site pôs no
+			// lugar. Uma função do site (um parâmetro chamado `eval`, um `window.eval` trocado) recebe
+			// o texto que o site passou, e o `eval` indireto do motor reescreve sozinho.
+			if (arguments.length > 1) {
+				if (chamado === client.indirectEval || client.box.unproxy.has(chamado as any)) return js;
+				if (typeof chamado !== "function" || !/\{\s*\[native code\]\s*\}$/.test(fonteNativa(chamado)))
+					return js;
+			}
 			// if eval is called on anything other than a string, we should just return it unchanged
 			// the one exception is TrustedScript, which can just be stringified and rewritten
 			const original = js;

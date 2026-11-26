@@ -4,6 +4,7 @@ import { ScramjetClient } from "@client/index";
 import { _URL, Object_defineProperty, Reflect_apply } from "@/shared/snapshot";
 import { AnyFunction } from "@/types";
 import { POLLUTANT } from "./realm";
+import { quadrosCrus } from "@client/pilha";
 import { embrulhar } from "@/shared/confiavel";
 import { ehVista, origemDe } from "@client/janela-cruzada";
 
@@ -16,6 +17,26 @@ function origemDeAlvoValida(alvo: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+// Os quadros do próprio motor: o pacote dele e as funções que ele monta (`*.sj`).
+const DO_MOTOR = /\/scram\/|scramjet[\w.-]*\.m?js|\.sj$/;
+
+/** Se quem chamou é código de fora do motor: o primeiro quadro que não é do motor, fora do prefixo. */
+function chamadaDeFora(client: ScramjetClient): boolean {
+	const quadros = quadrosCrus(client, 40);
+	if (!quadros) return false;
+	for (const q of quadros) {
+		let nome = "";
+		try {
+			nome = String(q.getScriptNameOrSourceURL?.() || q.getFileName?.() || "");
+		} catch {}
+		if (!nome || DO_MOTOR.test(nome)) continue;
+
+		return !nome.startsWith(client.context.prefix.href);
+	}
+
+	return false;
 }
 
 export default function (client: ScramjetClient, self: Self) {
@@ -51,6 +72,7 @@ export default function (client: ScramjetClient, self: Self) {
 				// so we have to use `$setrealm` which will pollute this with an object from the real realm
 
 				let pollutant;
+				let desconhecido = false;
 
 				if (typeof ctx.args[0] === "object" && ctx.args[0] !== null) {
 					pollutant = ctx.args[0]; // try to use the first object we can find because it's more reliable
@@ -65,6 +87,19 @@ export default function (client: ScramjetClient, self: Self) {
 					pollutant = ctx.this[POLLUTANT]; // lastly try to use the object from $setrealm
 				} else {
 					pollutant = {}; // give up
+					// vssh fork: sem objeto nenhum e sem o `$setrealm` do reescritor, quem chama é o
+					// site com o `postMessage(...)` solto, ou código que o motor não reescreveu, como o
+					// shell que hospeda as abas. A pilha separa os dois: o código do site vem de um
+					// endereço sob o prefixo do motor. O de fora vai marcado, e quem recebe não atribui
+					// a mensagem à própria janela.
+					desconhecido = chamadaDeFora(client);
+				}
+				// O `$setrealm` vale para uma chamada: o objeto que ele deixou no alvo sai aqui, e
+				// a chamada seguinte sem ele não herda o remetente desta.
+				if (!desconhecido && pollutant === ctx.this?.[POLLUTANT]) {
+					try {
+						delete ctx.this[POLLUTANT];
+					} catch {}
 				}
 
 				// and now we can steal Function from the caller's realm
@@ -80,7 +115,7 @@ export default function (client: ScramjetClient, self: Self) {
 
 				// invoking stolen function will give us the caller's globalThis, remember scramjet has already proxied it!!!
 				const callerGlobalThisProxied: Self = Function(codigo("return globalThis"))();
-				const callerClient = callerGlobalThisProxied[SCRAMJETCLIENT];
+				const callerClient = desconhecido ? undefined : callerGlobalThisProxied[SCRAMJETCLIENT];
 
 				// this WOULD be enough but the source argument of MessageEvent has to return the caller's window
 				// and if we just call it normally it would be coming from here, which WILL NOT BE THE CALLER'S because the accessor is from the parent
@@ -94,16 +129,27 @@ export default function (client: ScramjetClient, self: Self) {
 				// 	self.document,
 				// 	callerClient === client
 				// );
-				const inherit =
-					callerClient.url.href === "about:srcdoc" ||
-					callerClient.url.href === "about:blank";
-				ctx.args[0] = {
-					$scramjet$messagetype: "window",
-					$scramjet$origin: inherit
-						? callerClient.global.parent[SCRAMJETCLIENT].url.origin
-						: callerClient.url.origin,
-					$scramjet$data: ctx.args[0],
-				};
+				// vssh fork: um remetente de fora do motor não tem cliente. A mensagem dele chega
+				// marcada (`$scramjet$fora`), e o `source` dela é a vista de outra origem (ver
+				// `event.ts`), nunca a janela crua da origem do motor.
+				if (!callerClient) {
+					ctx.args[0] = {
+						$scramjet$messagetype: "window",
+						$scramjet$fora: true,
+						$scramjet$data: ctx.args[0],
+					};
+				} else {
+					const inherit =
+						callerClient.url.href === "about:srcdoc" ||
+						callerClient.url.href === "about:blank";
+					ctx.args[0] = {
+						$scramjet$messagetype: "window",
+						$scramjet$origin: inherit
+							? callerClient.global.parent[SCRAMJETCLIENT].url.origin
+							: callerClient.url.origin,
+						$scramjet$data: ctx.args[0],
+					};
+				}
 				// console.error("?", ctx.args);
 				// eval("debugger");
 

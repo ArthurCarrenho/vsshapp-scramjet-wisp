@@ -5,6 +5,15 @@ import { ScramjetContext } from "@/shared";
 import { _URL } from "./snapshot";
 import { politicaDoMeta } from "@/fetch/headers";
 import { allowNativo } from "@/shared/permissoes";
+import { rewriteJs } from "@rewriters/js";
+import { ATRIBUTOS_DE_EVENTO } from "@/shared/eventos";
+
+function todosOsElementos(nomes: string[]): Record<string, "*"> {
+	const regra: Record<string, "*"> = {};
+	for (const nome of nomes) regra[nome] = "*";
+
+	return regra;
+}
 
 export const htmlRules: {
 	[key: string]: "*" | string[] | ((...any: any[]) => string | null);
@@ -60,7 +69,9 @@ export const htmlRules: {
 		},
 
 		src: ["script"],
-		href: ["link"],
+		// O `<script>` de SVG aponta para o código pelo `href` (ou o `xlink:href`), e não pelo `src`.
+		href: ["link", "script"],
+		"xlink:href": ["script"],
 	},
 	{
 		fn: (value, context, meta) => {
@@ -149,6 +160,15 @@ export const htmlRules: {
 	{
 		fn: (value, context, meta) => rewriteCss(value, context, meta),
 		style: "*",
+	},
+	// vssh fork: um atributo de evento (`onclick`, `onerror`, ...) é código que o navegador compila
+	// na página. Ele passa pelo reescritor no HTML e também quando o site o põe por `setAttribute`,
+	// `setAttributeNS`, `setAttributeNode` ou `setNamedItem`; sem a reescrita, ele leria o `top`, o
+	// `location` e os cookies da origem do motor.
+	{
+		fn: (value, context, meta) =>
+			rewriteJs(value, "(atributo de evento)", context, meta) as string,
+		...todosOsElementos(ATRIBUTOS_DE_EVENTO),
 	},
 	{
 		fn: (value, context, meta) => {

@@ -4,7 +4,7 @@ use coverage_macro::coverage_checked;
 use oxc::{
 	allocator::{Allocator, StringBuilder},
 	ast::ast::{
-		AssignmentExpression, AssignmentTarget, AssignmentTargetMaybeDefault,
+		Argument, AssignmentExpression, AssignmentTarget, AssignmentTargetMaybeDefault,
 		AssignmentTargetProperty, AssignmentTargetPropertyIdentifier, BindingPattern,
 		BindingPatternKind, BindingProperty, CallExpression, ComputedMemberExpression,
 		DebuggerStatement, ExportAllDeclaration, ExportNamedDeclaration, Expression, ForStatement,
@@ -637,15 +637,30 @@ where
 	#[coverage_checked(CallExpression)]
 	fn visit_call_expression(&mut self, it: &CallExpression<'data>) {
 		audit_skip!(it.callee, "top(0): none of the unsafe globals can be called as functions, other than eval which we handle above");
-		if let Expression::Identifier(s) = &it.callee {
+		// vssh fork: os parênteses em volta do nome não mudam a chamada, e `(eval)(x)` também é um
+		// `eval` direto.
+		let mut callee = &it.callee;
+		while let Expression::ParenthesizedExpression(p) = callee {
+			callee = &p.expression;
+		}
+		if let Expression::Identifier(s) = callee {
 			// if it's optional that actually makes it an indirect eval which is handled separately
 			if s.name == "eval" && !it.optional {
-				self.jschanges.add(rewrite!(
-					it.span,
-					Eval {
-						inner: Span::new(s.span.end + 1, it.span.end - 1),
-					}
-				));
+				// vssh fork: o `$rewrite(` envolve o primeiro argumento pela posição dele. Contada
+				// do fim do nome, ela caía dentro de um comentário ou depois de um espaço
+				// (`eval ("x")`, `eval/* c */("x")`) e o código saía quebrado. O `eval` chamado vai
+				// junto, e o cliente só reescreve a fonte quando ele é o nativo: um `eval` que é
+				// parâmetro ou que o site trocou recebe o texto que o site passou.
+				if let Some(primeiro) = it.arguments.first() {
+					let (inner, com_callee) = match primeiro {
+						Argument::SpreadElement(_) => (
+							Span::new(primeiro.span().start, it.arguments.last().unwrap().span().end),
+							false,
+						),
+						_ => (primeiro.span(), true),
+					};
+					self.jschanges.add(rewrite!(it.span, Eval { inner, callee: com_callee }));
+				}
 
 				// then we walk the arguments, but not the callee, since we want it to resolve to
 				// the real eval
@@ -919,13 +934,17 @@ where
 	fn visit_unary_expression(&mut self, it: &UnaryExpression<'data>) {
 		// `delete x.postMessage` apaga a propriedade de `x`. Com o `$wrapPostMessage(x)` no lugar de
 		// `x`, o `delete` apagaria a do objeto que o wrapper devolve, e a de `x` ficaria.
+		//
+		// O mesmo vale para `delete o.eval`, `o.location`, `o.top` e `o.parent`: com o nome trocado
+		// por `$sj_eval`, o `delete` apagaria uma propriedade que não existe, e a do objeto ficaria.
 		if matches!(it.operator, UnaryOperator::Delete) {
+			let apaga = |nome: &str| nome == "postMessage" || UNSAFE_GLOBALS.contains(&nome);
 			let objeto = match &it.argument {
-				Expression::StaticMemberExpression(s) if s.property.name == "postMessage" => {
+				Expression::StaticMemberExpression(s) if apaga(s.property.name.as_str()) => {
 					Some(&s.object)
 				}
 				Expression::ComputedMemberExpression(c) => match &c.expression {
-					Expression::StringLiteral(lit) if lit.value == "postMessage" => Some(&c.object),
+					Expression::StringLiteral(lit) if apaga(lit.value.as_str()) => Some(&c.object),
 					_ => None,
 				},
 				_ => None,

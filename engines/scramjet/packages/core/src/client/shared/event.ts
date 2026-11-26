@@ -1,8 +1,9 @@
 import { iswindow } from "@client/entry";
+import { SCRAMJETCLIENT } from "@/symbols";
 import { ScramjetClient } from "@client/index";
 import { AnyFunction } from "@/types";
 import { getOwnPropertyDescriptorHandler } from "@client/helpers";
-import { vistaDe } from "@client/janela-cruzada";
+import { vistaDeFora } from "@client/janela-cruzada";
 import { particaoDoStorage } from "@client/dom/storage";
 import {
 	_Map,
@@ -14,6 +15,28 @@ import {
 } from "@/shared/snapshot";
 
 const realOnEvent = Symbol_for("scramjet original onevent function");
+
+// A primeira janela acima de `self` que não é do motor, ou `null`.
+function janelaDeFora(self: any): any {
+	let atual = self;
+	for (let i = 0; i < 32; i++) {
+		let acima: any;
+		try {
+			acima = atual.parent;
+		} catch {
+			return null;
+		}
+		if (!acima || acima === atual) return null;
+		try {
+			if (!acima[SCRAMJETCLIENT]) return acima;
+		} catch {
+			return null;
+		}
+		atual = acima;
+	}
+
+	return null;
+}
 
 export default function (client: ScramjetClient, self: Self) {
 	const handlers = {
@@ -99,13 +122,29 @@ export default function (client: ScramjetClient, self: Self) {
 			},
 			source() {
 				if (this.source === null) return null;
+				// O remetente que o envelope não reconheceu: a janela de fora do motor mais próxima
+				// acima desta (o shell), como vista de outra origem, ou nenhuma.
+				if (typeof this.data === "object" && this.data?.$scramjet$fora === true && this.source === self) {
+					const fora = janelaDeFora(self);
 
-				return vistaDe(client, this.source);
+					return fora ? vistaDeFora(client, fora) : null;
+				}
+
+				return vistaDeFora(client, this.source);
 			},
 			origin() {
 				if (!iswindow) return "";
 				if (typeof this.data === "object" && "$scramjet$origin" in this.data)
 					return this.data.$scramjet$origin;
+				// De fora do motor, a origem é a do remetente de verdade.
+				if (typeof this.data === "object" && this.data?.$scramjet$fora === true) {
+					const fora = this.source === self ? janelaDeFora(self) : this.source;
+					try {
+						return fora ? String(fora.location.origin) : "null";
+					} catch {
+						return "null";
+					}
+				}
 
 				return client.url.origin;
 			},
@@ -201,9 +240,14 @@ export default function (client: ScramjetClient, self: Self) {
 					});
 				}
 
-				const rv = Reflect_apply(target, that, args);
-
-				return rv;
+				// O ouvinte roda com a página dele como a de entrada, a que resolve o endereço de um
+				// `window.open` (ver `dom/open.ts`).
+				client.box.entradas.push(client);
+				try {
+					return Reflect_apply(target, that, args);
+				} finally {
+					client.box.entradas.pop();
+				}
 			},
 			getOwnPropertyDescriptor: getOwnPropertyDescriptorHandler,
 		});

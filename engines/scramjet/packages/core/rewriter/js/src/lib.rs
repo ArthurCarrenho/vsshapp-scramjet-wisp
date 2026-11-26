@@ -532,6 +532,28 @@ mod tests {
 		assert!(saida.contains("{x: $temploc}"), "saiu `{saida}`");
 	}
 
+	/// O `$rewrite(` de um `eval` direto envolve o primeiro argumento pela posição dele, e leva o
+	/// `eval` chamado para o cliente conferir se é o nativo. Contado do fim do nome, ele caía depois
+	/// de um espaço ou dentro de um comentário, e o código saía quebrado.
+	#[test]
+	fn eval_direto_envolve_o_primeiro_argumento() {
+		assert_eq!(reescrever("eval (\"1\")", true), "eval ($rewrite(\"1\",eval))");
+		assert_eq!(reescrever("eval/* c */(\"1\")", true), "eval/* c */($rewrite(\"1\",eval))");
+		assert_eq!(reescrever("(eval)(\"1\", 2)", true), "(eval)($rewrite(\"1\",eval), 2)");
+		assert_eq!(reescrever("eval(...a)", true), "eval($rewrite(...a))");
+		assert_eq!(reescrever("eval()", true), "eval()");
+	}
+
+	/// `delete o.eval` apaga a propriedade de `o`; com o nome trocado por `$sj_eval`, ela ficava.
+	#[test]
+	fn delete_de_propriedade_insegura_apaga_a_propriedade() {
+		assert_eq!(reescrever("delete o.eval; delete o[\"top\"];", true), "delete o.eval; delete o[\"top\"];");
+		assert_eq!(
+			reescrever("delete Error.prepareStackTrace;", true),
+			"delete Error.$sj_prepareStackTrace;"
+		);
+	}
+
 	/// `[location = 1] = x` aplicava o `TempVar` sobre o span do `location = 1` INTEIRO e saía
 	/// `[$temploc] = x`: o default sumia, e `location` recebia `undefined` em vez de 1 quando `x[0]`
 	/// não existe. Sobre o span do alvo vira `[$temploc = 1]`, que é o que o lado do OBJETO
