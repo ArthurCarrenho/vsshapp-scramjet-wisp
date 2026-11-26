@@ -3,14 +3,17 @@ import { rewriteUrl, unrewriteUrl, URLMeta } from "@rewriters/url";
 import { ScramjetClient } from "@client/index";
 import { blobNativo, ehUrlDeDados } from "./fetch";
 import { enderecoDeConexao } from "@client/csp";
+import { MARCA_DE_REDE } from "@/shared/rede";
 
 export default function (client: ScramjetClient, self: Self) {
 	let worker;
 	// if (self.Worker && flagEnabled("syncxhr", client.url)) {
 	// 	worker = client.natives.construct("Worker", config.files.sync);
 	// }
-	const ARGS = Symbol("xhr original args");
-	const HEADERS = Symbol("xhr headers");
+	// vssh fork: o que o motor guarda de um pedido fica fora dele. Uma chave no próprio objeto
+	// apareceria em `Object.getOwnPropertySymbols(xhr)`, que num Chrome é vazio.
+	const argsDe = new WeakMap<object, any[]>();
+	const cabecalhosDe = new WeakMap<object, Record<string, string>>();
 
 	client.Proxy("XMLHttpRequest.prototype.open", {
 		apply(ctx) {
@@ -19,20 +22,21 @@ export default function (client: ScramjetClient, self: Self) {
 					blobNativo(client, ctx.args[1]) ??
 					enderecoDeConexao(client, String(ctx.args[1]), () => client.rewriteUrl(ctx.args[1]));
 			if (ctx.args[2] === undefined) ctx.args[2] = true;
-			ctx.this[ARGS] = ctx.args;
+			argsDe.set(ctx.this, ctx.args);
 		},
 	});
 
 	client.Proxy("XMLHttpRequest.prototype.setRequestHeader", {
 		apply(ctx) {
-			const headers = ctx.this[HEADERS] || (ctx.this[HEADERS] = {});
+			let headers = cabecalhosDe.get(ctx.this);
+			if (!headers) cabecalhosDe.set(ctx.this, (headers = {}));
 			headers[ctx.args[0]] = ctx.args[1];
 		},
 	});
 
 	client.Proxy("XMLHttpRequest.prototype.send", {
 		apply(ctx) {
-			const args = ctx.this[ARGS];
+			const args = argsDe.get(ctx.this);
 			if (!args || args[2]) return;
 			// Um `data:` síncrono não sai para a rede: o navegador responde, ou o `connect-src` recusa.
 			if (ehUrlDeDados(args[1])) return;
@@ -54,7 +58,7 @@ export default function (client: ScramjetClient, self: Self) {
 			client.natives.call("Worker.prototype.postMessage", worker, {
 				sab,
 				args,
-				headers: ctx.this[HEADERS],
+				headers: cabecalhosDe.get(ctx.this),
 				body: ctx.args[0],
 			});
 
@@ -140,15 +144,19 @@ export default function (client: ScramjetClient, self: Self) {
 			const headers = headerstring.split("\r\n");
 
 			for (const [i, header] of headers.entries()) {
-				if (header.toLowerCase().startsWith("link:")) {
-					headers[i] = `Link: ${unrewriteLinkHeader(
+				const nome = header.slice(0, header.indexOf(":")).toLowerCase();
+				if (nome === "link") {
+					headers[i] = `${header.slice(0, 5)} ${unrewriteLinkHeader(
 						header.slice(5).trim(),
 						client.context
 					)}`;
+				} else if (nome === "server-timing" && header.includes(MARCA_DE_REDE)) {
+					const limpo = semMarcaDeRede(header.slice(nome.length + 1));
+					headers[i] = limpo ? `${header.slice(0, nome.length + 1)} ${limpo}` : "";
 				}
 			}
 
-			ctx.return(headers.join("\r\n"));
+			ctx.return(headers.filter((h, i) => h || i === headers.length - 1).join("\r\n"));
 		},
 	});
 	client.Proxy("XMLHttpRequest.prototype.getResponseHeader", {
@@ -157,11 +165,23 @@ export default function (client: ScramjetClient, self: Self) {
 			if (!header) return header;
 			// same as setAttribute: the header name is stringified by the platform, so it may
 			// arrive as a non-string and .toLowerCase() would throw
-			if (String(ctx.args[0]).toLowerCase() === "link") {
+			const nome = String(ctx.args[0]).toLowerCase();
+			if (nome === "link") {
 				ctx.return(unrewriteLinkHeader(header, client.context));
+			} else if (nome === "server-timing" && header.includes(MARCA_DE_REDE)) {
+				ctx.return(semMarcaDeRede(header) || null);
 			}
 		},
 	});
+}
+
+/** O `Server-Timing` sem a entrada que o motor acrescenta (ver `marcarRede` em `fetch/fetch.ts`). */
+export function semMarcaDeRede(valor: string): string {
+	return valor
+		.split(",")
+		.filter((parte) => parte.trim().split(";")[0].trim() !== MARCA_DE_REDE)
+		.join(",")
+		.trim();
 }
 
 export function unrewriteLinkHeader(header: string, context: ScramjetContext) {

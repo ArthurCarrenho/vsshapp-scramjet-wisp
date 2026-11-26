@@ -47,7 +47,7 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 	if (!iswindow) return localDoWorker(client, self);
 	const Location = self.Location;
 	// location cannot be Proxy()d
-	const fakeLocation: any = {};
+	let fakeLocation: any = {};
 	Object_setPrototypeOf(fakeLocation, Location.prototype);
 
 	const descriptorSource = self.location;
@@ -211,6 +211,15 @@ export function createLocationProxy(client: ScramjetClient, self: GlobalThis) {
 		);
 		if (d) Object_defineProperty(fakeLocation, Symbol.toPrimitive, { ...d, configurable: false });
 	}
+
+	// As chaves saem na ordem do `Location` do Chrome, que começa por `valueOf` e
+	// `ancestorOrigins`.
+	const ordenado = Object.create(Location.prototype);
+	const chaves = Reflect.ownKeys(fakeLocation);
+	const ordem = client.natives.call("Reflect.ownKeys", null, self.location) as (string | symbol)[];
+	for (const k of [...ordem.filter((k) => chaves.includes(k)), ...chaves.filter((k) => !ordem.includes(k))])
+		Object_defineProperty(ordenado, k, Object.getOwnPropertyDescriptor(fakeLocation, k)!);
+	fakeLocation = ordenado;
 
 	return fakeLocation;
 }

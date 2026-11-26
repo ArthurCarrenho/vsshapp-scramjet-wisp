@@ -1,8 +1,9 @@
 import { ScramjetClient } from "@client/index";
-import { unrewriteLinkHeader } from "./xmlhttprequest";
+import { semMarcaDeRede, unrewriteLinkHeader } from "./xmlhttprequest";
 import { String } from "@/shared/snapshot";
 import { unrewriteBlob } from "@rewriters/url";
 import { enderecoDeConexao } from "@client/csp";
+import { MARCA_DE_REDE } from "@/shared/rede";
 
 /**
  * Capture the page's intended `init.mode` / `init.credentials` and forward
@@ -92,19 +93,34 @@ export default function (client: ScramjetClient) {
 		},
 	});
 
-	// TODO: this needs to be only for response objects created from a fetch
+	// vssh fork: os cabeçalhos de uma resposta são o mesmo objeto a cada leitura, e o nativo quando
+	// não há o que desfazer: no Chrome `r.headers === r.headers`, e o objeto recusa `append`. Uma
+	// cópia sai só quando o `Link` leva endereços do motor ou o `Server-Timing` leva a marca da rede
+	// (ver `marcarRede` em `fetch/fetch.ts`).
+	const copias = new WeakMap<object, Headers>();
 	client.Trap("Response.prototype.headers", {
 		get(ctx) {
 			const headers = ctx.get() as Headers;
-			const newHeaders = new Headers();
+			const guardada = copias.get(ctx.this as object);
+			if (guardada) return guardada;
+			const link = headers.get("link");
+			const tempo = headers.get("server-timing");
+			const comLink = !!link && link.includes(client.context.prefix.href);
+			const comMarca = !!tempo && tempo.includes(MARCA_DE_REDE);
+			if (!comLink && !comMarca) return headers;
 
+			const newHeaders = new Headers();
 			for (const [key, value] of headers.entries()) {
-				if (key.toLowerCase() === "link") {
+				if (key === "link") {
 					newHeaders.append(key, unrewriteLinkHeader(value, client.context));
+				} else if (key === "server-timing") {
+					const limpo = semMarcaDeRede(value);
+					if (limpo) newHeaders.append(key, limpo);
 				} else {
 					newHeaders.append(key, value);
 				}
 			}
+			copias.set(ctx.this as object, newHeaders);
 
 			return newHeaders;
 		},

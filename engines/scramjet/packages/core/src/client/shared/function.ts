@@ -167,6 +167,14 @@ export default function (client: ScramjetClient, _self: Self) {
 		"(async function* () {})",
 	]) {
 		const construtor = construtorDe(codigo);
-		if (construtor) client.RawProxy(construtor.prototype, "constructor", handler);
+		if (!construtor) continue;
+		// O `Function.prototype.constructor` é o próprio `Function` global, como no Chrome:
+		// `(function () {}).constructor === Function`.
+		if (construtor === client.box.unproxy.get(_self.Function)) {
+			const d = Object.getOwnPropertyDescriptor(construtor.prototype, "constructor");
+			if (d) Object.defineProperty(construtor.prototype, "constructor", { ...d, value: _self.Function });
+			continue;
+		}
+		client.RawProxy(construtor.prototype, "constructor", handler);
 	}
 }

@@ -34,7 +34,16 @@ export default function (client: ScramjetClient, self: Self) {
 	const ocultaNoError = client.flagEnabled("cleanErrors");
 	// O `Object.prototype` leva os acessores que o código reescrito chama
 	// (`$scramjet__location` e os outros, ver `wrap.ts`) e o `$scramjet$setrealmfn`.
-	const comGlobais = (alvo: unknown) => alvo === self || alvo === self.Object.prototype;
+	// Uma janela de outro quadro do motor também tem os globais dele.
+	const ehJanela = (alvo: any) => {
+		try {
+			return !!alvo && typeof alvo === "object" && alvo.window === alvo;
+		} catch {
+			return false;
+		}
+	};
+	const comGlobais = (alvo: unknown) =>
+		alvo === self || alvo === self.Object.prototype || ehJanela(alvo);
 	const oculta = (alvo: unknown, k: PropertyKey) =>
 		simboloDoMotor(k) ||
 		(comGlobais(alvo) && doMotor(k)) ||

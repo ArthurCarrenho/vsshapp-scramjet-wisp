@@ -67,9 +67,12 @@ export async function rewriteResponseHeaders(
 	rawHeaders: RawHeaders
 ): Promise<ScramjetHeaders> {
 	const headers = ScramjetHeaders.fromRawHeaders(rawHeaders);
+	// vssh fork: a resposta de um `fetch` ou de um XHR não vira documento, e as políticas dela não
+	// valem no navegador. Ela chega ao site com os cabeçalhos que o servidor mandou, como no Chrome.
+	const soDados = !parsed.destination;
 
-	const politica = headers.get("content-security-policy");
-	for (const cspHeader of SEC_HEADERS) {
+	const politica = soDados ? null : headers.get("content-security-policy");
+	if (!soDados) for (const cspHeader of SEC_HEADERS) {
 		headers.delete(cspHeader);
 	}
 	const traduzida = politica
@@ -101,7 +104,7 @@ export async function rewriteResponseHeaders(
 		headers.set("content-type", "text/event-stream");
 	}
 
-	const permissoes = headers.get("permissions-policy");
+	const permissoes = soDados ? null : headers.get("permissions-policy");
 	if (permissoes != null) {
 		const traduzida = politicaDePermissoes(permissoes);
 		if (traduzida) headers.set("permissions-policy", traduzida);
