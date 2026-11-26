@@ -48,6 +48,8 @@ import {
 } from "@/shared/snapshot";
 import { createIndirectEval } from "./shared/eval";
 
+const protoDe = Object.getPrototypeOf;
+
 // https://github.com/Microsoft/TypeScript/issues/27024#issuecomment-421529650
 type IfEquals<T, U, Y = unknown, N = never> =
 	(<G>() => G extends T ? 1 : 2) extends <G>() => G extends U ? 1 : 2 ? Y : N;
@@ -201,6 +203,8 @@ export class ScramjetClient {
 	bare: BareCompatibleClient;
 
 	natives: NativeStore;
+	/** O `Error.prepareStackTrace` que o site pôs (ver `shared/wrap.ts`). */
+	pstDoSite: unknown = undefined;
 	descriptors: DescriptorStore;
 	wrapfn: (i: any, ...args: any) => any;
 
@@ -650,6 +654,7 @@ export class ScramjetClient {
 		if (!target) return;
 		if (!prop) return;
 		if (!Reflect_has(target, prop)) return;
+		target = this.donoNoGlobal(target, prop);
 
 		const value = Reflect_get(target, prop);
 		const originalDescriptor = Object_getOwnPropertyDescriptor(target, prop);
@@ -869,10 +874,24 @@ return { apply, construct };
 
 		this.RawTrap(target, prop, descriptor);
 	}
+	/**
+	 * vssh fork: num worker, `setTimeout`, `fetch` e o resto do `WorkerGlobalScope` moram no
+	 * protótipo do global, e a troca do motor fica lá. Definida no próprio global, ela viraria uma
+	 * chave a mais em `Object.getOwnPropertyNames(self)`.
+	 */
+	donoNoGlobal(target: any, prop: string): any {
+		if (target !== this.global) return target;
+		let o = target;
+		while (o && !Object_getOwnPropertyDescriptor(o, prop))
+			o = protoDe(o);
+
+		return o ?? target;
+	}
 	RawTrap(target: any, prop: string, descriptor: Trap<any>) {
 		if (!target) return;
 		if (!prop) return;
 		if (!Reflect_has(target, prop)) return;
+		target = this.donoNoGlobal(target, prop);
 
 		const oldDescriptor = this.natives.call(
 			"Object.getOwnPropertyDescriptor",

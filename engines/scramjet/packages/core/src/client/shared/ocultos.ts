@@ -84,6 +84,12 @@ export default function (client: ScramjetClient, self: Self) {
 			if (oculta(ctx.args[0], ctx.args[1] as PropertyKey)) ctx.return(false);
 		},
 	});
+	client.Proxy("Reflect.has", {
+		apply(ctx) {
+			if (ctx.args[0] === self.Error && ctx.args[1] === "prepareStackTrace")
+				ctx.return(false);
+		},
+	});
 	client.Proxy("Object.prototype.hasOwnProperty", {
 		apply(ctx) {
 			if (oculta(ctx.this, ctx.args[0])) ctx.return(false);

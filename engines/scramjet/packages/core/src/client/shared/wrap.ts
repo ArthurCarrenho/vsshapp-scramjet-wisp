@@ -118,7 +118,8 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 				str === "location" ||
 				str === "parent" ||
 				str === "top" ||
-				str === "eval"
+				str === "eval" ||
+				str === "prepareStackTrace"
 			)
 				return client.config.globals.wrappropertybase + str;
 
@@ -200,6 +201,32 @@ export default function (client: ScramjetClient, self: GlobalThis) {
 			},
 			set(value: any) {
 				this.eval = value;
+			},
+			configurable: false,
+			enumerable: false,
+		}
+	);
+
+	// vssh fork: o `Error.prepareStackTrace` do site. O formatador que o `cleanErrors` instala no
+	// `Error` (ver `error.ts`) é o que o V8 chama, e num Chrome sem o motor a propriedade não
+	// existe. O site lê e escreve a dele aqui: `undefined` até ele mesmo pôr um valor.
+	const ocultaPst = client.flagEnabled("cleanErrors");
+	Object_defineProperty(
+		self.Object.prototype,
+		client.config.globals.wrappropertybase + "prepareStackTrace",
+		{
+			get: function () {
+				if (ocultaPst && this === self.Error) return client.pstDoSite;
+
+				return this.prepareStackTrace;
+			},
+			set(value: any) {
+				if (ocultaPst && this === self.Error) {
+					client.pstDoSite = value;
+
+					return;
+				}
+				this.prepareStackTrace = value;
 			},
 			configurable: false,
 			enumerable: false,

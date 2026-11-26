@@ -191,3 +191,24 @@ export function enderecoDeConexao(
 
 	return reescrever();
 }
+
+const RECUSADO = "~recusado/";
+
+/** Um endereço da origem do motor, fora do prefixo dele, que guarda o endereço do site. */
+export function enderecoRecusado(client: ScramjetClient, url: string): string {
+	const prefixo = client.context.prefix;
+
+	return `${prefixo.origin}${prefixo.pathname.replace(/\/$/, "")}${RECUSADO}${encodeURIComponent(url)}`;
+}
+
+/** O endereço do site guardado em `enderecoRecusado`, ou `null`. */
+export function doRecusado(client: ScramjetClient, url: string): string | null {
+	const prefixo = client.context.prefix;
+	const base = `${prefixo.origin}${prefixo.pathname.replace(/\/$/, "")}${RECUSADO}`;
+	if (!url.startsWith(base)) return null;
+	try {
+		return decodeURIComponent(url.slice(base.length));
+	} catch {
+		return null;
+	}
+}

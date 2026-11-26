@@ -164,11 +164,11 @@ export const htmlRules: {
 		// O elemento continua no documento, e `getAttribute("content")` e `.content` devolvem a
 		// política do site. O quadro do Turnstile traz a CSP dele assim e confere que ela vale; sem
 		// ela, o desafio responde `fail`.
-		fn: (value, _context, _meta, attrs) => {
+		fn: (value, context, _meta, attrs) => {
 			if (attrs?.["http-equiv"]?.toLowerCase() !== "content-security-policy")
 				return value;
 
-			return politicaDoMeta(value) ?? "";
+			return politicaDoMeta(value, context.prefix.href) ?? "";
 		},
 		content: ["meta"],
 	},

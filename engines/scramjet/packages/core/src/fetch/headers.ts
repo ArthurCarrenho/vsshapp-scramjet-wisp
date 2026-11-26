@@ -72,9 +72,15 @@ export async function rewriteResponseHeaders(
 	for (const cspHeader of SEC_HEADERS) {
 		headers.delete(cspHeader);
 	}
-	const conexao = politica ? politicaDeConexao(politica) : null;
+	const traduzida = politica
+		? politica
+				.split(",")
+				.map((uma) => politicaDoCabecalho(uma, handler.context.prefix.href))
+				.filter(Boolean)
+				.join(", ")
+		: null;
 	const caixa = politica ? caixaDaPolitica(politica) : null;
-	const doCabecalho = [conexao, caixa].filter(Boolean).join("; ");
+	const doCabecalho = [traduzida, caixa].filter(Boolean).join("; ");
 	if (doCabecalho) headers.set("Content-Security-Policy", doCabecalho);
 
 	for (const urlHeader of URL_HEADERS) {
@@ -225,7 +231,7 @@ const DIRETIVAS_COMO_ESTAO = new Set([
 	"trusted-types",
 ]);
 
-export function politicaDoMeta(valor: string): string | null {
+export function politicaDoMeta(valor: string, prefixo?: string): string | null {
 	const diretivas = new Map<string, string[]>();
 	for (const bruta of valor.split(";")) {
 		const partes = bruta.trim().split(/\s+/).filter(Boolean);
@@ -264,7 +270,11 @@ export function politicaDoMeta(valor: string): string | null {
 				proprio = true;
 			} else proprio = true;
 		}
-		if (proprio) guardadas.unshift("'self'");
+		// No `worker-src` o `'self'` do motor vale só sob o prefixo dele. O worker que a política do
+		// site recusa vai ao navegador num endereço da origem do motor fora do prefixo (ver
+		// `client/csp.ts`), e o navegador o recusa como o Chrome: sem exceção, com o evento `error`
+		// e o `securitypolicyviolation`.
+		if (proprio) guardadas.unshift(nome === "worker-src" && prefixo ? prefixo : "'self'");
 		const semNone = guardadas.filter((f) => f.toLowerCase() !== "'none'");
 		saida.push([nome, ...(semNone.length ? semNone : ["'none'"])].join(" "));
 	}
@@ -745,4 +755,50 @@ export function politicaDePermissoes(valor: string): string {
 	}
 
 	return saida.join(", ");
+}
+
+// As diretivas de busca que o `default-src` governa e que não tocam os scripts do motor.
+const SEM_SCRIPT = [
+	"style-src",
+	"img-src",
+	"font-src",
+	"media-src",
+	"object-src",
+	"frame-src",
+	"child-src",
+	"manifest-src",
+	"connect-src",
+];
+
+/**
+ * vssh fork: a CSP do cabeçalho do site, na parte que não alcança os scripts do motor.
+ *
+ * Os scripts que o motor põe no começo do documento rodam antes de qualquer `<meta>`, e uma
+ * política de cabeçalho os governa desde o primeiro byte; por isso o `script-src` do cabeçalho
+ * fica com o cliente (ver `client/csp.ts`). O resto vai ao navegador como o `<meta>` vai
+ * (`politicaDoMeta`), com o `default-src` escrito em cada diretiva que ele governaria. Com duas
+ * políticas de pé, uma no cabeçalho e outra no `<meta>`, o navegador recusa pelas duas e dispara um
+ * `securitypolicyviolation` por política, como no Chrome.
+ */
+export function politicaDoCabecalho(valor: string, prefixo: string): string | null {
+	const diretivas = new Map<string, string[]>();
+	for (const bruta of valor.split(";")) {
+		const partes = bruta.trim().split(/\s+/).filter(Boolean);
+		if (!partes.length) continue;
+		const nome = partes[0].toLowerCase();
+		if (!diretivas.has(nome)) diretivas.set(nome, partes.slice(1));
+	}
+	const padrao = diretivas.get("default-src");
+	const script = diretivas.get("script-src");
+	if (!diretivas.has("worker-src")) {
+		const recuo = diretivas.get("child-src") ?? script ?? padrao;
+		if (recuo) diretivas.set("worker-src", recuo);
+	}
+	if (padrao)
+		for (const nome of SEM_SCRIPT) if (!diretivas.has(nome)) diretivas.set(nome, padrao);
+	for (const nome of ["default-src", "script-src", "script-src-elem", "script-src-attr"])
+		diretivas.delete(nome);
+	const texto = [...diretivas].map(([n, f]) => [n, ...f].join(" ")).join("; ");
+
+	return texto ? politicaDoMeta(texto, prefixo) : null;
 }

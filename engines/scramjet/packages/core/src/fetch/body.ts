@@ -82,7 +82,9 @@ export async function rewriteBody(
 		case "worker":
 			return rewriteWorkers(
 				new Uint8Array(await response.arrayBuffer()),
-				response.url,
+				// O `sourceURL` de um worker de blob é o endereço que o site criou, que é o que o
+				// Chrome mostra na pilha dele.
+				parsed.url.protocol === "blob:" ? parsed.url.href : response.url,
 				handler.context,
 				parsed.meta,
 				parsed.isModule

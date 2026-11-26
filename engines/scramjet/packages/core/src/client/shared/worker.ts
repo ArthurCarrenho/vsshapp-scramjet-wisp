@@ -1,7 +1,6 @@
 import { ScramjetClient } from "@client/index";
 import { comoOriginal } from "@/shared/confiavel";
-import { cspRecusa } from "@client/csp";
-import { unrewriteBlob } from "@rewriters/url";
+import { cspRecusa, enderecoRecusado } from "@client/csp";
 
 // vssh fork: a URL reescrita de um worker vai ao navegador com o tipo que a do site teria. Num
 // documento que exige Trusted Types, uma string aqui iria à política padrão do site, que não
@@ -9,17 +8,37 @@ import { unrewriteBlob } from "@rewriters/url";
 // subia com o HTML da página no lugar do código.
 
 export default function (client: ScramjetClient, _self: GlobalThis) {
-	// O que o `worker-src` do site recusa vai ao navegador com o endereço de verdade, e a política
-	// do motor o recusa do mesmo jeito (ver `client/csp.ts`).
+	// O Chrome confere a origem do endereço antes da política: um worker de outra origem lança o
+	// SecurityError na hora. Um da mesma origem que o `worker-src` do site recusa vai ao navegador
+	// num endereço que a política do motor recusa (ver `enderecoRecusado`), e falha como no Chrome,
+	// pelo evento `error`, com o `securitypolicyviolation` no endereço do site.
 	const recusado = (texto: string): string | null => {
-		if (!cspRecusa(client, "worker-src", texto)) return null;
 		const t = texto.trim();
-		if (/^blob:/i.test(t)) return unrewriteBlob(t, client.context, client.meta);
+		let url: URL;
 		try {
-			return new URL(t, client.url.href).href;
+			url = new URL(t, client.url.href);
 		} catch {
 			return null;
 		}
+		const deOrigem =
+			url.protocol === "blob:"
+				? (() => {
+						try {
+							return new URL(url.pathname).origin;
+						} catch {
+							return "null";
+						}
+					})()
+				: url.origin;
+		const minha = client.meta.origin.origin;
+		if (url.protocol !== "data:" && deOrigem !== minha)
+			throw new client.global.DOMException(
+				`Failed to construct 'Worker': Script at '${url.href}' cannot be accessed from origin '${minha}'.`,
+				"SecurityError",
+			);
+		if (!cspRecusa(client, "worker-src", t)) return null;
+
+		return enderecoRecusado(client, url.href);
 	};
 
 	client.Proxy("Worker", {

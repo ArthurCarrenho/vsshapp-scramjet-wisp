@@ -31,14 +31,34 @@ let capturando = false;
 /** Verdadeiro enquanto `registrarCompilacao` lê a pilha crua. */
 export const lendoPilhaCrua = () => capturando;
 
+// Com `encapsulateWorkers`, o script de um worker é o carregador do motor, que importa o código do
+// site por um `importScripts` na última linha. A pilha do site passaria por esse quadro, que no
+// Chrome não existe. O endereço dele é o `location` nativo do worker, lido antes de qualquer
+// script do site.
+const carregadorDoWorker: string | null = (() => {
+	try {
+		if (typeof (self as any).WorkerGlobalScope !== "function") return null;
+		if (!(self instanceof (self as any).WorkerGlobalScope)) return null;
+
+		return String(self.location.href);
+	} catch {
+		return null;
+	}
+})();
+
 export function mascarado(
 	client: ScramjetClient,
 	arquivo: string | null | undefined,
 ) {
 	try {
-		return (
-			!!arquivo && client.config.maskedfiles.some((f) => arquivo.endsWith(f))
-		);
+		if (!arquivo) return false;
+		if (
+			arquivo === carregadorDoWorker &&
+			client.flagEnabled("encapsulateWorkers")
+		)
+			return true;
+
+		return client.config.maskedfiles.some((f) => arquivo.endsWith(f));
 	} catch {
 		return false;
 	}
