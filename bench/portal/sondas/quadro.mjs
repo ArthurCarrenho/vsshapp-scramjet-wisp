@@ -11,6 +11,7 @@
 //            reescreveria o código do site; `fn` passa pelo `Function` da página. O padrão é
 //            `raw` no direto e `script` no motor, com `raw` de reserva quando o script falha
 //   ATRASO   ms de espera entre o quadro ficar pronto e a sonda rodar
+//   FIXOS    endereços fixos (ver fixos.mjs)
 //   PERFIL=1 grava um perfil de CPU do CDP no motor enquanto a sonda roda, e põe as 30 funções
 //            com mais amostras próprias em `motor.top`; a coluna direta fica de fora
 //
@@ -18,7 +19,8 @@
 // longa que isso morre com ele: escreva-as para caber.
 import { readFileSync, writeFileSync } from "node:fs";
 import { abrirNavegador } from "../navegador.mjs";
-import { subirPortal } from "../servidor.mjs";
+import { subirPortal, trocarLookup } from "../servidor.mjs";
+import { argumentosDoChrome, lookupComFixos } from "./fixos.mjs";
 
 const ALVO = process.env.ALVO;
 const PROBE = readFileSync(process.env.PROBE, "utf8");
@@ -76,7 +78,8 @@ async function noQuadro(page, modo, antes) {
 	return null;
 }
 
-const nav = await abrirNavegador({ args: ["--no-sandbox"] });
+trocarLookup(lookupComFixos);
+const nav = await abrirNavegador({ args: ["--no-sandbox", ...argumentosDoChrome()] });
 const viewport = { width: 1280, height: 900 };
 
 let direto = null;
