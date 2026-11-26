@@ -9,7 +9,7 @@ import { base64Decode, bytesToBase64 } from "@/shared/util";
 import { rewriteCss, unrewriteCss } from "@rewriters/css";
 import { rewriteHtml, unrewriteHtml } from "@rewriters/html";
 import { rewriteJs } from "@rewriters/js";
-import { unrewriteUrl } from "@rewriters/url";
+import { rewriteBlob, unrewriteUrl } from "@rewriters/url";
 import { SCRAMJETCLIENT } from "@/symbols";
 import { ScramjetClient } from "@client/index";
 import {
@@ -108,6 +108,21 @@ function collectAttributeMap(
 	return attrs;
 }
 
+// O endereço que um elemento guarda, como o site o escreveu. Um `blob:` vai ao navegador com a
+// origem do motor (ver `htmlRules.ts`), e volta à página com a origem do site, que é a que o
+// `URL.createObjectURL` deu a ela.
+function enderecoDoSite(client: ScramjetClient, nativo: string): string {
+	if (typeof nativo === "string" && nativo.startsWith("blob:")) {
+		try {
+			return rewriteBlob(nativo, client.context, client.meta);
+		} catch {
+			return nativo;
+		}
+	}
+
+	return unrewriteUrl(nativo, client.context);
+}
+
 export default function (client: ScramjetClient, self: typeof window) {
 	const attrObject = {
 		nonce: [self.HTMLElement],
@@ -169,7 +184,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 			const acessores = {
 				get() {
 					if (["src", "data", "href", "action", "formaction"].includes(attr)) {
-						return unrewriteUrl(descriptor.get.call(this), client.context);
+						return enderecoDoSite(client, descriptor.get.call(this));
 					}
 					// O `content` de um `<meta>` só muda numa CSP, e o do site está no atributo guardado.
 					if (attr === "content" || attr === "allow") {
@@ -213,7 +228,7 @@ export default function (client: ScramjetClient, self: typeof window) {
 		get(ctx) {
 			const currentSrc = ctx.get() as string;
 			if (!currentSrc) return currentSrc;
-			return unrewriteUrl(currentSrc, client.context);
+			return enderecoDoSite(client, currentSrc);
 		},
 	});
 
