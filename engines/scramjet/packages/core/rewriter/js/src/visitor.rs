@@ -927,6 +927,24 @@ where
 
 	#[coverage_checked(UnaryExpression)]
 	fn visit_unary_expression(&mut self, it: &UnaryExpression<'data>) {
+		// `delete x.postMessage` apaga a propriedade de `x`. Com o `$wrapPostMessage(x)` no lugar de
+		// `x`, o `delete` apagaria a do objeto que o wrapper devolve, e a de `x` ficaria.
+		if matches!(it.operator, UnaryOperator::Delete) {
+			let objeto = match &it.argument {
+				Expression::StaticMemberExpression(s) if s.property.name == "postMessage" => {
+					Some(&s.object)
+				}
+				Expression::ComputedMemberExpression(c) => match &c.expression {
+					Expression::StringLiteral(lit) if lit.value == "postMessage" => Some(&c.object),
+					_ => None,
+				},
+				_ => None,
+			};
+			if let Some(objeto) = objeto {
+				walk::walk_expression(self, objeto);
+				return;
+			}
+		}
 		if matches!(it.operator, UnaryOperator::Typeof) {
 			match it.argument {
 				Expression::Identifier(_) => {

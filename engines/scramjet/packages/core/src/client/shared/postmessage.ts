@@ -1,7 +1,8 @@
 import { iswindow } from "@client/entry";
 import { SCRAMJETCLIENT } from "@/symbols";
 import { ScramjetClient } from "@client/index";
-import { _URL, Object_defineProperty } from "@/shared/snapshot";
+import { _URL, Object_defineProperty, Reflect_apply } from "@/shared/snapshot";
+import { AnyFunction } from "@/types";
 import { POLLUTANT } from "./realm";
 import { embrulhar } from "@/shared/confiavel";
 import { ehVista } from "@client/janela-cruzada";
@@ -159,26 +160,35 @@ export default function (client: ScramjetClient, self: Self) {
 			};
 		},
 	});
-	// vssh fork: o rewriter troca `x.postMessage(...)` por `$wrappostmessage(x).postMessage(...)`,
-	// e esta função roda no realm de quem chama. O `postMessage` do alvo é o do realm dele, e com
-	// os argumentos todos strings o envelope acima não tem objeto de quem chama para achar o realm:
+	// vssh fork: o rewriter troca `x.postMessage` por `$wrappostmessage(x).postMessage`, e esta
+	// função roda no realm de quem chama. O `postMessage` do alvo é o do realm dele, e com os
+	// argumentos todos strings o envelope acima não tem objeto de quem chama para achar o realm:
 	// cai no `{}` do próprio envelope e manda a origem do ALVO. O iframe do DataDome manda o cookie
 	// aprovado assim, `parent.postMessage(JSON.stringify(...), "*")`; a página o recebia com a
 	// origem dela mesma, o `c.js` recusava a origem, e o captcha aprovado voltava ao desafio.
 	//
 	// O objeto deste realm vai no alvo como o `POLLUTANT` durante a chamada, e sai em seguida: um
 	// `postMessage` chamado depois sem passar por aqui não herda o realm de quem chamou antes.
-	Object_defineProperty(self, client.config.globals.wrappostmessagefn, {
-		value: function (obj: any) {
-			if (ehVista(obj)) return obj;
-			if (!obj || typeof obj.postMessage !== "function") return obj;
-			const doRealm = {};
-			return {
-				postMessage(...args: any[]) {
-					let marcou = false;
+	//
+	// A função que a página recebe chama o `postMessage` lido na hora do acesso, e é a mesma a cada
+	// leitura do mesmo `postMessage`. A página guarda o original e põe a própria função no lugar
+	// (`const orig = w.postMessage; w.postMessage = function () { … orig.apply(this, arguments) }`):
+	// uma função que procurasse `w.postMessage` na hora da chamada acharia a da página, que a chama
+	// de volta, até a pilha estourar. O receptor é o da chamada, como no nativo: o objeto do acesso
+	// em `w.postMessage(…)`, e o que a página passar em `.call` e `.apply`.
+	const porOriginal = new WeakMap<AnyFunction, AnyFunction>();
+	const alvoDoAcesso = new WeakMap<object, object>();
+	const comRealm = (original: AnyFunction): AnyFunction => {
+		const feita = porOriginal.get(original);
+		if (feita) return feita;
+		const nova = {
+			postMessage(this: any, ...args: any[]) {
+				const alvo = (this != null && alvoDoAcesso.get(this)) || this;
+				let marcou = false;
+				if (alvo !== null && (typeof alvo === "object" || typeof alvo === "function")) {
 					try {
-						Object_defineProperty(obj, POLLUTANT, {
-							value: doRealm,
+						Object_defineProperty(alvo, POLLUTANT, {
+							value: {},
 							writable: false,
 							configurable: true,
 							enumerable: false,
@@ -187,19 +197,45 @@ export default function (client: ScramjetClient, self: Self) {
 					} catch {
 						// um alvo que não aceita a propriedade fica com a origem que o envelope achar
 					}
-					try {
-						return obj.postMessage(...args);
-					} finally {
-						if (marcou) {
-							try {
-								delete obj[POLLUTANT];
-							} catch {
-								// idem
-							}
+				}
+				try {
+					return Reflect_apply(original, alvo, args);
+				} finally {
+					if (marcou) {
+						try {
+							delete alvo[POLLUTANT];
+						} catch {
+							// idem
 						}
 					}
-				},
-			};
+				}
+			},
+		}.postMessage;
+		try {
+			Object_defineProperty(nova, "length", { value: original.length, configurable: true });
+		} catch {}
+		client.box.unproxy.set(nova, client.box.unproxy.get(original) ?? original);
+		porOriginal.set(original, nova);
+
+		return nova;
+	};
+	Object_defineProperty(self, client.config.globals.wrappostmessagefn, {
+		value: function (obj: any) {
+			if (ehVista(obj)) return obj;
+			if (obj == null) return obj;
+			// Uma leitura só: o `postMessage` pode ser um getter da página. Se ela lança, o acesso
+			// da página lança igual, no objeto devolvido como veio.
+			let original: unknown;
+			try {
+				original = obj.postMessage;
+			} catch {
+				return obj;
+			}
+			if (typeof original !== "function") return obj;
+			const acesso = { postMessage: comRealm(original as AnyFunction) };
+			alvoDoAcesso.set(acesso, obj);
+
+			return acesso;
 		},
 		configurable: false,
 		writable: false,

@@ -621,6 +621,21 @@ mod tests {
 		}
 	}
 
+	/// O `delete x.postMessage` apaga a propriedade do próprio `x`: o operando fica sem o wrapper,
+	/// e o objeto dele continua reescrito como qualquer expressão.
+	#[test]
+	fn delete_de_postmessage_fica_sem_o_wrapper() {
+		for js in ["delete o.postMessage", "delete o[\"postMessage\"]", "x = delete a.b.postMessage"] {
+			let saida = reescrever(js, true);
+			assert!(!saida.contains("$wrapPostMessage("), "`{js}` saiu com o wrapper: `{saida}`");
+			assert!(saida_e_js_valido(&saida), "`{js}` saiu inválido: `{saida}`");
+		}
+		let saida = reescrever("delete location.postMessage", true);
+		assert!(saida.contains("$wrap("), "o objeto do delete perdeu a reescrita: `{saida}`");
+		let saida = reescrever("o.postMessage(1)", true);
+		assert!(saida.contains("$wrapPostMessage("), "a chamada perdeu o wrapper: `{saida}`");
+	}
+
 	#[test]
 	fn only_invalid_source_is_the_sources_fault() {
 		assert!(RewriterError::InvalidSource(String::new()).is_source_fault());

@@ -15,7 +15,9 @@ export class SingletonBox {
 	histories: Map<History, ScramjetClient> = new Map();
 	locations: Map<Location, ScramjetClient> = new Map();
 	writeRewriters = new WeakMap<Document, IncrementalHtmlRewriter>();
-	unproxy = new Map<any, any>();
+	// De cada função do motor para a nativa que ela cobre. As chaves são fracas: a função que cobre
+	// o `postMessage` de um objeto da página (ver `shared/postmessage.ts`) vai embora com ele.
+	unproxy = new WeakMap<any, any>();
 
 	ctors: Record<string, Function[]> = {};
 

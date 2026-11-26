@@ -1,16 +1,16 @@
 import { basicTest } from "../../testcommon.ts";
 
-// The rewriter rewrites *every* `.postMessage` member expression to
-// `$scramjet$wrappostmessage(obj).postMessage`, and that helper returns a
-// throwaway object:
+// The rewriter rewrites every `.postMessage` member expression to
+// `$scramjet$wrappostmessage(obj).postMessage`, and that helper returns an
+// object whose `postMessage` calls the function read at access time, with the
+// caller's realm marked on the receiver for the envelope (see
+// `client/shared/postmessage.ts`). The function is the same for every read of
+// the same `postMessage`, and its receiver is the one of the call. The operand
+// of `delete` is left unwrapped by the rewriter.
 //
-//   if (!obj || typeof obj.postMessage !== "function") return obj;
-//   return { postMessage: obj.postMessage.bind(obj) };
-//
-// So the property no longer belongs to the original object. Everything a page
-// can do with `.postMessage` other than calling it straight away is affected -
-// and Worker/MessagePort/BroadcastChannel plumbing is load-bearing on real
-// sites.
+// Everything a page can do with `.postMessage` other than calling it straight
+// away goes through that object, and Worker/MessagePort/BroadcastChannel
+// plumbing is load-bearing on real sites.
 
 export default [
 	basicTest({
@@ -67,8 +67,7 @@ export default [
 	// where the wrapper becomes observable
 	// ------------------------------------------------------------------
 	basicTest({
-		// KNOWN FAILURE: a fresh wrapper object with a fresh bound function is
-		// built on every property read.
+		// Two reads of the same postMessage give the same function.
 		name: "pmwrap-identity",
 		js: `
 			const o = { postMessage() {} };
@@ -78,8 +77,7 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: the wrapper hands back a bound function, so name and
-		// length are the bound function's.
+		// The function a page reads keeps the name and the length of the original.
 		name: "pmwrap-function-shape",
 		js: `
 			const o = { postMessage(a, b) {} };
@@ -88,9 +86,8 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: wrappostmessage reads obj.postMessage twice - once for
-		// the typeof guard and once for the bind - so a page-level accessor or a
-		// Proxy get trap fires twice.
+		// One read of obj.postMessage per access: a page-level accessor or a Proxy
+		// get trap fires once.
 		name: "pmwrap-getter-invocation-count",
 		js: `
 			let gets = 0;
@@ -100,8 +97,8 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: the assignment target is the throwaway wrapper, so
-		// monkeypatching postMessage silently does nothing.
+		// Monkeypatching postMessage sticks, and the saved original stays the
+		// original: a page that wraps it calls it back without recursing.
 		name: "pmwrap-assignment",
 		js: `
 			const o = { postMessage() { return "orig"; } };
@@ -114,7 +111,7 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: deletes a property of the throwaway wrapper.
+		// delete removes the property of the object itself.
 		name: "pmwrap-delete",
 		js: `
 			const o = { postMessage() {} };
@@ -123,10 +120,9 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: the wrapper binds to whatever the member expression's
-		// object was - here the prototype - so the later .call receiver is
-		// ignored and the call fails with an illegal invocation. Libraries reach
-		// for prototype methods precisely to avoid monkeypatched instances.
+		// The receiver is the one of the call: a method read from the prototype
+		// and invoked with .call runs on the port. Libraries reach for prototype
+		// methods precisely to avoid monkeypatched instances.
 		name: "pmwrap-prototype-method",
 		js: `
 			const mc = new MessageChannel();
@@ -137,10 +133,9 @@ export default [
 		`,
 	}),
 	basicTest({
-		// KNOWN FAILURE: detaching a method loses its receiver in real JS. The
-		// wrapper pre-binds it, so scramjet keeps working where the web throws -
-		// code that relies on the TypeError (feature detection, `this` guards)
-		// takes a different branch.
+		// KNOWN FAILURE, with and without scramjet: the test body is sloppy code,
+		// where a detached method runs with the global as `this` and returns
+		// "undefined1" without throwing.
 		name: "pmwrap-detached-loses-receiver",
 		js: `
 			const o = { tag: "T", postMessage(x) { return this.tag + x; } };
